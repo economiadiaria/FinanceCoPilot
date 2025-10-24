@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email,
       password,
       name,
-      role: 'user',
+      role: 'cliente',
     });
     const data = await res.json();
     setUser(data.user);
