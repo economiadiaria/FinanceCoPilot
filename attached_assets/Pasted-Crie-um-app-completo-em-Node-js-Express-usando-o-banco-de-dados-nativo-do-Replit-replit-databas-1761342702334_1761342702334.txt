@@ -1,0 +1,97 @@
+Crie um app completo em Node.js + Express, usando o banco de dados nativo do Replit (@replit/database).  
+Objetivo: SaaS de consultoria financeira com área de login para consultores, clientes e importação de dados via OFX.  
+
+Inclua TUDO no mesmo arquivo (server.js).  
+O código deve rodar no Replit com `npm start` e funcionar sem ajustes manuais.  
+
+====================================================
+📦 DEPENDÊNCIAS
+====================================================
+- express  
+- express-session  
+- multer  
+- ofx-parse  
+- @replit/database  
+- csv-parse/sync  
+
+====================================================
+🧱 ESTRUTURA DE DADOS
+====================================================
+- users: { [email]: { password, role ("consultor" | "cliente"), name, clients: [clientIds] } }
+- clients: { [clientId]: { name, email, assignedTo } }
+- transactions_${clientId}: [
+    { id, date (DD/MM/YYYY), desc, amount, category, fitid, sourceHash }
+  ]
+
+====================================================
+🔐 AUTENTICAÇÃO E ÁREA DO CONSULTOR
+====================================================
+- Tela de login (HTML simples, rota GET /login e POST /login).  
+- Após login, cria sessão Express.  
+- Usuários consultores podem ver lista de clientes sob sua responsabilidade (/dashboard).  
+- Para cada cliente, link para /client/:id com lista de transações.
+
+====================================================
+💾 IMPORTAÇÃO OFX E CSV
+====================================================
+POST /api/import/ofx  
+- Upload de arquivo OFX (campo “ofx”) e clientId.  
+- Gera hash SHA256 do arquivo.  
+- Se já houver transações com o mesmo hash em transactions_${clientId}, recusa upload (arquivo duplicado).  
+- Faz parse com ofx-parse.  
+- Converte data para formato DD/MM/YYYY.  
+- Deduplica por fitid.  
+- Armazena transações no DB.
+
+POST /api/import/csv (fallback simples)
+- Upload CSV com campos: date,desc,amount,category(opcional).  
+- Deduplica por combinação (date+desc+amount).  
+- Converte data para DD/MM/YYYY.  
+
+====================================================
+🧾 CATEGORIZAÇÃO E EDIÇÃO DE TRANSAÇÕES
+====================================================
+GET /api/transactions?clientId=...  
+- Lista todas as transações do cliente (ordenadas por data desc).
+
+POST /api/transactions/update  
+Body: { clientId, transactionId, category?, desc?, amount? }  
+- Atualiza categoria e/ou campos da transação.  
+
+====================================================
+🧠 LÓGICA DE DUPLICIDADE
+====================================================
+- Cada transação OFX tem um campo `fitid`.  
+- Se já existir o mesmo `fitid` no cliente, ignora.  
+- Cada upload OFX gera `sourceHash`.  
+- Se `sourceHash` já existir no DB, rejeita upload.  
+
+====================================================
+📅 FORMATAÇÃO DE DATAS
+====================================================
+- Toda data exibida ao usuário deve estar no formato DD/MM/YYYY.  
+- No backend, as datas devem ser normalizadas para UTC antes da conversão.
+
+====================================================
+📄 INTERFACE HTML SIMPLES
+====================================================
+- /login → formulário de login.  
+- /dashboard → lista de clientes (somente consultor autenticado).  
+- /client/:id → mostra tabela de transações, botão de upload OFX e botões para editar/categorizar.  
+- Estilização mínima (HTML + CSS inline).  
+
+====================================================
+⚙️ RODAR
+====================================================
+- Mostra no console:  
+  🚀 App Economia Diária rodando na porta 3000  
+  🌐 Acesse http://localhost:3000/login  
+
+====================================================
+💡 DETALHES TÉCNICOS
+====================================================
+- Código todo em português, com comentários claros.  
+- Não usar frameworks adicionais (Nest, React, etc.).  
+- Apenas dependências listadas.  
+- Respostas em JSON para API e HTML simples para interface.  
+- Códigos de erro claros para duplicidade e login incorreto.  
