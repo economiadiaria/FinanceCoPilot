@@ -1,12 +1,14 @@
 import type { Request, Response, NextFunction } from "express";
 
-const API_KEY = process.env.APP_KEY || "demo-key-123";
-
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  const providedKey = req.headers["x-api-key"];
+  // Skip auth for public routes (already handled before this middleware)
+  if (req.path.startsWith("/api/auth")) {
+    return next();
+  }
 
-  if (!providedKey || providedKey !== API_KEY) {
-    return res.status(401).json({ error: "Chave inválida." });
+  // Check if user is authenticated via session
+  if (!req.session.userId) {
+    return res.status(401).json({ error: "Não autenticado. Faça login para continuar." });
   }
 
   next();

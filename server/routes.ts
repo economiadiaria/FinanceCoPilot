@@ -5,16 +5,20 @@ import { authMiddleware } from "./middleware/auth";
 import multer from "multer";
 import Ofx from "ofx-js";
 import crypto from "crypto";
+import bcrypt from "bcrypt";
 import {
   clientSchema,
   categorizeSchema,
   transactionCategories,
+  registerUserSchema,
+  loginRequestSchema,
   type Transaction,
   type Summary,
   type RebalanceSuggestion,
   type Report,
   type Position,
   type Client,
+  type User,
 } from "@shared/schema";
 import { z } from "zod";
 
@@ -25,7 +29,132 @@ const upload = multer({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Apply auth middleware to all /api routes
+  // ===== AUTHENTICATION ROUTES (PUBLIC) =====
+  // POST /api/auth/register - Register new user
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const data = registerUserSchema.parse(req.body);
+      
+      // Check if email already exists
+      const existingUser = await storage.getUserByEmail(data.email);
+      if (existingUser) {
+        return res.status(400).json({ error: "Email já cadastrado" });
+      }
+      
+      // Hash password
+      const passwordHash = await bcrypt.hash(data.password, 10);
+      
+      // Create user
+      const userId = crypto.randomBytes(16).toString("hex");
+      const user: User = {
+        userId,
+        email: data.email,
+        passwordHash,
+        role: data.role,
+        name: data.name,
+        clientIds: data.clientIds || [],
+      };
+      
+      await storage.createUser(user);
+      
+      // Regenerate session ID to prevent fixation attacks
+      req.session.regenerate((err) => {
+        if (err) {
+          console.error("Erro ao regenerar sessão:", err);
+          return res.status(500).json({ error: "Erro ao criar sessão" });
+        }
+        
+        // Set session
+        req.session.userId = userId;
+        
+        // Return user without passwordHash
+        const { passwordHash: _, ...userResponse } = user;
+        res.json({ user: userResponse });
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
+        return res.status(400).json({ error: fieldErrors });
+      }
+      console.error("Erro ao registrar usuário:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao registrar usuário" });
+    }
+  });
+
+  // POST /api/auth/login - Login user
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const data = loginRequestSchema.parse(req.body);
+      
+      // Find user by email
+      const user = await storage.getUserByEmail(data.email);
+      if (!user) {
+        return res.status(401).json({ error: "Credenciais inválidas" });
+      }
+      
+      // Verify password
+      const passwordMatch = await bcrypt.compare(data.password, user.passwordHash);
+      if (!passwordMatch) {
+        return res.status(401).json({ error: "Credenciais inválidas" });
+      }
+      
+      // Regenerate session ID to prevent fixation attacks
+      req.session.regenerate((err) => {
+        if (err) {
+          console.error("Erro ao regenerar sessão:", err);
+          return res.status(500).json({ error: "Erro ao criar sessão" });
+        }
+        
+        // Set session
+        req.session.userId = user.userId;
+        
+        // Return user without passwordHash
+        const { passwordHash: _, ...userResponse } = user;
+        res.json({ user: userResponse });
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
+        return res.status(400).json({ error: fieldErrors });
+      }
+      console.error("Erro ao fazer login:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao fazer login" });
+    }
+  });
+
+  // POST /api/auth/logout - Logout user
+  app.post("/api/auth/logout", async (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        console.error("Erro ao fazer logout:", err);
+        return res.status(500).json({ error: "Erro ao fazer logout" });
+      }
+      res.json({ message: "Logout realizado com sucesso" });
+    });
+  });
+
+  // GET /api/auth/me - Get current user
+  app.get("/api/auth/me", async (req, res) => {
+    try {
+      if (!req.session.userId) {
+        return res.status(401).json({ error: "Não autenticado" });
+      }
+      
+      const user = await storage.getUserById(req.session.userId);
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não encontrado" });
+      }
+      
+      // Return user without passwordHash
+      const { passwordHash: _, ...userResponse } = user;
+      res.json({ user: userResponse });
+    } catch (error) {
+      console.error("Erro ao buscar usuário atual:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar usuário" });
+    }
+  });
+
+  // Apply auth middleware to all /api routes EXCEPT auth routes
   app.use("/api", authMiddleware);
 
   // 1. POST /api/client/upsert - Create/update client
