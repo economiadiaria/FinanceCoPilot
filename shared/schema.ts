@@ -133,3 +133,36 @@ export const summarySchema = z.object({
 });
 
 export type Summary = z.infer<typeof summarySchema>;
+
+// User types and authentication
+export const userRoles = ["consultor", "cliente"] as const;
+
+export const userSchema = z.object({
+  userId: z.string().min(1, "ID do usuário é obrigatório"),
+  email: z.string().min(1, "Email é obrigatório").email("Email inválido"),
+  passwordHash: z.string().min(1, "Hash da senha é obrigatório"),
+  role: z.enum(userRoles),
+  name: z.string().min(1, "Nome é obrigatório"),
+  clientIds: z.array(z.string()).default([]),
+});
+
+export type User = z.infer<typeof userSchema>;
+
+export const registerUserSchema = userSchema.omit({ userId: true, passwordHash: true }).extend({
+  password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres"),
+});
+
+export type RegisterUser = z.infer<typeof registerUserSchema>;
+
+export const loginRequestSchema = z.object({
+  email: z.string().email("Email inválido"),
+  password: z.string().min(1, "Senha é obrigatória"),
+});
+
+export type LoginRequest = z.infer<typeof loginRequestSchema>;
+
+export const authResponseSchema = z.object({
+  user: userSchema.omit({ passwordHash: true }),
+});
+
+export type AuthResponse = z.infer<typeof authResponseSchema>;

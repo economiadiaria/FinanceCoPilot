@@ -1,7 +1,14 @@
-import type { Client, Transaction, Position, PFPolicy, PJPolicy, Report } from "@shared/schema";
+import type { Client, Transaction, Position, PFPolicy, PJPolicy, Report, User } from "@shared/schema";
 import Database from "@replit/database";
 
 export interface IStorage {
+  // Users
+  getUsers(): Promise<User[]>;
+  getUserById(userId: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createUser(user: User): Promise<User>;
+  updateUser(userId: string, updates: Partial<User>): Promise<User>;
+
   // Clients
   getClients(): Promise<Client[]>;
   getClient(clientId: string): Promise<Client | undefined>;
@@ -29,6 +36,7 @@ export interface IStorage {
 }
 
 export class MemStorage implements IStorage {
+  private users: Map<string, User>;
   private clients: Map<string, Client>;
   private transactions: Map<string, Transaction[]>;
   private positions: Map<string, Position[]>;
@@ -37,12 +45,41 @@ export class MemStorage implements IStorage {
   private reportHtmls: Map<string, Map<string, string>>;
 
   constructor() {
+    this.users = new Map();
     this.clients = new Map();
     this.transactions = new Map();
     this.positions = new Map();
     this.policies = new Map();
     this.reports = new Map();
     this.reportHtmls = new Map();
+  }
+
+  // Users
+  async getUsers(): Promise<User[]> {
+    return Array.from(this.users.values());
+  }
+
+  async getUserById(userId: string): Promise<User | undefined> {
+    return this.users.get(userId);
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(u => u.email === email);
+  }
+
+  async createUser(user: User): Promise<User> {
+    this.users.set(user.userId, user);
+    return user;
+  }
+
+  async updateUser(userId: string, updates: Partial<User>): Promise<User> {
+    const existing = this.users.get(userId);
+    if (!existing) {
+      throw new Error(`User ${userId} not found`);
+    }
+    const updated = { ...existing, ...updates };
+    this.users.set(userId, updated);
+    return updated;
   }
 
   // Clients
@@ -127,6 +164,78 @@ export class ReplitDbStorage implements IStorage {
 
   constructor() {
     this.db = new Database();
+  }
+
+  // Users - Use individual keys to avoid concurrency issues
+  async getUsers(): Promise<User[]> {
+    const listResult = await this.db.get("user_list");
+    // 404 means key doesn't exist (no users yet)
+    if (!listResult.ok && listResult.error.statusCode !== 404) {
+      throw new Error(`Database error getting user list: ${listResult.error?.message || JSON.stringify(listResult.error)}`);
+    }
+    const userIds: string[] = listResult.ok ? (listResult.value ?? []) : [];
+    
+    const users: User[] = [];
+    for (const userId of userIds) {
+      const user = await this.getUserById(userId);
+      if (user) {
+        users.push(user);
+      }
+    }
+    return users;
+  }
+
+  async getUserById(userId: string): Promise<User | undefined> {
+    const result = await this.db.get(`user:${userId}`);
+    // 404 means key doesn't exist (user not found)
+    if (!result.ok && result.error.statusCode !== 404) {
+      throw new Error(`Database error getting user ${userId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? undefined) : undefined;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const users = await this.getUsers();
+    return users.find(u => u.email === email);
+  }
+
+  async createUser(user: User): Promise<User> {
+    // Save the user with individual key
+    const setResult = await this.db.set(`user:${user.userId}`, user);
+    if (!setResult.ok) {
+      throw new Error(`Database error creating user: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+    }
+    
+    // Add to user list if new
+    const listResult = await this.db.get("user_list");
+    // 404 means user_list doesn't exist yet (first user being added)
+    if (!listResult.ok && listResult.error.statusCode !== 404) {
+      throw new Error(`Database error getting user list: ${listResult.error?.message || JSON.stringify(listResult.error)}`);
+    }
+    const userIds: string[] = listResult.ok ? (listResult.value ?? []) : [];
+    
+    if (!userIds.includes(user.userId)) {
+      userIds.push(user.userId);
+      const updateListResult = await this.db.set("user_list", userIds);
+      if (!updateListResult.ok) {
+        throw new Error(`Database error updating user list: ${updateListResult.error?.message || JSON.stringify(updateListResult.error)}`);
+      }
+    }
+    
+    return user;
+  }
+
+  async updateUser(userId: string, updates: Partial<User>): Promise<User> {
+    const existing = await this.getUserById(userId);
+    if (!existing) {
+      throw new Error(`User ${userId} not found`);
+    }
+    const updated = { ...existing, ...updates };
+    const setResult = await this.db.set(`user:${userId}`, updated);
+    if (!setResult.ok) {
+      throw new Error(`Database error updating user: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+    }
+    return updated;
   }
 
   // Clients - Use individual keys to avoid concurrency issues
