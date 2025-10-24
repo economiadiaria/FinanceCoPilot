@@ -71,15 +71,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Parse OFX using ofx-js
       let ofxData;
       try {
-        ofxData = Ofx.parse(ofxContent);
+        ofxData = await Ofx.parse(ofxContent);
+        console.log("✅ OFX parseado com sucesso");
       } catch (parseError) {
-        console.error("Erro ao fazer parse do OFX:", parseError);
+        console.error("❌ Erro ao fazer parse do OFX:", parseError);
         return res.status(400).json({ 
           error: "Erro ao processar arquivo OFX. Verifique se o arquivo está no formato correto." 
         });
       }
       
       if (!ofxData || !ofxData.OFX) {
+        console.error("❌ OFX parseado mas sem estrutura válida:", ofxData);
         return res.status(400).json({ error: "Arquivo OFX inválido ou sem dados." });
       }
 
