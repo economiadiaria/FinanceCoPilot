@@ -8,13 +8,27 @@ SaaS de consultoria financeira para Pessoa Física (PF) e Pessoa Jurídica (PJ) 
 ### Stack Tecnológico
 - **Backend**: Node.js + Express
 - **Frontend**: React + TypeScript + Vite
-- **Database**: In-memory storage (MemStorage)
+- **Database**: Replit Database (@replit/database) com fallback para MemStorage
+- **Autenticação**: express-session + bcrypt com SESSION_SECRET
 - **UI**: Shadcn UI + Tailwind CSS
 - **State Management**: TanStack Query (React Query)
 - **Routing**: Wouter
 - **Parsing**: OFX-js (OFX bancário)
+- **Segurança**: SHA256 hash para deduplicação de arquivos OFX
 
-### Estrutura de Dados (In-Memory Storage)
+### Estrutura de Dados
+
+#### Users
+```typescript
+{
+  "userId": string, // gerado automaticamente
+  "email": string, // único
+  "passwordHash": string, // bcrypt hash
+  "name": string,
+  "role": "admin" | "user",
+  "clients": string[] // IDs dos clientes associados ao usuário
+}
+```
 
 #### Clients
 ```typescript
@@ -73,20 +87,48 @@ SaaS de consultoria financeira para Pessoa Física (PF) e Pessoa Jurídica (PJ) 
 }
 ```
 
+#### OFX Imports (Deduplicação)
+```typescript
+{
+  "fileHash": string, // SHA256 hash do arquivo OFX
+  "clientId": string,
+  "importedAt": string, // ISO timestamp
+  "transactionsCount": number
+}
+```
+
 ## API Endpoints
 
 ### Autenticação
-Todos os endpoints requerem header `X-API-KEY` com valor configurado no ambiente.
+Sistema baseado em sessões (express-session). Endpoints /api/auth/* são públicos, demais rotas requerem autenticação.
 
-### Endpoints Implementados
+#### Endpoints de Autenticação
+1. **POST /api/auth/register** - Registrar novo usuário
+   - Body: `{ email, password, name, role? }`
+   - Retorna: `{ user: { userId, email, name, role, clients } }`
+
+2. **POST /api/auth/login** - Login de usuário
+   - Body: `{ email, password }`
+   - Retorna: `{ user: { userId, email, name, role, clients } }`
+
+3. **POST /api/auth/logout** - Logout (destrói sessão)
+   - Retorna: `{ success: true }`
+
+4. **GET /api/auth/me** - Obter usuário atual
+   - Retorna: `{ user: { userId, email, name, role, clients } }` ou 401
+
+### Endpoints Implementados (Protegidos)
 
 1. **POST /api/client/upsert** - Criar/atualizar cliente
    - Body: `{ clientId, name, type, email }`
 
 2. **POST /api/import/ofx** - Importar transações via arquivo OFX bancário
    - Form Data: `{ clientId, ofx: File }`
+   - Gera SHA256 hash do arquivo para prevenir duplicação
    - Faz parsing do OFX, extrai transações e remove duplicatas via FITID
+   - Armazena hash mesmo se nenhuma transação nova for encontrada
    - Retorna: `{ success, imported, total, message }`
+   - Erro 400 se arquivo já foi importado anteriormente
 
 3. **GET /api/transactions/list** - Listar transações
    - Query: `?clientId=...&status=...&from=...&to=...&category=...`
@@ -218,22 +260,25 @@ shared/
 ```
 
 ## Estado Atual
-✅ Schemas definidos
+✅ Schemas definidos (User, Client, Transaction, Position, Policy, OFXImport)
 ✅ Frontend completo com todas as páginas
 ✅ Componentes UI implementados
 ✅ Theme dark/light funcional
 ✅ Sistema de navegação com sidebar
 ✅ Integração React Query configurada
-✅ Backend com 11 endpoints implementados (incluindo OFX e /api/docs)
-✅ Storage em memória funcional
-✅ Middleware de autenticação X-API-KEY
-✅ Parsing **OFX bancário** com deduplicação automática
+✅ Backend com 15 endpoints implementados (auth + features + /api/docs)
+✅ **Replit Database** como storage principal com persistência real ⭐
+✅ **Autenticação session-based** com bcrypt + express-session ⭐
+✅ **SHA256 hash deduplication** para uploads OFX ⭐
+✅ Middleware de autenticação protegendo todas as rotas API
+✅ Parsing **OFX bancário** com deduplicação dupla (FITID + SHA256)
+✅ Session ID regeneration para prevenir fixation attacks
 ✅ Cálculo de KPIs
 ✅ Heurísticas inteligentes
 ✅ Integração frontend ↔ backend completa
-✅ Documentação completa da API em /api/docs ⭐ NOVO
-✅ Mensagem de inicialização no console ⭐ NOVO
-🎉 **Aplicação totalmente funcional!**
+✅ Documentação completa da API em /api/docs
+✅ Mensagem de inicialização no console
+🎉 **Backend production-ready! Falta apenas frontend de autenticação.**
 
 ## Como Testar
 
@@ -279,9 +324,36 @@ shared/
 4. Adicione observações (opcional)
 5. Visualize e imprima o relatório HTML
 
-## Próximas Melhorias (Futuro)
-1. Persistência com PostgreSQL ou Replit Database real
-2. Gráficos interativos com Recharts
-3. Exportação de dados em Excel/CSV
-4. Categorização automática com ML
-5. Integração com Open Finance
+## Segurança Implementada
+
+### Proteção de Dados
+- **Passwords**: Hashing bcrypt com salt automático (10 rounds)
+- **Sessions**: express-session com SESSION_SECRET do ambiente
+- **Session Fixation**: Regeneração de ID em login/registro
+- **File Uploads**: SHA256 hash para prevenir reimportação
+
+### Validações
+- Email único na criação de usuários
+- Senhas com mínimo de 6 caracteres
+- Validação de tipos via Zod schemas
+- Optional chaining em todos os getters do ReplitDbStorage
+
+### Práticas de Segurança
+- Senhas nunca retornadas nas respostas da API
+- Middleware de autenticação em todas as rotas não-públicas
+- Verificação de propriedade de recursos (clientId x user.clients)
+- Error handling robusto com mensagens em português
+
+## Próximas Melhorias (Pendentes)
+1. ✅ ~~Persistência com Replit Database~~ (CONCLUÍDO)
+2. ✅ ~~Sistema de autenticação~~ (CONCLUÍDO)
+3. ✅ ~~Deduplicação de uploads OFX~~ (CONCLUÍDO)
+4. 🔄 Frontend de login/registro (EM ANDAMENTO)
+5. 🔄 Proteção de rotas no frontend
+6. 🔄 Filtros de período (Dashboard e Transações)
+7. 🔄 Edição inline de transações
+8. 🔄 Formato DD/MM/YYYY para datas
+9. Gráficos interativos com Recharts
+10. Exportação de dados em Excel/CSV
+11. Categorização automática com ML
+12. Integração com Open Finance
