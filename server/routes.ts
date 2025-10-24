@@ -198,6 +198,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const ofxContent = req.file.buffer.toString("utf-8");
       
+      // Generate SHA256 hash of file content to prevent duplicate imports
+      const fileHash = crypto.createHash("sha256").update(ofxContent).digest("hex");
+      
+      // Check if this file was already imported
+      const existingImport = await storage.getOFXImport(fileHash);
+      if (existingImport) {
+        return res.status(400).json({ 
+          error: "Este arquivo OFX já foi importado anteriormente.",
+          importedAt: existingImport.importedAt,
+          transactionCount: existingImport.transactionCount
+        });
+      }
+      
       // Parse OFX using ofx-js
       let ofxData;
       try {
@@ -281,6 +294,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       [...bankAccounts, ...creditCardAccounts].forEach(processAccount);
 
       if (transactions.length === 0) {
+        // Save OFX import record even when no new transactions (prevents re-upload)
+        await storage.addOFXImport({
+          fileHash,
+          clientId,
+          importedAt: new Date().toISOString(),
+          transactionCount: 0,
+        });
+        
         return res.json({ 
           success: true, 
           imported: 0, 
@@ -290,6 +311,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await storage.addTransactions(clientId, transactions);
+      
+      // Save OFX import record to prevent re-import of same file
+      await storage.addOFXImport({
+        fileHash,
+        clientId,
+        importedAt: new Date().toISOString(),
+        transactionCount: transactions.length,
+      });
       
       const totalTransactions = existingTransactions.length + transactions.length;
 

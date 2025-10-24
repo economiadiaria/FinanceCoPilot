@@ -1,4 +1,4 @@
-import type { Client, Transaction, Position, PFPolicy, PJPolicy, Report, User } from "@shared/schema";
+import type { Client, Transaction, Position, PFPolicy, PJPolicy, Report, User, OFXImport } from "@shared/schema";
 import Database from "@replit/database";
 
 export interface IStorage {
@@ -33,6 +33,10 @@ export interface IStorage {
   setReport(clientId: string, period: string, report: Report): Promise<void>;
   getReportHtml(clientId: string, period: string): Promise<string | null>;
   setReportHtml(clientId: string, period: string, html: string): Promise<void>;
+
+  // OFX Imports
+  getOFXImport(fileHash: string): Promise<OFXImport | null>;
+  addOFXImport(ofxImport: OFXImport): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -43,6 +47,7 @@ export class MemStorage implements IStorage {
   private policies: Map<string, PFPolicy | PJPolicy>;
   private reports: Map<string, Map<string, Report>>;
   private reportHtmls: Map<string, Map<string, string>>;
+  private ofxImports: Map<string, OFXImport>;
 
   constructor() {
     this.users = new Map();
@@ -52,6 +57,7 @@ export class MemStorage implements IStorage {
     this.policies = new Map();
     this.reports = new Map();
     this.reportHtmls = new Map();
+    this.ofxImports = new Map();
   }
 
   // Users
@@ -157,6 +163,15 @@ export class MemStorage implements IStorage {
     }
     this.reportHtmls.get(clientId)!.set(period, html);
   }
+
+  // OFX Imports
+  async getOFXImport(fileHash: string): Promise<OFXImport | null> {
+    return this.ofxImports.get(fileHash) || null;
+  }
+
+  async addOFXImport(ofxImport: OFXImport): Promise<void> {
+    this.ofxImports.set(ofxImport.fileHash, ofxImport);
+  }
 }
 
 export class ReplitDbStorage implements IStorage {
@@ -188,7 +203,7 @@ export class ReplitDbStorage implements IStorage {
   async getUserById(userId: string): Promise<User | undefined> {
     const result = await this.db.get(`user:${userId}`);
     // 404 means key doesn't exist (user not found)
-    if (!result.ok && result.error.statusCode !== 404) {
+    if (!result.ok && result.error?.statusCode !== 404) {
       throw new Error(`Database error getting user ${userId}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
     return result.ok ? (result.value ?? undefined) : undefined;
@@ -260,7 +275,7 @@ export class ReplitDbStorage implements IStorage {
   async getClient(clientId: string): Promise<Client | undefined> {
     const result = await this.db.get(`client:${clientId}`);
     // 404 means key doesn't exist, which is fine (client not found)
-    if (!result.ok && result.error.statusCode !== 404) {
+    if (!result.ok && result.error?.statusCode !== 404) {
       throw new Error(`Database error getting client ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
     return result.ok ? (result.value ?? undefined) : undefined;
@@ -296,7 +311,7 @@ export class ReplitDbStorage implements IStorage {
   async getTransactions(clientId: string): Promise<Transaction[]> {
     const result = await this.db.get(`transactions:${clientId}`);
     // 404 means key doesn't exist (no transactions yet)
-    if (!result.ok && result.error.statusCode !== 404) {
+    if (!result.ok && result.error?.statusCode !== 404) {
       throw new Error(`Database error getting transactions for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
     return result.ok ? (result.value ?? []) : [];
@@ -318,7 +333,7 @@ export class ReplitDbStorage implements IStorage {
   async getPositions(clientId: string): Promise<Position[]> {
     const result = await this.db.get(`positions:${clientId}`);
     // 404 means key doesn't exist (no positions yet)
-    if (!result.ok && result.error.statusCode !== 404) {
+    if (!result.ok && result.error?.statusCode !== 404) {
       throw new Error(`Database error getting positions for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
     return result.ok ? (result.value ?? []) : [];
@@ -340,7 +355,7 @@ export class ReplitDbStorage implements IStorage {
   async getPolicy(clientId: string): Promise<PFPolicy | PJPolicy | null> {
     const result = await this.db.get(`policy:${clientId}`);
     // 404 means key doesn't exist (no policy set)
-    if (!result.ok && result.error.statusCode !== 404) {
+    if (!result.ok && result.error?.statusCode !== 404) {
       throw new Error(`Database error getting policy for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
     return result.ok ? (result.value ?? null) : null;
@@ -357,7 +372,7 @@ export class ReplitDbStorage implements IStorage {
   async getReport(clientId: string, period: string): Promise<Report | null> {
     const result = await this.db.get(`report:${clientId}:${period}`);
     // 404 means key doesn't exist (no report for this period)
-    if (!result.ok && result.error.statusCode !== 404) {
+    if (!result.ok && result.error?.statusCode !== 404) {
       throw new Error(`Database error getting report for ${clientId}:${period}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
     return result.ok ? (result.value ?? null) : null;
@@ -373,7 +388,7 @@ export class ReplitDbStorage implements IStorage {
   async getReportHtml(clientId: string, period: string): Promise<string | null> {
     const result = await this.db.get(`reportHtml:${clientId}:${period}`);
     // 404 means key doesn't exist (no HTML for this period)
-    if (!result.ok && result.error.statusCode !== 404) {
+    if (!result.ok && result.error?.statusCode !== 404) {
       throw new Error(`Database error getting report HTML for ${clientId}:${period}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
     return result.ok ? (result.value ?? null) : null;
@@ -383,6 +398,23 @@ export class ReplitDbStorage implements IStorage {
     const result = await this.db.set(`reportHtml:${clientId}:${period}`, html);
     if (!result.ok) {
       throw new Error(`Database error setting report HTML for ${clientId}:${period}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+  }
+
+  // OFX Imports
+  async getOFXImport(fileHash: string): Promise<OFXImport | null> {
+    const result = await this.db.get(`ofxImport:${fileHash}`);
+    // 404 means key doesn't exist (file not imported before)
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting OFX import ${fileHash}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? null) : null;
+  }
+
+  async addOFXImport(ofxImport: OFXImport): Promise<void> {
+    const result = await this.db.set(`ofxImport:${ofxImport.fileHash}`, ofxImport);
+    if (!result.ok) {
+      throw new Error(`Database error adding OFX import: ${result.error?.message || JSON.stringify(result.error)}`);
     }
   }
 }

@@ -166,3 +166,13 @@ export const authResponseSchema = z.object({
 });
 
 export type AuthResponse = z.infer<typeof authResponseSchema>;
+
+// OFX import history (to prevent duplicate file uploads)
+export const ofxImportSchema = z.object({
+  fileHash: z.string(), // SHA256 hash of OFX file content
+  clientId: z.string(),
+  importedAt: z.string(), // ISO 8601 timestamp
+  transactionCount: z.number(),
+});
+
+export type OFXImport = z.infer<typeof ofxImportSchema>;
