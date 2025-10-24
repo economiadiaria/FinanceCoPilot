@@ -1,0 +1,13 @@
+date,desc,amount,category
+2025-10-01,Pix Cliente A,3200,Receita
+2025-10-02,Pix Cliente B,1500,Receita
+2025-10-03,Aluguel Escritório,-2500,Custo Fixo
+2025-10-05,Fornecedor Matéria-Prima,-800,Custo Variável
+2025-10-07,Pix Cliente C,2100,Receita
+2025-10-10,Taxas Adquirente,-180,Taxas
+2025-10-12,Internet e Telefone,-150,Custo Fixo
+2025-10-15,Impostos DAS,-450,Impostos
+2025-10-18,Pix Cliente D,1800,Receita
+2025-10-20,Gestor de Tráfego,-1400,Custo Variável
+2025-10-22,Jantar com Cliente,-250,Lazer
+2025-10-25,Pix Cliente E,2900,Receita
