@@ -34,7 +34,9 @@ SaaS de consultoria financeira para Pessoa Física (PF) e Pessoa Jurídica (PJ) 
   "amount": number, // positivo = entrada, negativo = saída
   "category"?: "Receita" | "Custo Fixo" | "Custo Variável" | "Impostos" | "Lazer" | "Taxas" | "Investimento" | "Outros",
   "subcategory"?: string,
-  "status": "pendente" | "categorizada" | "revisar"
+  "status": "pendente" | "categorizada" | "revisar",
+  "fitid"?: string, // OFX unique transaction ID (para deduplicação)
+  "accountId"?: string // ID da conta bancária (do OFX)
 }
 ```
 
@@ -85,34 +87,43 @@ Todos os endpoints requerem header `X-API-KEY` com valor configurado no ambiente
    - Body: `{ clientId, csvText }`
    - Formato CSV: `date,desc,amount[,category]`
 
-3. **GET /api/transactions/list** - Listar transações
-   - Query: `?clientId=...&status=...&from=...&to=...&category=...`
+3. **POST /api/import/ofx** - Importar transações via arquivo OFX bancário ⭐ NOVO
+   - Form Data: `{ clientId, ofx: File }`
+   - Faz parsing do OFX, extrai transações e remove duplicatas via FITID
+   - Retorna: `{ success, imported, total, message }`
 
-4. **POST /api/transactions/categorize** - Categorizar transações em lote
+4. **GET /api/transactions/list** - Listar transações
+   - Query: `?clientId=...&status=...&from=...&to=...&category=...`
+   - Retorna: `{ transactions: [], summary: { totalIn, totalOut, count } }` ⭐ ATUALIZADO
+
+5. **POST /api/transactions/categorize** - Categorizar transações em lote
    - Body: `{ clientId, indices: number[], category, subcategory? }`
 
-5. **GET /api/summary** - Obter resumo e KPIs
+6. **GET /api/summary** - Obter resumo e KPIs
    - Query: `?clientId=...&period=AAAA-MM`
    - Retorna: totalIn, totalOut, balance, revenue, costs, profit, margin, ticketMedio, topCosts, insights
 
-6. **GET /api/investments/positions** - Listar posições de investimento
+7. **GET /api/investments/positions** - Listar posições de investimento
    - Query: `?clientId=...`
 
-7. **POST /api/investments/rebalance/suggest** - Sugestões de rebalanceamento
+8. **POST /api/investments/rebalance/suggest** - Sugestões de rebalanceamento
    - Body: `{ clientId }`
    - PF: compara alocação atual vs targets
    - PJ: valida cashPolicy (minRF, maxRV, maxIssuerPct, maxDurationDays)
 
-8. **POST /api/reports/generate** - Gerar relatório mensal
+9. **POST /api/reports/generate** - Gerar relatório mensal
    - Body: `{ clientId, period: "AAAA-MM", notes? }`
    - Retorna HTML para impressão/visualização
 
-9. **GET /api/reports/view** - Visualizar relatório
-   - Query: `?clientId=...&period=AAAA-MM`
-   - Retorna HTML salvo ou gera on-the-fly
+10. **GET /api/reports/view** - Visualizar relatório
+    - Query: `?clientId=...&period=AAAA-MM`
+    - Retorna HTML salvo ou gera on-the-fly
 
-10. **POST /api/policies/upsert** - Atualizar políticas
+11. **POST /api/policies/upsert** - Atualizar políticas
     - Body: `{ clientId, data }` (PF.targets ou PJ.cashPolicy)
+
+12. **GET /api/docs** - Documentação completa da API ⭐ NOVO
+    - Retorna HTML com documentação de todos os endpoints e exemplos de uso
 
 ## Funcionalidades Frontend
 
@@ -217,12 +228,15 @@ shared/
 ✅ Theme dark/light funcional
 ✅ Sistema de navegação com sidebar
 ✅ Integração React Query configurada
-✅ Backend com todos os 10 endpoints implementados
+✅ Backend com 12 endpoints implementados (incluindo OFX e /api/docs)
 ✅ Storage em memória funcional
 ✅ Middleware de autenticação X-API-KEY
-✅ Parsing CSV e cálculo de KPIs
+✅ Parsing CSV e **OFX bancário** com deduplicação ⭐ NOVO
+✅ Cálculo de KPIs
 ✅ Heurísticas inteligentes
 ✅ Integração frontend ↔ backend completa
+✅ Documentação completa da API em /api/docs ⭐ NOVO
+✅ Mensagem de inicialização no console ⭐ NOVO
 🎉 **Aplicação totalmente funcional!**
 
 ## Como Testar
@@ -238,10 +252,18 @@ shared/
 4. Clique em "Criar Cliente"
 
 ### 2. Importar Transações
+**Via CSV:**
 1. Navegue para "Transações"
 2. Clique em "Importar CSV"
 3. Selecione o arquivo `exemplo-transacoes.csv` (já incluído no projeto)
 4. Aguarde confirmação
+
+**Via OFX (arquivo bancário):** ⭐ NOVO
+1. Navegue para "Transações"
+2. Clique em "Importar OFX"
+3. Selecione um arquivo .ofx exportado do seu banco
+4. O sistema extrai automaticamente data, descrição, valor e ID da transação
+5. Duplicatas são removidas automaticamente via FITID
 
 ### 3. Categorizar Transações
 1. Na página de Transações, selecione transações pendentes

@@ -33,6 +33,8 @@ export const transactionSchema = z.object({
   category: z.enum(transactionCategories).optional(),
   subcategory: z.string().optional(),
   status: z.enum(transactionStatuses),
+  fitid: z.string().optional(), // OFX unique transaction ID
+  accountId: z.string().optional(), // Bank account ID from OFX
 });
 
 export type Transaction = z.infer<typeof transactionSchema>;

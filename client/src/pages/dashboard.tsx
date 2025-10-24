@@ -16,10 +16,12 @@ export default function Dashboard({ clientId }: DashboardProps) {
     enabled: !!clientId,
   });
 
-  const { data: transactions, isLoading: loadingTransactions } = useQuery<Transaction[]>({
-    queryKey: ["/api/transactions/list", clientId],
+  const { data: transactionsData, isLoading: loadingTransactions } = useQuery<{ transactions: Transaction[]; summary: { totalIn: number; totalOut: number; count: number } }>({
+    queryKey: ["/api/transactions/list", { clientId }],
     enabled: !!clientId,
   });
+  
+  const transactions = transactionsData?.transactions || [];
 
   if (!clientId) {
     return (
@@ -42,7 +44,7 @@ export default function Dashboard({ clientId }: DashboardProps) {
     );
   }
 
-  const recentTransactions = transactions?.slice(0, 10) || [];
+  const recentTransactions = transactions.slice(0, 10);
 
   return (
     <div className="space-y-8">

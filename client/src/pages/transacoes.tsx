@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Upload, Download } from "lucide-react";
+import { Upload, Download, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import Papa from "papaparse";
 import type { Transaction } from "@shared/schema";
@@ -24,17 +24,30 @@ interface TransacoesProps {
   clientId: string | null;
 }
 
+interface TransactionsResponse {
+  transactions: Transaction[];
+  summary: {
+    totalIn: number;
+    totalOut: number;
+    count: number;
+  };
+}
+
 export default function Transacoes({ clientId }: TransacoesProps) {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const ofxInputRef = useRef<HTMLInputElement>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  const { data: transactions = [], isLoading } = useQuery<Transaction[]>({
-    queryKey: ["/api/transactions/list", clientId, categoryFilter, statusFilter],
+  const { data, isLoading } = useQuery<TransactionsResponse>({
+    queryKey: ["/api/transactions/list", { clientId, status: statusFilter === "all" ? undefined : statusFilter, category: categoryFilter === "all" ? undefined : categoryFilter }],
     enabled: !!clientId,
   });
+
+  const transactions = data?.transactions || [];
+  const summary = data?.summary;
 
   const importMutation = useMutation({
     mutationFn: async (csvText: string) => {
@@ -55,6 +68,44 @@ export default function Transacoes({ clientId }: TransacoesProps) {
       toast({
         title: "Erro na importação",
         description: "Verifique se o CSV está no formato correto.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const importOfxMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("ofx", file);
+      formData.append("clientId", clientId!);
+
+      const response = await fetch("/api/import/ofx", {
+        method: "POST",
+        headers: {
+          "X-API-KEY": "dev-key-123",
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Erro ao importar OFX");
+      }
+
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/summary"] });
+      toast({
+        title: "Importação OFX concluída",
+        description: data.message || `${data.imported} transações importadas.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Erro na importação OFX",
+        description: error.message,
         variant: "destructive",
       });
     },
@@ -89,6 +140,12 @@ export default function Transacoes({ clientId }: TransacoesProps) {
       importMutation.mutate(csvText);
     };
     reader.readAsText(file);
+  };
+
+  const handleOfxUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    importOfxMutation.mutate(file);
   };
 
   const handleCategorize = (category: string) => {
@@ -132,14 +189,25 @@ export default function Transacoes({ clientId }: TransacoesProps) {
           <h1 className="text-3xl font-bold">Transações</h1>
           <p className="text-muted-foreground">Gerencie e categorize suas transações</p>
         </div>
-        <Button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={importMutation.isPending}
-          data-testid="button-import-csv"
-        >
-          <Upload className="mr-2 h-4 w-4" />
-          {importMutation.isPending ? "Importando..." : "Importar CSV"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importMutation.isPending}
+            variant="outline"
+            data-testid="button-import-csv"
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            {importMutation.isPending ? "Importando..." : "Importar CSV"}
+          </Button>
+          <Button
+            onClick={() => ofxInputRef.current?.click()}
+            disabled={importOfxMutation.isPending}
+            data-testid="button-import-ofx"
+          >
+            <FileText className="mr-2 h-4 w-4" />
+            {importOfxMutation.isPending ? "Importando..." : "Importar OFX"}
+          </Button>
+        </div>
         <input
           ref={fileInputRef}
           type="file"
@@ -148,7 +216,45 @@ export default function Transacoes({ clientId }: TransacoesProps) {
           onChange={handleFileUpload}
           data-testid="input-file-csv"
         />
+        <input
+          ref={ofxInputRef}
+          type="file"
+          accept=".ofx"
+          className="hidden"
+          onChange={handleOfxUpload}
+          data-testid="input-file-ofx"
+        />
       </div>
+
+      {/* Summary */}
+      {summary && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-sm font-medium text-muted-foreground">Entradas</div>
+              <div className="text-2xl font-bold text-green-600 dark:text-green-500 tabular-nums">
+                R$ {summary.totalIn.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-sm font-medium text-muted-foreground">Saídas</div>
+              <div className="text-2xl font-bold text-red-600 dark:text-red-500 tabular-nums">
+                R$ {summary.totalOut.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-sm font-medium text-muted-foreground">Total de Transações</div>
+              <div className="text-2xl font-bold tabular-nums">
+                {summary.count}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Filters */}
       <Card>

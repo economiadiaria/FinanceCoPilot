@@ -76,6 +76,7 @@ app.use((req, res, next) => {
     host: "0.0.0.0",
     reusePort: true,
   }, () => {
+    console.log("\n🚀 SaaS Economia Diária iniciado. Acesse /api/docs para ver endpoints.\n");
     log(`serving on port ${port}`);
   });
 })();
