@@ -12,7 +12,7 @@ SaaS de consultoria financeira para Pessoa Física (PF) e Pessoa Jurídica (PJ) 
 - **UI**: Shadcn UI + Tailwind CSS
 - **State Management**: TanStack Query (React Query)
 - **Routing**: Wouter
-- **Parsing**: PapaParse (CSV)
+- **Parsing**: OFX-js (OFX bancário)
 
 ### Estrutura de Dados (In-Memory Storage)
 
@@ -22,7 +22,7 @@ SaaS de consultoria financeira para Pessoa Física (PF) e Pessoa Jurídica (PJ) 
   "clientId": string,
   "name": string,
   "type": "PF" | "PJ" | "BOTH",
-  "email"?: string
+  "email": string
 }
 ```
 
@@ -81,48 +81,44 @@ Todos os endpoints requerem header `X-API-KEY` com valor configurado no ambiente
 ### Endpoints Implementados
 
 1. **POST /api/client/upsert** - Criar/atualizar cliente
-   - Body: `{ clientId, name, type, email? }`
+   - Body: `{ clientId, name, type, email }`
 
-2. **POST /api/transactions/importCsv** - Importar transações via CSV
-   - Body: `{ clientId, csvText }`
-   - Formato CSV: `date,desc,amount[,category]`
-
-3. **POST /api/import/ofx** - Importar transações via arquivo OFX bancário ⭐ NOVO
+2. **POST /api/import/ofx** - Importar transações via arquivo OFX bancário
    - Form Data: `{ clientId, ofx: File }`
    - Faz parsing do OFX, extrai transações e remove duplicatas via FITID
    - Retorna: `{ success, imported, total, message }`
 
-4. **GET /api/transactions/list** - Listar transações
+3. **GET /api/transactions/list** - Listar transações
    - Query: `?clientId=...&status=...&from=...&to=...&category=...`
-   - Retorna: `{ transactions: [], summary: { totalIn, totalOut, count } }` ⭐ ATUALIZADO
+   - Retorna: `{ transactions: [], summary: { totalIn, totalOut, count } }`
 
-5. **POST /api/transactions/categorize** - Categorizar transações em lote
+4. **POST /api/transactions/categorize** - Categorizar transações em lote
    - Body: `{ clientId, indices: number[], category, subcategory? }`
 
-6. **GET /api/summary** - Obter resumo e KPIs
+5. **GET /api/summary** - Obter resumo e KPIs
    - Query: `?clientId=...&period=AAAA-MM`
    - Retorna: totalIn, totalOut, balance, revenue, costs, profit, margin, ticketMedio, topCosts, insights
 
-7. **GET /api/investments/positions** - Listar posições de investimento
+6. **GET /api/investments/positions** - Listar posições de investimento
    - Query: `?clientId=...`
 
-8. **POST /api/investments/rebalance/suggest** - Sugestões de rebalanceamento
+7. **POST /api/investments/rebalance/suggest** - Sugestões de rebalanceamento
    - Body: `{ clientId }`
    - PF: compara alocação atual vs targets
    - PJ: valida cashPolicy (minRF, maxRV, maxIssuerPct, maxDurationDays)
 
-9. **POST /api/reports/generate** - Gerar relatório mensal
+8. **POST /api/reports/generate** - Gerar relatório mensal
    - Body: `{ clientId, period: "AAAA-MM", notes? }`
    - Retorna HTML para impressão/visualização
 
-10. **GET /api/reports/view** - Visualizar relatório
+9. **GET /api/reports/view** - Visualizar relatório
     - Query: `?clientId=...&period=AAAA-MM`
     - Retorna HTML salvo ou gera on-the-fly
 
-11. **POST /api/policies/upsert** - Atualizar políticas
+10. **POST /api/policies/upsert** - Atualizar políticas
     - Body: `{ clientId, data }` (PF.targets ou PJ.cashPolicy)
 
-12. **GET /api/docs** - Documentação completa da API ⭐ NOVO
+11. **GET /api/docs** - Documentação completa da API
     - Retorna HTML com documentação de todos os endpoints e exemplos de uso
 
 ## Funcionalidades Frontend
@@ -136,7 +132,7 @@ Todos os endpoints requerem header `X-API-KEY` com valor configurado no ambiente
    - Ações rápidas
 
 2. **Transações** (`/transacoes`)
-   - Upload de CSV
+   - Upload de OFX (arquivo bancário)
    - Filtros por categoria e status
    - Categorização em lote
    - Tabela com todas as transações
@@ -228,10 +224,10 @@ shared/
 ✅ Theme dark/light funcional
 ✅ Sistema de navegação com sidebar
 ✅ Integração React Query configurada
-✅ Backend com 12 endpoints implementados (incluindo OFX e /api/docs)
+✅ Backend com 11 endpoints implementados (incluindo OFX e /api/docs)
 ✅ Storage em memória funcional
 ✅ Middleware de autenticação X-API-KEY
-✅ Parsing CSV e **OFX bancário** com deduplicação ⭐ NOVO
+✅ Parsing **OFX bancário** com deduplicação automática
 ✅ Cálculo de KPIs
 ✅ Heurísticas inteligentes
 ✅ Integração frontend ↔ backend completa
@@ -248,17 +244,11 @@ shared/
    - ID: `empresa_demo_pj`
    - Nome: `Empresa Demo`
    - Tipo: `Pessoa Jurídica`
-   - Email (opcional): `contato@empresademo.com`
+   - Email: `contato@empresademo.com`
 4. Clique em "Criar Cliente"
 
 ### 2. Importar Transações
-**Via CSV:**
-1. Navegue para "Transações"
-2. Clique em "Importar CSV"
-3. Selecione o arquivo `exemplo-transacoes.csv` (já incluído no projeto)
-4. Aguarde confirmação
-
-**Via OFX (arquivo bancário):** ⭐ NOVO
+**Via OFX (arquivo bancário):**
 1. Navegue para "Transações"
 2. Clique em "Importar OFX"
 3. Selecione um arquivo .ofx exportado do seu banco
@@ -288,9 +278,6 @@ shared/
 3. Selecione o período (ex: 2025-10)
 4. Adicione observações (opcional)
 5. Visualize e imprima o relatório HTML
-
-## Arquivo CSV de Exemplo
-O arquivo `exemplo-transacoes.csv` contém 12 transações de exemplo para outubro/2025, incluindo receitas, custos fixos, custos variáveis, impostos e lazer.
 
 ## Próximas Melhorias (Futuro)
 1. Persistência com PostgreSQL ou Replit Database real

@@ -4,10 +4,10 @@ import { z } from "zod";
 export const clientTypes = ["PF", "PJ", "BOTH"] as const;
 
 export const clientSchema = z.object({
-  clientId: z.string(),
-  name: z.string(),
+  clientId: z.string().min(1, "ID do cliente é obrigatório"),
+  name: z.string().min(1, "Nome é obrigatório"),
   type: z.enum(clientTypes),
-  email: z.string().email().optional(),
+  email: z.string().min(1, "Email é obrigatório").email("Email inválido"),
 });
 
 export type Client = z.infer<typeof clientSchema>;
@@ -95,12 +95,6 @@ export const reportSchema = z.object({
 });
 
 export type Report = z.infer<typeof reportSchema>;
-
-// CSV Import
-export const csvImportSchema = z.object({
-  clientId: z.string(),
-  csvText: z.string(),
-});
 
 // Categorize transactions
 export const categorizeSchema = z.object({

@@ -2,13 +2,11 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
-import Papa from "papaparse";
 import multer from "multer";
 import Ofx from "ofx-js";
 import crypto from "crypto";
 import {
   clientSchema,
-  csvImportSchema,
   categorizeSchema,
   transactionCategories,
   type Transaction,
@@ -37,6 +35,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const client = await storage.upsertClient(data);
       res.json(client);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
+        return res.status(400).json({ error: fieldErrors });
+      }
       res.status(400).json({ error: error instanceof Error ? error.message : "Erro de validação" });
     }
   });
@@ -51,46 +53,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 2. POST /api/transactions/importCsv - Import CSV transactions
-  app.post("/api/transactions/importCsv", async (req, res) => {
-    try {
-      const { clientId, csvText } = csvImportSchema.parse(req.body);
-
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
-      }
-
-      const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
-
-      if (parsed.errors.length > 0) {
-        return res.status(400).json({ error: "CSV inválido (colunas: date,desc,amount[,category])." });
-      }
-
-      const transactions: Transaction[] = [];
-      for (const row of parsed.data as any[]) {
-        if (!row.date || !row.desc || row.amount === undefined) {
-          continue;
-        }
-
-        const transaction: Transaction = {
-          date: row.date,
-          desc: row.desc,
-          amount: parseFloat(row.amount),
-          category: row.category && transactionCategories.includes(row.category) ? row.category : undefined,
-          status: row.category ? "categorizada" : "pendente",
-        };
-
-        transactions.push(transaction);
-      }
-
-      await storage.addTransactions(clientId, transactions);
-      res.json({ success: true, count: transactions.length });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : "Erro ao importar CSV" });
-    }
-  });
-
-  // NEW: POST /api/import/ofx - Import OFX file
+  // 2. POST /api/import/ofx - Import OFX file
   app.post("/api/import/ofx", upload.single("ofx"), async (req, res) => {
     try {
       const { clientId } = req.body;
@@ -881,7 +844,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   "clientId": "empresa_abc",
   "name": "Empresa ABC Ltda",
   "type": "PJ",  // "PF", "PJ" ou "BOTH"
-  "email": "contato@empresaabc.com"  // opcional
+  "email": "contato@empresaabc.com"
 }</pre>
             </div>
           </div>
@@ -895,30 +858,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           </div>
 
           <h2>💰 Gestão de Transações</h2>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/transactions/importCsv</span>
-            </div>
-            <p class="description">Importar transações via arquivo CSV</p>
-            <div class="params">
-              <h4>Body (JSON)</h4>
-              <pre>{
-  "clientId": "empresa_abc",
-  "csvText": "date,desc,amount,category\\n2025-10-01,Venda Produto,1500,Receita\\n..."
-}</pre>
-            </div>
-            <div class="response">
-              <h4>Formato CSV Esperado</h4>
-              <ul>
-                <li><strong>date:</strong> YYYY-MM-DD</li>
-                <li><strong>desc:</strong> Descrição da transação</li>
-                <li><strong>amount:</strong> Valor (positivo = entrada, negativo = saída)</li>
-                <li><strong>category:</strong> (Opcional) Receita, Custo Fixo, Custo Variável, Impostos, Lazer, Taxas, Investimento, Outros</li>
-              </ul>
-            </div>
-          </div>
 
           <div class="endpoint">
             <div>

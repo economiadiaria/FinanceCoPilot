@@ -56,10 +56,11 @@ export function NewClientDialog({ open, onOpenChange, onClientCreated }: NewClie
         email: "",
       });
     },
-    onError: () => {
+    onError: (error: any) => {
+      const errorMessage = error?.response?.data?.error || error?.message || "Verifique os dados e tente novamente.";
       toast({
         title: "Erro ao criar cliente",
-        description: "Verifique os dados e tente novamente.",
+        description: errorMessage,
         variant: "destructive",
       });
     },
@@ -67,10 +68,10 @@ export function NewClientDialog({ open, onOpenChange, onClientCreated }: NewClie
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.clientId || !formData.name) {
+    if (!formData.clientId || !formData.name || !formData.email) {
       toast({
         title: "Campos obrigatórios",
-        description: "Preencha ID e nome do cliente.",
+        description: "Preencha todos os campos obrigatórios: ID, nome e email.",
         variant: "destructive",
       });
       return;
@@ -129,7 +130,7 @@ export function NewClientDialog({ open, onOpenChange, onClientCreated }: NewClie
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="email">Email (opcional)</Label>
+              <Label htmlFor="email">Email *</Label>
               <Input
                 id="email"
                 type="email"
@@ -137,6 +138,7 @@ export function NewClientDialog({ open, onOpenChange, onClientCreated }: NewClie
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 placeholder="email@exemplo.com"
                 data-testid="input-client-email"
+                required
               />
             </div>
           </div>

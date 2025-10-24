@@ -115,12 +115,12 @@ export default function Dashboard({ clientId }: DashboardProps) {
           ) : recentTransactions.length === 0 ? (
             <div className="text-center py-8 space-y-4">
               <p className="text-muted-foreground">
-                Nenhuma transação encontrada. Comece importando um arquivo CSV.
+                Nenhuma transação encontrada. Comece importando um arquivo OFX do seu banco.
               </p>
               <Link href="/transacoes">
-                <Button data-testid="button-import-csv-empty">
+                <Button data-testid="button-import-ofx-empty">
                   <Upload className="mr-2 h-4 w-4" />
-                  Importar CSV
+                  Importar OFX
                 </Button>
               </Link>
             </div>

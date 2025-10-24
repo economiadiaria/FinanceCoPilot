@@ -6,3 +6,7 @@ export function getApiHeaders(): HeadersInit {
     "X-API-KEY": API_KEY,
   };
 }
+
+export function getApiKey(): string {
+  return API_KEY;
+}

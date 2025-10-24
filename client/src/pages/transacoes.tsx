@@ -13,12 +13,12 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Upload, Download, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import Papa from "papaparse";
 import type { Transaction } from "@shared/schema";
 import { transactionCategories } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { getApiKey } from "@/lib/api";
 
 interface TransacoesProps {
   clientId: string | null;
@@ -35,7 +35,6 @@ interface TransactionsResponse {
 
 export default function Transacoes({ clientId }: TransacoesProps) {
   const { toast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const ofxInputRef = useRef<HTMLInputElement>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -49,30 +48,6 @@ export default function Transacoes({ clientId }: TransacoesProps) {
   const transactions = data?.transactions || [];
   const summary = data?.summary;
 
-  const importMutation = useMutation({
-    mutationFn: async (csvText: string) => {
-      return apiRequest("POST", "/api/transactions/importCsv", {
-        clientId,
-        csvText,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/transactions/list"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/summary"] });
-      toast({
-        title: "Importação concluída",
-        description: "Transações importadas com sucesso!",
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Erro na importação",
-        description: "Verifique se o CSV está no formato correto.",
-        variant: "destructive",
-      });
-    },
-  });
-
   const importOfxMutation = useMutation({
     mutationFn: async (file: File) => {
       const formData = new FormData();
@@ -82,7 +57,7 @@ export default function Transacoes({ clientId }: TransacoesProps) {
       const response = await fetch("/api/import/ofx", {
         method: "POST",
         headers: {
-          "X-API-KEY": "dev-key-123",
+          "X-API-KEY": getApiKey(),
         },
         body: formData,
       });
@@ -129,18 +104,6 @@ export default function Transacoes({ clientId }: TransacoesProps) {
       });
     },
   });
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const csvText = event.target?.result as string;
-      importMutation.mutate(csvText);
-    };
-    reader.readAsText(file);
-  };
 
   const handleOfxUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -189,33 +152,14 @@ export default function Transacoes({ clientId }: TransacoesProps) {
           <h1 className="text-3xl font-bold">Transações</h1>
           <p className="text-muted-foreground">Gerencie e categorize suas transações</p>
         </div>
-        <div className="flex gap-2">
-          <Button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importMutation.isPending}
-            variant="outline"
-            data-testid="button-import-csv"
-          >
-            <Upload className="mr-2 h-4 w-4" />
-            {importMutation.isPending ? "Importando..." : "Importar CSV"}
-          </Button>
-          <Button
-            onClick={() => ofxInputRef.current?.click()}
-            disabled={importOfxMutation.isPending}
-            data-testid="button-import-ofx"
-          >
-            <FileText className="mr-2 h-4 w-4" />
-            {importOfxMutation.isPending ? "Importando..." : "Importar OFX"}
-          </Button>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".csv"
-          className="hidden"
-          onChange={handleFileUpload}
-          data-testid="input-file-csv"
-        />
+        <Button
+          onClick={() => ofxInputRef.current?.click()}
+          disabled={importOfxMutation.isPending}
+          data-testid="button-import-ofx"
+        >
+          <FileText className="mr-2 h-4 w-4" />
+          {importOfxMutation.isPending ? "Importando..." : "Importar OFX"}
+        </Button>
         <input
           ref={ofxInputRef}
           type="file"
@@ -347,10 +291,10 @@ export default function Transacoes({ clientId }: TransacoesProps) {
           ) : transactions.length === 0 ? (
             <div className="text-center py-12 space-y-4">
               <p className="text-muted-foreground">
-                Nenhuma transação encontrada. Importe um arquivo CSV para começar.
+                Nenhuma transação encontrada. Importe um arquivo OFX do seu banco para começar.
               </p>
               <p className="text-sm text-muted-foreground">
-                Formato CSV: date,desc,amount[,category]
+                Clique em "Importar OFX" acima para enviar seu extrato bancário
               </p>
             </div>
           ) : (
