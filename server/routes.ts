@@ -49,7 +49,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const clients = await storage.getClients();
       res.json(clients);
     } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar clientes" });
+      console.error("Erro ao buscar clientes:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar clientes" });
     }
   });
 
