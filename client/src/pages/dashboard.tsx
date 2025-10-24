@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { DollarSign, TrendingUp, Percent, Upload, FileBarChart } from "lucide-react";
 import { Link } from "wouter";
 import type { Summary, Transaction } from "@shared/schema";
+import { formatToBR } from "@/lib/dateUtils";
 
 interface DashboardProps {
   clientId: string | null;
@@ -134,7 +135,7 @@ export default function Dashboard({ clientId }: DashboardProps) {
                 >
                   <div className="flex-1">
                     <p className="font-medium">{txn.desc}</p>
-                    <p className="text-sm text-muted-foreground">{txn.date}</p>
+                    <p className="text-sm text-muted-foreground">{formatToBR(txn.date)}</p>
                   </div>
                   <div className="text-right">
                     <p className={`font-semibold tabular-nums ${

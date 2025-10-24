@@ -26,6 +26,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { Position, RebalanceSuggestion } from "@shared/schema";
 import { assetClasses } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { formatToBR } from "@/lib/dateUtils";
 
 interface InvestimentosProps {
   clientId: string | null;
@@ -312,7 +313,7 @@ export default function Investimentos({ clientId }: InvestimentosProps) {
                 {position.maturity && (
                   <div>
                     <div className="text-muted-foreground">Vencimento</div>
-                    <div className="font-medium">{position.maturity}</div>
+                    <div className="font-medium">{formatToBR(position.maturity)}</div>
                   </div>
                 )}
               </div>
