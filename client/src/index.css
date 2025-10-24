@@ -20,9 +20,9 @@
 
   --border: 0 0% 90.98%;
 
-  --card: 0 0% 98.82%;
+  --card: 0deg 0% 98.82%;
 
-  --card-foreground: 0 0% 0%;
+  --card-foreground: 0deg 0% 0%;
 
   --card-border: 220 13% 92%;
 
@@ -42,13 +42,13 @@
 
   --sidebar-ring: 9 75% 61%;
 
-  --popover: 45 25% 97%;
+  --popover: 0deg 0% 98.82%;
 
-  --popover-foreground: 0 0% 100%;
+  --popover-foreground: 0deg 0% 0%;
 
   --popover-border: 220 13% 88%;
 
-  --primary: 342 85.11% 52.55%;
+  --primary: 230.48deg 96.03% 29.61%;
 
   --primary-foreground: 0 0% 100%;
 
