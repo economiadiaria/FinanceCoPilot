@@ -19,6 +19,7 @@ import type { Transaction } from "@shared/schema";
 import { transactionCategories } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getApiKey } from "@/lib/api";
+import { formatToBR } from "@/lib/dateUtils";
 
 interface TransacoesProps {
   clientId: string | null;
@@ -329,7 +330,7 @@ export default function Transacoes({ clientId }: TransacoesProps) {
                           data-testid={`checkbox-transaction-${index}`}
                         />
                       </td>
-                      <td className="p-4 text-sm">{txn.date}</td>
+                      <td className="p-4 text-sm">{formatToBR(txn.date)}</td>
                       <td className="p-4">{txn.desc}</td>
                       <td className="p-4">
                         {txn.category ? (

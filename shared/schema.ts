@@ -35,6 +35,7 @@ export const transactionSchema = z.object({
   status: z.enum(transactionStatuses),
   fitid: z.string().optional(), // OFX unique transaction ID
   accountId: z.string().optional(), // Bank account ID from OFX
+  bankName: z.string().optional(), // Nome do banco extraído do OFX
 });
 
 export type Transaction = z.infer<typeof transactionSchema>;

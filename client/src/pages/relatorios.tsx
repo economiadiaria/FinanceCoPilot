@@ -17,6 +17,7 @@ import {
 import { FileBarChart, Printer, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { formatPeriodToBR } from "@/lib/dateUtils";
 
 interface RelatoriosProps {
   clientId: string | null;
@@ -167,7 +168,7 @@ export default function Relatorios({ clientId }: RelatoriosProps) {
                 onClick={() => setSelectedPeriod(p)}
                 data-testid={`button-period-${p}`}
               >
-                {p}
+                {formatPeriodToBR(p)}
               </Button>
             ))}
           </div>
@@ -178,7 +179,7 @@ export default function Relatorios({ clientId }: RelatoriosProps) {
       {selectedPeriod && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Relatório: {selectedPeriod}</CardTitle>
+            <CardTitle>Relatório: {formatPeriodToBR(selectedPeriod)}</CardTitle>
             <div className="flex gap-2">
               <Button
                 variant="outline"
