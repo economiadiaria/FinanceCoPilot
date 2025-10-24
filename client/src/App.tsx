@@ -11,14 +11,31 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ClientSelector } from "@/components/client-selector";
 import { NewClientDialog } from "@/components/new-client-dialog";
+import { UserMenu } from "@/components/user-menu";
+import { AuthProvider } from "@/contexts/AuthContext";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Dashboard from "@/pages/dashboard";
 import Transacoes from "@/pages/transacoes";
 import Investimentos from "@/pages/investimentos";
 import Relatorios from "@/pages/relatorios";
 import Configuracoes from "@/pages/configuracoes";
+import LoginPage from "@/pages/login";
 import type { Client } from "@shared/schema";
 
 function Router() {
+  return (
+    <Switch>
+      <Route path="/login" component={LoginPage} />
+      <Route>
+        <ProtectedRoute>
+          <AuthenticatedApp />
+        </ProtectedRoute>
+      </Route>
+    </Switch>
+  );
+}
+
+function AuthenticatedApp() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [newClientDialogOpen, setNewClientDialogOpen] = useState(false);
 
@@ -47,6 +64,7 @@ function Router() {
               onNewClient={() => setNewClientDialogOpen(true)}
             />
             <ThemeToggle />
+            <UserMenu />
           </div>
         </header>
         <main className="flex-1 overflow-auto p-6 md:p-8">
@@ -91,14 +109,16 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="light">
-        <TooltipProvider>
-          <SidebarProvider style={style as React.CSSProperties}>
-            <Router />
-          </SidebarProvider>
-          <Toaster />
-        </TooltipProvider>
-      </ThemeProvider>
+      <AuthProvider>
+        <ThemeProvider defaultTheme="light">
+          <TooltipProvider>
+            <SidebarProvider style={style as React.CSSProperties}>
+              <Router />
+            </SidebarProvider>
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
