@@ -288,11 +288,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const amount = parseFloat(trans.TRNAMT || "0");
           const desc = trans.MEMO || trans.NAME || "Transação sem descrição";
 
+          // Smart categorization: detect CDB transactions
+          let category: Transaction['category'] = undefined;
+          let subcategory: string | undefined;
+          let status: "pendente" | "categorizada" = "pendente";
+          
+          if (desc.toUpperCase().includes("CDB")) {
+            category = "Investimento";
+            status = "categorizada";
+            if (amount >= 0) {
+              // ENTRADA = Resgate de investimento
+              subcategory = "Resgate";
+            } else {
+              // SAÍDA = Aplicação de investimento
+              subcategory = "Aplicação";
+            }
+          }
+
           transactions.push({
             date,
             desc,
             amount,
-            status: "pendente",
+            category,
+            subcategory,
+            status,
             fitid,
             accountId,
             bankName,
