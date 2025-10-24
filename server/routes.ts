@@ -228,6 +228,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Arquivo OFX inválido ou sem dados." });
       }
 
+      // Extract bank name from OFX (try <ORG> first, fallback to <FID>)
+      let bankName = "Banco não identificado";
+      try {
+        const signonInfo = ofxData.OFX.SIGNONMSGSRSV1?.SONRS?.FI;
+        if (signonInfo) {
+          bankName = signonInfo.ORG || signonInfo.FID || bankName;
+        }
+      } catch (e) {
+        console.log("⚠️ Não foi possível extrair nome do banco do OFX");
+      }
+      
       const transactions: Transaction[] = [];
       const existingTransactions = await storage.getTransactions(clientId);
       const existingFitIds = new Set(existingTransactions.map(t => t.fitid).filter(Boolean));
@@ -284,6 +295,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             status: "pendente",
             fitid,
             accountId,
+            bankName,
           });
 
           existingFitIds.add(fitid);
@@ -387,9 +399,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       for (const index of indices) {
         if (index >= 0 && index < transactions.length) {
-          transactions[index].category = category;
-          transactions[index].subcategory = subcategory;
-          transactions[index].status = "categorizada";
+          const txn = transactions[index];
+          
+          // Auto-categorization logic based on amount sign
+          if (txn.amount >= 0) {
+            // Positive or zero amount = always "Receita"
+            txn.category = "Receita";
+            txn.subcategory = undefined;
+          } else {
+            // Negative amount = map UI input shortcuts to valid category enum
+            let finalCategory: string;
+            
+            if (category === "Fixo") {
+              finalCategory = "Custo Fixo";
+              txn.subcategory = "Fixo";
+            } else if (category === "Variável") {
+              finalCategory = "Custo Variável";
+              txn.subcategory = "Variável";
+            } else {
+              // Use category as-is (must be valid transactionCategory)
+              finalCategory = category;
+              txn.subcategory = subcategory;
+            }
+            
+            // Revalidate against transactionCategories enum
+            const validCategories: readonly string[] = transactionCategories;
+            if (!validCategories.includes(finalCategory)) {
+              return res.status(400).json({ 
+                error: `Categoria inválida após mapeamento: ${finalCategory}` 
+              });
+            }
+            
+            txn.category = finalCategory as any;
+          }
+          
+          txn.status = "categorizada";
         }
       }
 

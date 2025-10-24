@@ -97,11 +97,17 @@ export const reportSchema = z.object({
 
 export type Report = z.infer<typeof reportSchema>;
 
-// Categorize transactions
+// Categorize input - extends transaction categories with UI shortcuts
+export const categorizeInputCategories = [
+  ...transactionCategories,
+  "Fixo",     // UI shortcut for "Custo Fixo"
+  "Variável"  // UI shortcut for "Custo Variável"
+] as const;
+
 export const categorizeSchema = z.object({
   clientId: z.string(),
   indices: z.array(z.number()),
-  category: z.enum(transactionCategories),
+  category: z.enum(categorizeInputCategories),
   subcategory: z.string().optional(),
 });
 

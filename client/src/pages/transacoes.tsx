@@ -13,13 +13,13 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { FileText } from "lucide-react";
+import { FileText, ArrowUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Transaction } from "@shared/schema";
 import { transactionCategories } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getApiKey } from "@/lib/api";
-import { formatToBR } from "@/lib/dateUtils";
+import { formatToBR, getCurrentPeriod, getPeriodRange } from "@/lib/dateUtils";
 
 interface TransacoesProps {
   clientId: string | null;
@@ -37,17 +37,59 @@ interface TransactionsResponse {
 export default function Transacoes({ clientId }: TransacoesProps) {
   const { toast } = useToast();
   const ofxInputRef = useRef<HTMLInputElement>(null);
-  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [selectedFitIds, setSelectedFitIds] = useState<Set<string>>(new Set());
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [searchText, setSearchText] = useState<string>("");
+  const [sortColumn, setSortColumn] = useState<"date" | "desc" | "amount" | "bankName" | null>("date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  
+  // Default to current month period
+  const currentPeriod = getCurrentPeriod();
+  const { from: defaultFrom, to: defaultTo } = getPeriodRange(currentPeriod);
+  const [periodFrom, setPeriodFrom] = useState<string>(defaultFrom);
+  const [periodTo, setPeriodTo] = useState<string>(defaultTo);
 
   const { data, isLoading } = useQuery<TransactionsResponse>({
-    queryKey: ["/api/transactions/list", { clientId, status: statusFilter === "all" ? undefined : statusFilter, category: categoryFilter === "all" ? undefined : categoryFilter }],
+    queryKey: [
+      "/api/transactions/list", 
+      { 
+        clientId, 
+        status: statusFilter === "all" ? undefined : statusFilter, 
+        category: categoryFilter === "all" ? undefined : categoryFilter,
+        from: periodFrom,
+        to: periodTo
+      }
+    ],
     enabled: !!clientId,
   });
 
-  const transactions = data?.transactions || [];
+  const allTransactions = data?.transactions || [];
   const summary = data?.summary;
+  
+  // Apply local search filter
+  let transactions = allTransactions.filter(txn => 
+    txn.desc.toLowerCase().includes(searchText.toLowerCase())
+  );
+  
+  // Apply sorting
+  if (sortColumn) {
+    transactions = [...transactions].sort((a, b) => {
+      let comparison = 0;
+      
+      if (sortColumn === "date") {
+        comparison = a.date.localeCompare(b.date);
+      } else if (sortColumn === "desc") {
+        comparison = a.desc.localeCompare(b.desc);
+      } else if (sortColumn === "amount") {
+        comparison = a.amount - b.amount;
+      } else if (sortColumn === "bankName") {
+        comparison = (a.bankName || "").localeCompare(b.bankName || "");
+      }
+      
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }
 
   const importOfxMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -88,7 +130,13 @@ export default function Transacoes({ clientId }: TransacoesProps) {
   });
 
   const categorizeMutation = useMutation({
-    mutationFn: async ({ indices, category }: { indices: number[]; category: string }) => {
+    mutationFn: async ({ fitIds, category }: { fitIds: string[]; category: string }) => {
+      // Convert fitIds back to indices in the original transaction list
+      const allTxns = allTransactions;
+      const indices = fitIds
+        .map(fitId => allTxns.findIndex(t => t.fitid === fitId))
+        .filter(idx => idx !== -1);
+      
       return apiRequest("POST", "/api/transactions/categorize", {
         clientId,
         indices,
@@ -98,10 +146,10 @@ export default function Transacoes({ clientId }: TransacoesProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/transactions/list"] });
       queryClient.invalidateQueries({ queryKey: ["/api/summary"] });
-      setSelectedIndices([]);
+      setSelectedFitIds(new Set());
       toast({
         title: "Categorização concluída",
-        description: `${selectedIndices.length} transação(ões) categorizada(s)!`,
+        description: `${selectedFitIds.size} transação(ões) categorizada(s)!`,
       });
     },
   });
@@ -113,7 +161,7 @@ export default function Transacoes({ clientId }: TransacoesProps) {
   };
 
   const handleCategorize = (category: string) => {
-    if (selectedIndices.length === 0) {
+    if (selectedFitIds.size === 0) {
       toast({
         title: "Nenhuma transação selecionada",
         description: "Selecione ao menos uma transação para categorizar.",
@@ -121,20 +169,37 @@ export default function Transacoes({ clientId }: TransacoesProps) {
       });
       return;
     }
-    categorizeMutation.mutate({ indices: selectedIndices, category });
+    categorizeMutation.mutate({ fitIds: Array.from(selectedFitIds), category });
   };
 
-  const toggleSelection = (index: number) => {
-    setSelectedIndices((prev) =>
-      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
-    );
+  const toggleSelection = (fitId: string | undefined) => {
+    if (!fitId) return;
+    setSelectedFitIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(fitId)) {
+        newSet.delete(fitId);
+      } else {
+        newSet.add(fitId);
+      }
+      return newSet;
+    });
   };
 
   const toggleAll = () => {
-    if (selectedIndices.length === transactions.length) {
-      setSelectedIndices([]);
+    if (selectedFitIds.size === transactions.length) {
+      setSelectedFitIds(new Set());
     } else {
-      setSelectedIndices(transactions.map((_, i) => i));
+      const allFitIds = transactions.map(t => t.fitid).filter((id): id is string => !!id);
+      setSelectedFitIds(new Set(allFitIds));
+    }
+  };
+  
+  const handleSort = (column: "date" | "desc" | "amount" | "bankName") => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
     }
   };
 
@@ -206,7 +271,34 @@ export default function Transacoes({ clientId }: TransacoesProps) {
         <CardHeader>
           <CardTitle className="text-lg">Filtros</CardTitle>
         </CardHeader>
-        <CardContent className="flex gap-4">
+        <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="flex-1">
+            <Label>Data Início</Label>
+            <Input
+              type="date"
+              value={periodFrom}
+              onChange={(e) => setPeriodFrom(e.target.value)}
+              data-testid="input-date-from"
+            />
+          </div>
+          <div className="flex-1">
+            <Label>Data Fim</Label>
+            <Input
+              type="date"
+              value={periodTo}
+              onChange={(e) => setPeriodTo(e.target.value)}
+              data-testid="input-date-to"
+            />
+          </div>
+          <div className="flex-1">
+            <Label>Buscar Descrição</Label>
+            <Input
+              placeholder="Ex: uber, ifood..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              data-testid="input-search-description"
+            />
+          </div>
           <div className="flex-1">
             <Label>Categoria</Label>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
@@ -241,12 +333,12 @@ export default function Transacoes({ clientId }: TransacoesProps) {
       </Card>
 
       {/* Bulk Actions */}
-      {selectedIndices.length > 0 && (
+      {selectedFitIds.size > 0 && (
         <Card className="border-primary">
           <CardContent className="py-4">
             <div className="flex items-center justify-between">
               <span className="font-medium">
-                {selectedIndices.length} transação(ões) selecionada(s)
+                {selectedFitIds.size} transação(ões) selecionada(s)
               </span>
               <div className="flex gap-2">
                 <Button
@@ -255,24 +347,27 @@ export default function Transacoes({ clientId }: TransacoesProps) {
                   onClick={() => handleCategorize("Receita")}
                   disabled={categorizeMutation.isPending}
                   data-testid="button-categorize-receita"
+                  className="bg-green-50 dark:bg-green-950 border-green-300 dark:border-green-800"
                 >
                   Receita
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => handleCategorize("Custo Fixo")}
+                  onClick={() => handleCategorize("Fixo")}
                   disabled={categorizeMutation.isPending}
-                  data-testid="button-categorize-custo-fixo"
+                  data-testid="button-categorize-fixo"
+                  className="bg-red-50 dark:bg-red-950 border-red-300 dark:border-red-800"
                 >
                   Custo Fixo
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => handleCategorize("Custo Variável")}
+                  onClick={() => handleCategorize("Variável")}
                   disabled={categorizeMutation.isPending}
-                  data-testid="button-categorize-custo-variavel"
+                  data-testid="button-categorize-variavel"
+                  className="bg-orange-50 dark:bg-orange-950 border-orange-300 dark:border-orange-800"
                 >
                   Custo Variável
                 </Button>
@@ -305,15 +400,52 @@ export default function Transacoes({ clientId }: TransacoesProps) {
                   <tr>
                     <th className="w-12 p-4">
                       <Checkbox
-                        checked={selectedIndices.length === transactions.length}
+                        checked={selectedFitIds.size === transactions.length && transactions.length > 0}
                         onCheckedChange={toggleAll}
                         data-testid="checkbox-select-all"
                       />
                     </th>
-                    <th className="text-left p-4 text-sm font-medium w-32">Data</th>
-                    <th className="text-left p-4 text-sm font-medium flex-1">Descrição</th>
+                    <th className="text-left p-4 text-sm font-medium w-32">
+                      <button
+                        onClick={() => handleSort("date")}
+                        className="flex items-center gap-1 hover-elevate rounded px-2 py-1"
+                        data-testid="button-sort-date"
+                      >
+                        Data
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
+                    <th className="text-left p-4 text-sm font-medium flex-1">
+                      <button
+                        onClick={() => handleSort("desc")}
+                        className="flex items-center gap-1 hover-elevate rounded px-2 py-1"
+                        data-testid="button-sort-desc"
+                      >
+                        Descrição
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
+                    <th className="text-left p-4 text-sm font-medium w-40">
+                      <button
+                        onClick={() => handleSort("bankName")}
+                        className="flex items-center gap-1 hover-elevate rounded px-2 py-1"
+                        data-testid="button-sort-bank"
+                      >
+                        Banco
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
                     <th className="text-left p-4 text-sm font-medium w-40">Categoria</th>
-                    <th className="text-right p-4 text-sm font-medium w-32">Valor</th>
+                    <th className="text-right p-4 text-sm font-medium w-32">
+                      <button
+                        onClick={() => handleSort("amount")}
+                        className="flex items-center gap-1 hover-elevate rounded px-2 py-1 ml-auto"
+                        data-testid="button-sort-amount"
+                      >
+                        Valor
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -325,13 +457,14 @@ export default function Transacoes({ clientId }: TransacoesProps) {
                     >
                       <td className="p-4">
                         <Checkbox
-                          checked={selectedIndices.includes(index)}
-                          onCheckedChange={() => toggleSelection(index)}
+                          checked={selectedFitIds.has(txn.fitid || "")}
+                          onCheckedChange={() => toggleSelection(txn.fitid)}
                           data-testid={`checkbox-transaction-${index}`}
                         />
                       </td>
                       <td className="p-4 text-sm">{formatToBR(txn.date)}</td>
                       <td className="p-4">{txn.desc}</td>
+                      <td className="p-4 text-sm text-muted-foreground">{txn.bankName || '-'}</td>
                       <td className="p-4">
                         {txn.category ? (
                           <Badge variant="secondary">{txn.category}</Badge>
