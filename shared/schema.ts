@@ -36,6 +36,10 @@ export const transactionSchema = z.object({
   fitid: z.string().optional(), // OFX unique transaction ID
   accountId: z.string().optional(), // Bank account ID from OFX
   bankName: z.string().optional(), // Nome do banco extraído do OFX
+  // Open Finance fields
+  provider: z.enum(["ofx", "pluggy"]).optional(), // Source of transaction
+  providerTxId: z.string().optional(), // Pluggy transaction ID
+  providerAccountId: z.string().optional(), // Pluggy account ID
 });
 
 export type Transaction = z.infer<typeof transactionSchema>;
@@ -51,6 +55,10 @@ export const positionSchema = z.object({
   rate: z.number().optional(), // taxa de retorno anual
   liquidity: z.string().optional(), // ex: "D+0", "D+1"
   maturity: z.string().optional(), // YYYY-MM-DD
+  // Open Finance fields
+  provider: z.enum(["manual", "pluggy"]).optional(), // Source of position
+  providerPosId: z.string().optional(), // Pluggy position ID
+  providerAccountId: z.string().optional(), // Pluggy account ID
 });
 
 export type Position = z.infer<typeof positionSchema>;
@@ -183,3 +191,32 @@ export const ofxImportSchema = z.object({
 });
 
 export type OFXImport = z.infer<typeof ofxImportSchema>;
+
+// Open Finance (Pluggy) types
+export const ofItemSchema = z.object({
+  itemId: z.string(),
+  institutionName: z.string(),
+  status: z.enum(["active", "error", "waiting_user_input", "login_error"]),
+  lastSyncAt: z.string().optional(), // ISO 8601 timestamp
+  createdAt: z.string(), // ISO 8601 timestamp
+});
+
+export type OFItem = z.infer<typeof ofItemSchema>;
+
+export const ofAccountSchema = z.object({
+  accountId: z.string(),
+  itemId: z.string(),
+  name: z.string(),
+  type: z.string(), // CHECKING, SAVINGS, CREDIT_CARD, INVESTMENT
+  currency: z.string().default("BRL"),
+  balance: z.number().optional(),
+});
+
+export type OFAccount = z.infer<typeof ofAccountSchema>;
+
+export const ofSyncMetaSchema = z.object({
+  lastTxSyncAt: z.string().optional(), // ISO 8601 timestamp
+  lastPosSyncAt: z.string().optional(), // ISO 8601 timestamp
+});
+
+export type OFSyncMeta = z.infer<typeof ofSyncMetaSchema>;

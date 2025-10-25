@@ -1,4 +1,4 @@
-import type { Client, Transaction, Position, PFPolicy, PJPolicy, Report, User, OFXImport } from "@shared/schema";
+import type { Client, Transaction, Position, PFPolicy, PJPolicy, Report, User, OFXImport, OFItem, OFAccount, OFSyncMeta } from "@shared/schema";
 import Database from "@replit/database";
 
 export interface IStorage {
@@ -37,6 +37,17 @@ export interface IStorage {
   // OFX Imports
   getOFXImport(fileHash: string): Promise<OFXImport | null>;
   addOFXImport(ofxImport: OFXImport): Promise<void>;
+
+  // Open Finance (Pluggy)
+  getOFItems(clientId: string): Promise<OFItem[]>;
+  setOFItems(clientId: string, items: OFItem[]): Promise<void>;
+  addOFItem(clientId: string, item: OFItem): Promise<void>;
+  
+  getOFAccounts(clientId: string): Promise<OFAccount[]>;
+  setOFAccounts(clientId: string, accounts: OFAccount[]): Promise<void>;
+  
+  getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null>;
+  setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -48,6 +59,9 @@ export class MemStorage implements IStorage {
   private reports: Map<string, Map<string, Report>>;
   private reportHtmls: Map<string, Map<string, string>>;
   private ofxImports: Map<string, OFXImport>;
+  private ofItems: Map<string, OFItem[]>;
+  private ofAccounts: Map<string, OFAccount[]>;
+  private ofSyncMeta: Map<string, OFSyncMeta>;
 
   constructor() {
     this.users = new Map();
@@ -58,6 +72,9 @@ export class MemStorage implements IStorage {
     this.reports = new Map();
     this.reportHtmls = new Map();
     this.ofxImports = new Map();
+    this.ofItems = new Map();
+    this.ofAccounts = new Map();
+    this.ofSyncMeta = new Map();
   }
 
   // Users
@@ -171,6 +188,36 @@ export class MemStorage implements IStorage {
 
   async addOFXImport(ofxImport: OFXImport): Promise<void> {
     this.ofxImports.set(ofxImport.fileHash, ofxImport);
+  }
+
+  // Open Finance (Pluggy)
+  async getOFItems(clientId: string): Promise<OFItem[]> {
+    return this.ofItems.get(clientId) || [];
+  }
+
+  async setOFItems(clientId: string, items: OFItem[]): Promise<void> {
+    this.ofItems.set(clientId, items);
+  }
+
+  async addOFItem(clientId: string, item: OFItem): Promise<void> {
+    const existing = await this.getOFItems(clientId);
+    this.ofItems.set(clientId, [...existing, item]);
+  }
+
+  async getOFAccounts(clientId: string): Promise<OFAccount[]> {
+    return this.ofAccounts.get(clientId) || [];
+  }
+
+  async setOFAccounts(clientId: string, accounts: OFAccount[]): Promise<void> {
+    this.ofAccounts.set(clientId, accounts);
+  }
+
+  async getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null> {
+    return this.ofSyncMeta.get(clientId) || null;
+  }
+
+  async setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void> {
+    this.ofSyncMeta.set(clientId, meta);
   }
 }
 
@@ -415,6 +462,57 @@ export class ReplitDbStorage implements IStorage {
     const result = await this.db.set(`ofxImport:${ofxImport.fileHash}`, ofxImport);
     if (!result.ok) {
       throw new Error(`Database error adding OFX import: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+  }
+
+  // Open Finance (Pluggy)
+  async getOFItems(clientId: string): Promise<OFItem[]> {
+    const result = await this.db.get(`of_items:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting OF items for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setOFItems(clientId: string, items: OFItem[]): Promise<void> {
+    const result = await this.db.set(`of_items:${clientId}`, items);
+    if (!result.ok) {
+      throw new Error(`Database error setting OF items for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  async addOFItem(clientId: string, item: OFItem): Promise<void> {
+    const existing = await this.getOFItems(clientId);
+    await this.setOFItems(clientId, [...existing, item]);
+  }
+
+  async getOFAccounts(clientId: string): Promise<OFAccount[]> {
+    const result = await this.db.get(`of_accounts:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting OF accounts for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setOFAccounts(clientId: string, accounts: OFAccount[]): Promise<void> {
+    const result = await this.db.set(`of_accounts:${clientId}`, accounts);
+    if (!result.ok) {
+      throw new Error(`Database error setting OF accounts for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  async getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null> {
+    const result = await this.db.get(`of_sync_meta:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting OF sync meta for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? null) : null;
+  }
+
+  async setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void> {
+    const result = await this.db.set(`of_sync_meta:${clientId}`, meta);
+    if (!result.ok) {
+      throw new Error(`Database error setting OF sync meta for ${clientId}: ${result.error.message}`);
     }
   }
 }

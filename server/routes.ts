@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
+import { registerOpenFinanceRoutes } from "./openfinance-routes";
 import multer from "multer";
 import Ofx from "ofx-js";
 import crypto from "crypto";
@@ -1363,6 +1364,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     res.send(docsHtml);
   });
+
+  // Register Open Finance routes
+  registerOpenFinanceRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;

@@ -1,0 +1,189 @@
+PROMPT ÚNICO — Open Finance (Pluggy) no Replit
+
+Objetivo: integrar Open Finance usando Pluggy no projeto atual (Node.js + Express + Replit DB), sem quebrar nada do que já existe.
+Formato de data exibida: sempre DD/MM/YYYY.
+
+1) Dependências e env
+
+Atualize package.json com:
+
+"start": "node server.js"
+
+deps novas: axios, uuid
+
+Crie variáveis no Replit Secrets:
+
+PLUGGY_API_URL=https://api.pluggy.ai (ou o ambiente que for usar)
+
+PLUGGY_CLIENT_ID=...
+
+PLUGGY_CLIENT_SECRET=...
+
+PUBLIC_APP_URL=https://<seu-repl>.repl.co (base para webhooks/redirects)
+
+2) Banco (Replit DB) – novas chaves
+
+of_items_${clientId}: array de items conectados (cada um com {itemId, institutionName, status, lastSyncAt})
+
+of_accounts_${clientId}: array de contas normalizadas ({accountId, name, type, currency})
+
+of_sync_meta_${clientId}: { lastTxSyncAt, lastPosSyncAt }
+
+Em transactions_${clientId} mantenha transações com novos campos:
+
+provider: "pluggy", providerTxId, providerAccountId
+
+Em positions_${clientId} adicione:
+
+provider: "pluggy", providerPosId, providerAccountId
+
+3) Endpoints novos (server.js)
+3.1) Criar Connect Token e iniciar consentimento
+
+POST /openfinance/consent/start
+Body: { clientId }
+Ação:
+
+Se faltar credenciais, retorne { mode: "simulado" }.
+
+Senão: POST para PLUGGY_API_URL/connect_token com clientUserId=clientId e items: ["ACCOUNTS","TRANSACTIONS","INVESTMENTS"] (ou equivalente).
+
+Salve um registro leve em of_sync_meta_${clientId} se não existir.
+
+Resposta:
+
+{
+  "mode": "real",
+  "connectToken": "<token>",
+  "widget": { "connectToken": "...", "language": "pt" }
+}
+
+
+(Front chama o widget do Pluggy com esse token — só devolver os dados; não implementar front complexo agora. Se preferir, incluir um HTML simples em /client/:id com um botão que chama esse endpoint e abre o widget via script.)
+
+3.2) Webhook (status e dados)
+
+POST /openfinance/webhook
+Ação:
+
+Receber eventos do Pluggy (item linked, item updated, error, etc.).
+
+Atualizar of_items_${clientId} (status, lastSyncAt = agora).
+
+Não inserir transações diretamente no webhook: apenas marcar para sync.
+
+3.3) Sincronização (pull) – manual e inicial
+
+POST /openfinance/sync
+Body: { clientId, full?: boolean }
+Ação:
+
+Com base nos items do cliente (of_items_${clientId}), para cada item:
+
+Contas: GET /items/{itemId}/accounts
+
+Normalize e salve em of_accounts_${clientId} (id, name, type, currency).
+
+Transações:
+
+Use lastTxSyncAt de of_sync_meta_${clientId} para paginação incremental; se full=true, ignore lastTxSyncAt.
+
+Para cada transação, normalize →
+
+{
+  id: uuid(),
+  date: DD/MM/YYYY,
+  desc,
+  amount: Number,
+  category: null | existente,
+  status: "pendente" | "categorizada",
+  provider: "pluggy",
+  providerTxId: <id da transação no provedor>,
+  providerAccountId: <id>,
+  fitid: null, // manter campo por compatibilidade com OFX
+  sourceHash: null
+}
+
+
+Dedup: crie um Set com providerTxId e ignore as que já existem.
+
+Atualize lastTxSyncAt no final.
+
+Investimentos/Posições: GET /items/{itemId}/investments/positions (ou rota equivalente)
+
+Normalize posições para positions_${clientId} com dedup por providerPosId (ou combine ticker+accountId).
+
+Atualize lastPosSyncAt.
+
+Resposta: { synced: { accounts: n, transactions: n, positions: n }, items: [...] }
+
+3.4) Listar conexões do cliente
+
+GET /openfinance/items?clientId=...
+
+Retorna of_items_${clientId} com status e data da última sync.
+
+4) Regras de deduplicação (Pluggy)
+
+Arquivo duplicado (OFX) já tratado pelo hash — mantenha.
+
+Pluggy:
+
+Transação duplicada → checar providerTxId.
+
+Posição duplicada → providerPosId (ou symbol+accountId+maturity para RF).
+
+Se providerTxId ausente (raro), dedupe por date+desc+amount+providerAccountId.
+
+5) Data em DD/MM/YYYY (sempre público)
+
+Crie util: formatBR(dateISO) → DD/MM/YYYY.
+
+Toda resposta JSON das APIs de listagem/sync deve entregar date já formatado em DD/MM/YYYY.
+
+Nunca retorne YYYY-MM-DD para o front.
+
+6) Telas (HTML simples, mínimo necessário)
+
+Em /client/:id:
+
+Seção “Conexões Open Finance”:
+
+Botão Conectar Banco (chama POST /openfinance/consent/start e exibe o connectToken para o widget — basta mostrar um snippet JS comentado).
+
+Botão Sincronizar agora (chama POST /openfinance/sync).
+
+Lista de conexões (status dos items e lastSyncAt).
+
+Seção “Transações”: mantenha sua tabela atual, com categorização/edição já implementadas.
+
+7) Erros e mensagens
+
+Se credenciais ausentes → POST /openfinance/consent/start retorna {"mode":"simulado"} e a UI mostra “Em breve / modo demo”.
+
+Webhook sem assinatura/sem payload → 400.
+
+Item com erro de conexão → registrar no status do item e informar na lista.
+
+8) Segurança e acesso
+
+Exigir sessão válida.
+
+Consultor só acessa clientes designados.
+
+Cliente (se logado como tal) só acessa o próprio clientId.
+
+9) Manter o que já existe
+
+NÃO remover: login, área do consultor, importador OFX/CSV, dedupe por fitid/hash, datas DD/MM/YYYY, edição/categorização de transações.
+
+10) Teste rápido (seed opcional)
+
+Se process.env.SEED === "1":
+
+Criar um usuário consultor e um cliente de teste.
+
+Popular of_items_${clientId} com um item fake e permitir que POST /openfinance/sync rode em modo simulado quando não houver credenciais Pluggy (gerando 3 transações e 1 posição de exemplo, com datas DD/MM/YYYY).
+
+Entregar todo o código atualizado no server.js, mantendo rotas antigas e adicionando as novas.
+Respeitar sempre o formato DD/MM/YYYY nas respostas públicas.
