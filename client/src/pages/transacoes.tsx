@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { FileText, ArrowUpDown } from "lucide-react";
+import { FileText, ArrowUpDown, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Transaction } from "@shared/schema";
 import { transactionCategories } from "@shared/schema";
@@ -203,6 +203,61 @@ export default function Transacoes({ clientId }: TransacoesProps) {
     }
   };
 
+  const handleExportCSV = () => {
+    if (transactions.length === 0) {
+      toast({
+        title: "Nenhuma transação para exportar",
+        description: "Não há transações visíveis com os filtros atuais.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Helper to escape and quote CSV cells
+    const escapeCSV = (value: string | number) => {
+      const str = String(value);
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    // CSV header
+    const headers = ["Data", "Descrição", "Valor", "Categoria", "Status", "Banco"];
+    
+    // CSV rows - all values quoted for safety
+    const rows = transactions.map(txn => [
+      escapeCSV(formatToBR(txn.date)),
+      escapeCSV(txn.desc),
+      escapeCSV(txn.amount.toFixed(2)),
+      escapeCSV(txn.category || "Pendente"),
+      escapeCSV(txn.status || "pendente"),
+      escapeCSV(txn.bankName || "N/A")
+    ]);
+
+    // Combine header and rows
+    const csvContent = [
+      headers.map(h => escapeCSV(h)).join(","),
+      ...rows.map(row => row.join(","))
+    ].join("\n");
+
+    // Create download
+    const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" }); // BOM for Excel
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `transacoes_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Clean up blob URL
+    URL.revokeObjectURL(url);
+
+    toast({
+      title: "CSV exportado",
+      description: `${transactions.length} transação(ões) exportada(s) com sucesso!`,
+    });
+  };
+
   if (!clientId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -218,22 +273,33 @@ export default function Transacoes({ clientId }: TransacoesProps) {
           <h1 className="text-3xl font-bold">Transações</h1>
           <p className="text-muted-foreground">Gerencie e categorize suas transações</p>
         </div>
-        <Button
-          onClick={() => ofxInputRef.current?.click()}
-          disabled={importOfxMutation.isPending}
-          data-testid="button-import-ofx"
-        >
-          <FileText className="mr-2 h-4 w-4" />
-          {importOfxMutation.isPending ? "Importando..." : "Importar OFX"}
-        </Button>
-        <input
-          ref={ofxInputRef}
-          type="file"
-          accept=".ofx"
-          className="hidden"
-          onChange={handleOfxUpload}
-          data-testid="input-file-ofx"
-        />
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleExportCSV}
+            disabled={!transactions || transactions.length === 0}
+            data-testid="button-export-csv"
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Exportar CSV
+          </Button>
+          <Button
+            onClick={() => ofxInputRef.current?.click()}
+            disabled={importOfxMutation.isPending}
+            data-testid="button-import-ofx"
+          >
+            <FileText className="mr-2 h-4 w-4" />
+            {importOfxMutation.isPending ? "Importando..." : "Importar OFX"}
+          </Button>
+          <input
+            ref={ofxInputRef}
+            type="file"
+            accept=".ofx"
+            className="hidden"
+            onChange={handleOfxUpload}
+            data-testid="input-file-ofx"
+          />
+        </div>
       </div>
 
       {/* Summary */}
