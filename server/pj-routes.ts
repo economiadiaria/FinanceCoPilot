@@ -253,6 +253,25 @@ export function registerPJRoutes(app: Express) {
   });
   
   /**
+   * GET /api/pj/sales/legs
+   * Lista todas as sale legs de um cliente
+   */
+  app.get("/api/pj/sales/legs", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+      
+      const legs = await storage.getSaleLegs(clientId);
+      res.json({ legs });
+    } catch (error: any) {
+      console.error("Erro ao listar sale legs:", error);
+      res.status(500).json({ error: error.message || "Erro ao listar sale legs" });
+    }
+  });
+  
+  /**
    * POST /api/pj/sales/importCsv
    * Importação de vendas via CSV
    * Formato: date;invoiceNumber;customer_name;customer_doc;channel;item;qty;unit_price;discount;payment_method;gateway;installments;gross_leg;fees_leg;status;comment
@@ -423,6 +442,25 @@ export function registerPJRoutes(app: Express) {
   });
   
   // ===== BANCO PJ =====
+  
+  /**
+   * GET /api/pj/bank/transactions
+   * Lista todas as transações bancárias de um cliente
+   */
+  app.get("/api/pj/bank/transactions", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+      
+      const transactions = await storage.getBankTransactions(clientId);
+      res.json({ transactions });
+    } catch (error: any) {
+      console.error("Erro ao listar transações bancárias:", error);
+      res.status(500).json({ error: error.message || "Erro ao listar transações" });
+    }
+  });
   
   /**
    * POST /api/pj/import/ofx
