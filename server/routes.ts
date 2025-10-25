@@ -163,6 +163,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const data = clientSchema.parse(req.body);
       const client = await storage.upsertClient(data);
+      
+      // Associate client with current user if not already associated
+      const userId = req.session.userId;
+      if (userId) {
+        const user = await storage.getUserById(userId);
+        if (user && !user.clientIds.includes(client.clientId)) {
+          const updatedClientIds = [...user.clientIds, client.clientId];
+          await storage.updateUser(userId, { clientIds: updatedClientIds });
+        }
+      }
+      
       res.json(client);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -181,6 +192,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Erro ao buscar clientes:", error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar clientes" });
+    }
+  });
+
+  // GET /api/clients/:clientId - Get single client
+  app.get("/api/clients/:clientId", async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const client = await storage.getClient(clientId);
+      
+      if (!client) {
+        return res.status(404).json({ error: "Cliente não encontrado" });
+      }
+      
+      res.json(client);
+    } catch (error) {
+      console.error("Erro ao buscar cliente:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar cliente" });
     }
   });
 
