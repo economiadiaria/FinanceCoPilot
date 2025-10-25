@@ -333,49 +333,70 @@ export default function Transacoes({ clientId }: TransacoesProps) {
       </Card>
 
       {/* Bulk Actions */}
-      {selectedFitIds.size > 0 && (
-        <Card className="border-primary">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <span className="font-medium">
-                {selectedFitIds.size} transação(ões) selecionada(s)
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleCategorize("Receita")}
-                  disabled={categorizeMutation.isPending}
-                  data-testid="button-categorize-receita"
-                  className="bg-green-50 dark:bg-green-950 border-green-300 dark:border-green-800"
-                >
-                  Receita
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleCategorize("Fixo")}
-                  disabled={categorizeMutation.isPending}
-                  data-testid="button-categorize-fixo"
-                  className="bg-red-50 dark:bg-red-950 border-red-300 dark:border-red-800"
-                >
-                  Custo Fixo
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleCategorize("Variável")}
-                  disabled={categorizeMutation.isPending}
-                  data-testid="button-categorize-variavel"
-                  className="bg-orange-50 dark:bg-orange-950 border-orange-300 dark:border-orange-800"
-                >
-                  Custo Variável
-                </Button>
+      {selectedFitIds.size > 0 && (() => {
+        // Get selected transactions to determine what buttons to show
+        const selectedTxns = allTransactions.filter(t => selectedFitIds.has(t.fitid || ""));
+        const hasInflows = selectedTxns.some(t => t.amount >= 0);
+        const hasOutflows = selectedTxns.some(t => t.amount < 0);
+        const isMixed = hasInflows && hasOutflows;
+        
+        return (
+          <Card className="border-primary">
+            <CardContent className="py-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <span className="font-medium">
+                    {selectedFitIds.size} transação(ões) selecionada(s)
+                  </span>
+                  {isMixed && (
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Mistura de entradas e saídas selecionadas
+                    </p>
+                  )}
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {hasInflows && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleCategorize("Receita")}
+                      disabled={categorizeMutation.isPending}
+                      data-testid="button-categorize-receita"
+                      className="bg-green-50 dark:bg-green-950 border-green-300 dark:border-green-800"
+                    >
+                      ✓ Receita
+                    </Button>
+                  )}
+                  {hasOutflows && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleCategorize("Fixo")}
+                        disabled={categorizeMutation.isPending}
+                        data-testid="button-categorize-fixo"
+                        className="bg-red-50 dark:bg-red-950 border-red-300 dark:border-red-800"
+                      >
+                        Custo Fixo
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleCategorize("Variável")}
+                        disabled={categorizeMutation.isPending}
+                        data-testid="button-categorize-variavel"
+                        className="bg-orange-50 dark:bg-orange-950 border-orange-300 dark:border-orange-800"
+                      >
+                        Custo Variável
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Transaction Table */}
       <Card>
