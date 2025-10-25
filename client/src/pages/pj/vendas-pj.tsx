@@ -30,6 +30,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useForm } from "react-hook-form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 
 interface VendasPJProps {
   clientId: string | null;
@@ -39,13 +43,43 @@ interface Sale {
   saleId: string;
   date: string;
   invoiceNumber: string;
-  customer: string;
+  customer: {
+    name: string;
+    doc?: string;
+    email?: string;
+    telefone?: string;
+  };
   channel: string;
   status: string;
   grossAmount: number;
   netAmount: number;
-  legs: string[];
+  legs: Array<{
+    method: string;
+    installments: number;
+    grossAmount: number;
+    fees: number;
+    netAmount: number;
+  }>;
 }
+
+const addSaleSchema = z.object({
+  date: z.string().min(1, "Data é obrigatória"),
+  invoiceNumber: z.string().optional(),
+  customerName: z.string().min(1, "Nome do cliente é obrigatório"),
+  customerDoc: z.string().optional(),
+  customerEmail: z.string().optional(),
+  customerPhone: z.string().optional(),
+  channel: z.string().min(1, "Canal é obrigatório"),
+  comment: z.string().optional(),
+  paymentMethod: z.string().min(1, "Método de pagamento é obrigatório"),
+  gateway: z.string().optional(),
+  installments: z.coerce.number().min(1).default(1),
+  grossAmount: z.coerce.number().min(0.01, "Valor bruto deve ser maior que zero"),
+  fees: z.coerce.number().min(0).default(0),
+  authorizedCode: z.string().optional(),
+});
+
+type AddSaleForm = z.infer<typeof addSaleSchema>;
 
 export default function VendasPJ({ clientId }: VendasPJProps) {
   const { toast } = useToast();
@@ -56,9 +90,72 @@ export default function VendasPJ({ clientId }: VendasPJProps) {
   const [openAddDialog, setOpenAddDialog] = useState(false);
   const csvInputRef = useRef<HTMLInputElement>(null);
 
+  const form = useForm<AddSaleForm>({
+    resolver: zodResolver(addSaleSchema),
+    defaultValues: {
+      date: "",
+      invoiceNumber: "",
+      customerName: "",
+      customerDoc: "",
+      customerEmail: "",
+      customerPhone: "",
+      channel: "",
+      comment: "",
+      paymentMethod: "",
+      gateway: "",
+      installments: 1,
+      grossAmount: 0,
+      fees: 0,
+      authorizedCode: "",
+    },
+  });
+
   const { data: salesData, isLoading, error } = useQuery<{ sales: Sale[] }>({
     queryKey: ["/api/pj/sales/list", { clientId, month }],
     enabled: !!clientId,
+  });
+
+  const addSaleMutation = useMutation({
+    mutationFn: async (data: AddSaleForm) => {
+      return await apiRequest("POST", "/api/pj/sales/add", {
+        clientId,
+        date: data.date,
+        invoiceNumber: data.invoiceNumber || undefined,
+        customer: {
+          name: data.customerName,
+          doc: data.customerDoc || undefined,
+          email: data.customerEmail || undefined,
+          telefone: data.customerPhone || undefined,
+        },
+        channel: data.channel,
+        comment: data.comment || undefined,
+        legs: [
+          {
+            method: data.paymentMethod,
+            gateway: data.gateway || undefined,
+            installments: data.installments,
+            grossAmount: data.grossAmount,
+            fees: data.fees,
+            authorizedCode: data.authorizedCode || undefined,
+          },
+        ],
+      });
+    },
+    onSuccess: () => {
+      toast({
+        title: "Venda adicionada com sucesso",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/pj/sales/list"] });
+      setOpenAddDialog(false);
+      form.reset();
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Erro ao adicionar venda",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
 
   const uploadCsvMutation = useMutation({
@@ -105,6 +202,10 @@ export default function VendasPJ({ clientId }: VendasPJProps) {
     if (file) {
       uploadCsvMutation.mutate(file);
     }
+  };
+
+  const onSubmitSale = (data: AddSaleForm) => {
+    addSaleMutation.mutate(data);
   };
 
   if (!clientId) {
@@ -173,18 +274,248 @@ export default function VendasPJ({ clientId }: VendasPJProps) {
                 Nova Venda
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Adicionar Venda Manualmente</DialogTitle>
               </DialogHeader>
-              <div className="space-y-4 py-4">
-                <p className="text-sm text-muted-foreground">
-                  Use o botão "Importar CSV" para adicionar vendas em lote.
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Para vendas individuais, você pode implementar um formulário aqui.
-                </p>
-              </div>
+              <Form {...form}>
+                <form onSubmit={form.handleSubmit(onSubmitSale)} className="space-y-4">
+                  <FormField
+                    control={form.control}
+                    name="date"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Data da Venda *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="DD/MM/YYYY" {...field} data-testid="input-sale-date" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="invoiceNumber"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Número da NF</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Ex: 12345" {...field} data-testid="input-invoice-number" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <div className="space-y-2">
+                    <h3 className="font-medium">Cliente</h3>
+                    <FormField
+                      control={form.control}
+                      name="customerName"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Nome *</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Nome do cliente" {...field} data-testid="input-customer-name" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="customerDoc"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>CPF/CNPJ</FormLabel>
+                          <FormControl>
+                            <Input placeholder="000.000.000-00" {...field} data-testid="input-customer-doc" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="customerEmail"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Email</FormLabel>
+                          <FormControl>
+                            <Input type="email" placeholder="cliente@example.com" {...field} data-testid="input-customer-email" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="customerPhone"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Telefone</FormLabel>
+                          <FormControl>
+                            <Input placeholder="(00) 00000-0000" {...field} data-testid="input-customer-phone" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <FormField
+                    control={form.control}
+                    name="channel"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Canal de Venda *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Ex: Loja Física, E-commerce, Marketplace" {...field} data-testid="input-channel" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="comment"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Comentário</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Observações sobre a venda" {...field} data-testid="input-comment" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <div className="space-y-2">
+                    <h3 className="font-medium">Pagamento</h3>
+                    <FormField
+                      control={form.control}
+                      name="paymentMethod"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Método *</FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger data-testid="select-payment-method">
+                                <SelectValue placeholder="Selecione o método" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="pix">PIX</SelectItem>
+                              <SelectItem value="credito">Crédito</SelectItem>
+                              <SelectItem value="debito">Débito</SelectItem>
+                              <SelectItem value="boleto">Boleto</SelectItem>
+                              <SelectItem value="dinheiro">Dinheiro</SelectItem>
+                              <SelectItem value="transferencia">Transferência</SelectItem>
+                              <SelectItem value="link">Link de Pagamento</SelectItem>
+                              <SelectItem value="gateway">Gateway</SelectItem>
+                              <SelectItem value="outro">Outro</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="gateway"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Gateway (se aplicável)</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Ex: PagSeguro, MercadoPago" {...field} data-testid="input-gateway" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="installments"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Parcelas *</FormLabel>
+                          <FormControl>
+                            <Input type="number" min="1" {...field} data-testid="input-installments" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="grossAmount"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Valor Bruto *</FormLabel>
+                          <FormControl>
+                            <Input type="number" step="0.01" min="0.01" placeholder="1000.00" {...field} data-testid="input-gross-amount" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="fees"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Taxas</FormLabel>
+                          <FormControl>
+                            <Input type="number" step="0.01" min="0" placeholder="0.00" {...field} data-testid="input-fees" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="authorizedCode"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Código de Autorização</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Código da transação" {...field} data-testid="input-authorized-code" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setOpenAddDialog(false)}
+                      data-testid="button-cancel-sale"
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="submit"
+                      disabled={addSaleMutation.isPending}
+                      data-testid="button-submit-sale"
+                    >
+                      {addSaleMutation.isPending ? "Salvando..." : "Salvar Venda"}
+                    </Button>
+                  </div>
+                </form>
+              </Form>
             </DialogContent>
           </Dialog>
         </div>
@@ -228,8 +559,8 @@ export default function VendasPJ({ clientId }: VendasPJProps) {
                   {sales.map((sale) => (
                     <TableRow key={sale.saleId} data-testid={`row-sale-${sale.saleId}`}>
                       <TableCell className="tabular-nums">{sale.date}</TableCell>
-                      <TableCell>{sale.invoiceNumber}</TableCell>
-                      <TableCell>{sale.customer}</TableCell>
+                      <TableCell>{sale.invoiceNumber || "-"}</TableCell>
+                      <TableCell>{sale.customer?.name || "-"}</TableCell>
                       <TableCell>{sale.channel}</TableCell>
                       <TableCell className="tabular-nums">
                         {sale.grossAmount.toLocaleString("pt-BR", {
@@ -244,7 +575,7 @@ export default function VendasPJ({ clientId }: VendasPJProps) {
                         })}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{sale.legs.length} leg(s)</Badge>
+                        <Badge variant="outline">{sale.legs?.length || 0} leg(s)</Badge>
                       </TableCell>
                       <TableCell>
                         <Badge

@@ -29,12 +29,16 @@ The user interface is built with Shadcn UI and Tailwind CSS, featuring a respons
 ### Feature Specifications
 - **User Management**: Registration, login, logout, and user profile management with role-based access. Clients are automatically associated with creating users.
 - **Client Management**: Creation and updating of client profiles (PF/PJ).
-- **Transaction Management**: Import via OFX files or Open Finance sync with deduplication, listing, and batch categorization.
+- **Transaction Management (PF)**: Import via OFX files or Open Finance sync with deduplication, listing, and batch categorization.
 - **Open Finance Integration**: Connect banks via Pluggy API for automatic data synchronization. Supports simulated mode when API credentials are unavailable. Fetches accounts, transactions, and investment positions with automatic deduplication using providerTxId/providerPosId.
 - **Investment Module**: Manual position entry or automatic sync via Open Finance, allocation visualization, and rebalancing suggestions based on defined policies.
 - **Reporting**: Generation and viewing of monthly financial reports in HTML format.
 - **Policy Configuration**: Setting investment targets for PF (e.g., 50/30/20 rule) and cash policies for PJ (e.g., min/max allocation to specific asset classes, issuer percentage, duration).
-- **Dashboard**: Displays key performance indicators (KPIs), intelligent insights, and recent transactions.
+- **Dashboard (PF)**: Displays key performance indicators (KPIs), intelligent insights, and recent transactions.
+- **PJ Sales Management**: Manual sales entry and CSV import with multi-payment support (one sale with multiple payment legs), settlement plan configuration (D+X, D+30_por_parcela, D+1), automatic deduplication based on saleId+parcelN.
+- **PJ Bank Reconciliation**: OFX import with SHA256 deduplication, automatic matching of bank transactions to sale legs based on value+date, manual confirmation of matches, retroactive/prospective learning.
+- **PJ Intelligent Categorization**: Pattern-based rules (exact/contains/startsWith), retroactive application to existing transactions, prospective application during OFX imports, automatic learning.
+- **PJ Dashboard**: Displays business KPIs (revenue, costs, profit), Chart.js visualizations (trends, revenue split, top costs), sales metrics (total sales, average ticket, conversion rate), DFC (Demonstrativo de Fluxo de Caixa).
 
 ### System Design Choices
 The application uses a modular folder structure, separating client (frontend), server (backend), and shared (schemas) code. Data models are strictly typed using TypeScript. API endpoints are protected by authentication middleware, ensuring resource ownership and secure access. The system is designed for a seamless user experience, including automatic redirection for unauthenticated users, clear success/error notifications, and a consistent display of financial data.
@@ -51,6 +55,8 @@ The application uses a modular folder structure, separating client (frontend), s
 - **Shadcn UI**: UI component library.
 - **Tailwind CSS**: Utility-first CSS framework.
 - **Google Fonts (Inter)**: Typography.
+- **Chart.js**: Interactive charts for PJ dashboard visualizations (loaded via CDN).
+- **PapaParse**: CSV parsing for sales import.
 
 ## Open Finance Integration Details
 
