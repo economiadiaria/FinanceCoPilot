@@ -1,4 +1,4 @@
-import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2 } from "lucide-react";
+import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2, BarChart3, CreditCard, Brain } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -44,6 +44,29 @@ const menuItems = [
   },
 ];
 
+const pjMenuItems = [
+  {
+    title: "Dashboard PJ",
+    url: "/pj/dashboard",
+    icon: Home,
+  },
+  {
+    title: "Vendas",
+    url: "/pj/vendas",
+    icon: BarChart3,
+  },
+  {
+    title: "Conciliação",
+    url: "/pj/conciliacao",
+    icon: CreditCard,
+  },
+  {
+    title: "Regras",
+    url: "/pj/regras",
+    icon: Brain,
+  },
+];
+
 export function AppSidebar() {
   const [location] = useLocation();
 
@@ -52,7 +75,7 @@ export function AppSidebar() {
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupLabel className="text-xs uppercase tracking-wide">
-            Copiloto Financeiro
+            Pessoa Física
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -62,6 +85,30 @@ export function AppSidebar() {
                     asChild
                     isActive={location === item.url}
                     data-testid={`link-${item.title.toLowerCase()}`}
+                  >
+                    <Link href={item.url}>
+                      <item.icon className="h-5 w-5" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-xs uppercase tracking-wide">
+            Pessoa Jurídica
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {pjMenuItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === item.url}
+                    data-testid={`link-pj-${item.title.toLowerCase()}`}
                   >
                     <Link href={item.url}>
                       <item.icon className="h-5 w-5" />

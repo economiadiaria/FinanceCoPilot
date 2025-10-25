@@ -21,6 +21,10 @@ import Relatorios from "@/pages/relatorios";
 import Configuracoes from "@/pages/configuracoes";
 import OpenFinancePage from "@/pages/open-finance";
 import LoginPage from "@/pages/login";
+import DashboardPJ from "@/pages/pj/dashboard-pj";
+import VendasPJ from "@/pages/pj/vendas-pj";
+import ConciliacaoPJ from "@/pages/pj/conciliacao-pj";
+import RegrasPJ from "@/pages/pj/regras-pj";
 import type { Client } from "@shared/schema";
 
 function Router() {
@@ -91,6 +95,18 @@ function AuthenticatedApp() {
                   clientId={selectedClient}
                   clientType={currentClient?.type || null}
                 />
+              </Route>
+              <Route path="/pj/dashboard">
+                <DashboardPJ clientId={selectedClient} />
+              </Route>
+              <Route path="/pj/vendas">
+                <VendasPJ clientId={selectedClient} />
+              </Route>
+              <Route path="/pj/conciliacao">
+                <ConciliacaoPJ clientId={selectedClient} />
+              </Route>
+              <Route path="/pj/regras">
+                <RegrasPJ clientId={selectedClient} />
               </Route>
             </Switch>
           </div>
