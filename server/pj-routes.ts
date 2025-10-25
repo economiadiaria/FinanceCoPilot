@@ -11,6 +11,7 @@ import {
   type SettlementParcel,
   type PaymentMethod,
   type BankTransaction,
+  type CategorizationRule,
 } from "@shared/schema";
 import { addDays, addMonths, formatBR, toISOFromBR, inPeriod } from "@shared/utils";
 import { z } from "zod";
@@ -504,6 +505,29 @@ export function registerPJRoutes(app: Express) {
       // Salvar transações
       await storage.addBankTransactions(clientId, newTransactions);
       
+      // Aplicar categorização prospectiva (auto-categorizar com regras existentes)
+      const rules = await storage.getCategorizationRules(clientId);
+      let categorizedCount = 0;
+      
+      if (rules.length > 0) {
+        for (const tx of newTransactions) {
+          for (const rule of rules) {
+            if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
+              tx.dfcCategory = rule.dfcCategory;
+              tx.dfcItem = rule.dfcItem;
+              tx.categorizedBy = "rule";
+              tx.categorizedRuleId = rule.ruleId;
+              categorizedCount++;
+              break; // Primeira regra que match
+            }
+          }
+        }
+        
+        // Atualizar transações com categorização
+        const allBankTxs = await storage.getBankTransactions(clientId);
+        await storage.setBankTransactions(clientId, allBankTxs);
+      }
+      
       // Registrar importação
       await storage.addOFXImport({
         fileHash,
@@ -680,4 +704,508 @@ export function registerPJRoutes(app: Express) {
       res.status(400).json({ error: error.message || "Erro ao confirmar conciliação" });
     }
   });
+  
+  // ===== CATEGORIZAÇÃO INTELIGENTE PJ =====
+  
+  /**
+   * GET /api/pj/categorization/rules
+   * Listar todas as regras de categorização
+   */
+  app.get("/api/pj/categorization/rules", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+      
+      const rules = await storage.getCategorizationRules(clientId);
+      
+      res.json({ rules });
+    } catch (error: any) {
+      console.error("Erro ao listar regras PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao listar regras" });
+    }
+  });
+  
+  /**
+   * POST /api/pj/categorization/rules
+   * Salvar regra de categorização
+   */
+  app.post("/api/pj/categorization/rules", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const schema = z.object({
+        clientId: z.string(),
+        pattern: z.string(),
+        matchType: z.enum(["exact", "contains", "startsWith"]),
+        dfcCategory: z.string(),
+        dfcItem: z.string(),
+        applyRetroactive: z.boolean().default(true),
+      });
+      
+      const data = schema.parse(req.body);
+      
+      // Criar regra
+      const rule: CategorizationRule = {
+        ruleId: uuidv4(),
+        pattern: data.pattern,
+        matchType: data.matchType,
+        dfcCategory: data.dfcCategory,
+        dfcItem: data.dfcItem,
+        createdAt: new Date().toISOString(),
+      };
+      
+      // Salvar regra
+      const rules = await storage.getCategorizationRules(data.clientId);
+      await storage.setCategorizationRules(data.clientId, [...rules, rule]);
+      
+      // Aplicação retroativa (se solicitado)
+      let retroactiveCount = 0;
+      if (data.applyRetroactive) {
+        const bankTxs = await storage.getBankTransactions(data.clientId);
+        
+        for (const tx of bankTxs) {
+          if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
+            tx.dfcCategory = rule.dfcCategory;
+            tx.dfcItem = rule.dfcItem;
+            tx.categorizedBy = "rule";
+            tx.categorizedRuleId = rule.ruleId;
+            retroactiveCount++;
+          }
+        }
+        
+        await storage.setBankTransactions(data.clientId, bankTxs);
+      }
+      
+      res.json({
+        success: true,
+        rule,
+        retroactiveCount,
+      });
+    } catch (error: any) {
+      console.error("Erro ao salvar regra PJ:", error);
+      res.status(400).json({ error: error.message || "Erro ao salvar regra" });
+    }
+  });
+  
+  /**
+   * POST /api/pj/categorization/apply
+   * Aplicar categorização manual (e aprender para criar regra)
+   */
+  app.post("/api/pj/categorization/apply", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const schema = z.object({
+        clientId: z.string(),
+        bankTxId: z.string(),
+        dfcCategory: z.string(),
+        dfcItem: z.string(),
+        learnPattern: z.boolean().default(true),
+        matchType: z.enum(["exact", "contains", "startsWith"]).default("contains"),
+      });
+      
+      const data = schema.parse(req.body);
+      
+      // Buscar transação
+      const bankTxs = await storage.getBankTransactions(data.clientId);
+      const tx = bankTxs.find(t => t.bankTxId === data.bankTxId);
+      
+      if (!tx) {
+        return res.status(404).json({ error: "Transação bancária não encontrada" });
+      }
+      
+      // Aplicar categorização manual
+      tx.dfcCategory = data.dfcCategory;
+      tx.dfcItem = data.dfcItem;
+      tx.categorizedBy = "manual";
+      
+      await storage.setBankTransactions(data.clientId, bankTxs);
+      
+      // Aprender padrão (se solicitado)
+      let rule: CategorizationRule | null = null;
+      let prospectiveCount = 0;
+      
+      if (data.learnPattern) {
+        // Extrair padrão do desc
+        const pattern = extractPattern(tx.desc, data.matchType);
+        
+        // Criar nova regra
+        rule = {
+          ruleId: uuidv4(),
+          pattern,
+          matchType: data.matchType,
+          dfcCategory: data.dfcCategory,
+          dfcItem: data.dfcItem,
+          createdAt: new Date().toISOString(),
+        };
+        
+        // Salvar regra
+        const rules = await storage.getCategorizationRules(data.clientId);
+        await storage.setCategorizationRules(data.clientId, [...rules, rule]);
+        
+        // Aplicação prospectiva (categorizar outras transações não categorizadas)
+        for (const otherTx of bankTxs) {
+          if (
+            otherTx.bankTxId !== tx.bankTxId &&
+            !otherTx.dfcCategory &&
+            matchesPattern(otherTx.desc, pattern, data.matchType)
+          ) {
+            otherTx.dfcCategory = data.dfcCategory;
+            otherTx.dfcItem = data.dfcItem;
+            otherTx.categorizedBy = "rule";
+            otherTx.categorizedRuleId = rule.ruleId;
+            prospectiveCount++;
+          }
+        }
+        
+        await storage.setBankTransactions(data.clientId, bankTxs);
+      }
+      
+      res.json({
+        success: true,
+        transaction: tx,
+        rule,
+        prospectiveCount,
+      });
+    } catch (error: any) {
+      console.error("Erro ao aplicar categorização PJ:", error);
+      res.status(400).json({ error: error.message || "Erro ao aplicar categorização" });
+    }
+  });
+  
+  // ===== DASHBOARD BACKEND PJ =====
+  
+  /**
+   * GET /api/pj/dashboard/summary
+   * KPIs do mês: receita, despesas, saldo, contas a receber
+   */
+  app.get("/api/pj/dashboard/summary", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = req.query.month as string; // YYYY-MM
+      
+      if (!clientId || !month) {
+        return res.status(400).json({ error: "clientId e month são obrigatórios" });
+      }
+      
+      const [year, monthNum] = month.split("-");
+      const startDate = `01/${monthNum}/${year}`;
+      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+      const endDate = `${lastDay}/${monthNum}/${year}`;
+      
+      // Buscar transações bancárias do mês
+      const bankTxs = await storage.getBankTransactions(clientId);
+      const txsInMonth = bankTxs.filter(tx => inPeriod(tx.date, startDate, endDate));
+      
+      const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
+      const despesas = Math.abs(txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0));
+      const saldo = receitas - despesas;
+      
+      // Contas a receber (parcelas pendentes)
+      const legs = await storage.getSaleLegs(clientId);
+      let contasReceber = 0;
+      
+      for (const leg of legs) {
+        for (const parcel of leg.settlementPlan) {
+          if (!parcel.receivedTxId && inPeriod(parcel.due, startDate, endDate)) {
+            contasReceber += parcel.expected;
+          }
+        }
+      }
+      
+      res.json({
+        month,
+        receitas,
+        despesas,
+        saldo,
+        contasReceber,
+      });
+    } catch (error: any) {
+      console.error("Erro ao buscar summary PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar summary" });
+    }
+  });
+  
+  /**
+   * GET /api/pj/dashboard/trends
+   * Tendências de receita/despesa dos últimos 6 meses
+   */
+  app.get("/api/pj/dashboard/trends", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+      
+      const bankTxs = await storage.getBankTransactions(clientId);
+      
+      // Agrupar por mês (últimos 6)
+      const now = new Date();
+      const trends: any[] = [];
+      
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const year = d.getFullYear();
+        const month = d.getMonth() + 1;
+        const monthKey = `${year}-${month.toString().padStart(2, "0")}`;
+        
+        const txsInMonth = bankTxs.filter(tx => {
+          const [day, m, y] = tx.date.split("/");
+          const txMonth = `${y}-${m}`;
+          return txMonth === monthKey;
+        });
+        
+        const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
+        const despesas = Math.abs(txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0));
+        
+        trends.push({
+          month: monthKey,
+          receitas,
+          despesas,
+        });
+      }
+      
+      res.json({ trends });
+    } catch (error: any) {
+      console.error("Erro ao buscar trends PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar trends" });
+    }
+  });
+  
+  /**
+   * GET /api/pj/dashboard/top-costs
+   * Top 10 custos por categoria DFC
+   */
+  app.get("/api/pj/dashboard/top-costs", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = req.query.month as string; // YYYY-MM
+      
+      if (!clientId || !month) {
+        return res.status(400).json({ error: "clientId e month são obrigatórios" });
+      }
+      
+      const [year, monthNum] = month.split("-");
+      const startDate = `01/${monthNum}/${year}`;
+      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+      const endDate = `${lastDay}/${monthNum}/${year}`;
+      
+      const bankTxs = await storage.getBankTransactions(clientId);
+      const txsInMonth = bankTxs.filter(tx => 
+        tx.amount < 0 && 
+        inPeriod(tx.date, startDate, endDate)
+      );
+      
+      // Agrupar por dfcItem
+      const grouped = new Map<string, { category: string; item: string; total: number }>();
+      
+      for (const tx of txsInMonth) {
+        const key = tx.dfcItem || "Sem categoria";
+        const existing = grouped.get(key);
+        
+        if (existing) {
+          existing.total += Math.abs(tx.amount);
+        } else {
+          grouped.set(key, {
+            category: tx.dfcCategory || "Despesas",
+            item: tx.dfcItem || "Sem categoria",
+            total: Math.abs(tx.amount),
+          });
+        }
+      }
+      
+      // Ordenar e pegar top 10
+      const sorted = Array.from(grouped.values()).sort((a, b) => b.total - a.total).slice(0, 10);
+      
+      res.json({ topCosts: sorted });
+    } catch (error: any) {
+      console.error("Erro ao buscar top-costs PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar top-costs" });
+    }
+  });
+  
+  /**
+   * GET /api/pj/dashboard/revenue-split
+   * Distribuição de receita por canal
+   */
+  app.get("/api/pj/dashboard/revenue-split", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = req.query.month as string; // YYYY-MM
+      
+      if (!clientId || !month) {
+        return res.status(400).json({ error: "clientId e month são obrigatórios" });
+      }
+      
+      const [year, monthNum] = month.split("-");
+      const startDate = `01/${monthNum}/${year}`;
+      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+      const endDate = `${lastDay}/${monthNum}/${year}`;
+      
+      const sales = await storage.getSales(clientId);
+      const salesInMonth = sales.filter(s => inPeriod(s.date, startDate, endDate));
+      
+      // Agrupar por canal
+      const grouped = new Map<string, number>();
+      
+      for (const sale of salesInMonth) {
+        const channel = sale.channel || "Outros";
+        grouped.set(channel, (grouped.get(channel) || 0) + sale.grossAmount);
+      }
+      
+      const revenueSplit = Array.from(grouped.entries()).map(([channel, amount]) => ({
+        channel,
+        amount,
+      }));
+      
+      res.json({ revenueSplit });
+    } catch (error: any) {
+      console.error("Erro ao buscar revenue-split PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar revenue-split" });
+    }
+  });
+  
+  /**
+   * GET /api/pj/dashboard/sales-kpis
+   * KPIs de vendas: ticket médio, conversão, top clientes
+   */
+  app.get("/api/pj/dashboard/sales-kpis", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = req.query.month as string; // YYYY-MM
+      
+      if (!clientId || !month) {
+        return res.status(400).json({ error: "clientId e month são obrigatórios" });
+      }
+      
+      const [year, monthNum] = month.split("-");
+      const startDate = `01/${monthNum}/${year}`;
+      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+      const endDate = `${lastDay}/${monthNum}/${year}`;
+      
+      const sales = await storage.getSales(clientId);
+      const salesInMonth = sales.filter(s => inPeriod(s.date, startDate, endDate));
+      
+      const totalSales = salesInMonth.length;
+      const totalRevenue = salesInMonth.reduce((sum, s) => sum + s.grossAmount, 0);
+      const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
+      
+      // Top clientes
+      const customerMap = new Map<string, number>();
+      
+      for (const sale of salesInMonth) {
+        const customer = sale.customer || "Cliente desconhecido";
+        customerMap.set(customer, (customerMap.get(customer) || 0) + sale.grossAmount);
+      }
+      
+      const topClientes = Array.from(customerMap.entries())
+        .map(([customer, amount]) => ({ customer, amount }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 5);
+      
+      res.json({
+        totalSales,
+        totalRevenue,
+        ticketMedio,
+        topClientes,
+      });
+    } catch (error: any) {
+      console.error("Erro ao buscar sales-kpis PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar sales-kpis" });
+    }
+  });
+  
+  /**
+   * GET /api/pj/dashboard/dfc
+   * Demonstração de Fluxo de Caixa (DFC) por categoria
+   */
+  app.get("/api/pj/dashboard/dfc", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = req.query.month as string; // YYYY-MM
+      
+      if (!clientId || !month) {
+        return res.status(400).json({ error: "clientId e month são obrigatórios" });
+      }
+      
+      const [year, monthNum] = month.split("-");
+      const startDate = `01/${monthNum}/${year}`;
+      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+      const endDate = `${lastDay}/${monthNum}/${year}`;
+      
+      const bankTxs = await storage.getBankTransactions(clientId);
+      const txsInMonth = bankTxs.filter(tx => inPeriod(tx.date, startDate, endDate));
+      
+      // Agrupar por categoria DFC
+      const categories = new Map<string, { inflows: number; outflows: number }>();
+      
+      for (const tx of txsInMonth) {
+        const category = tx.dfcCategory || "Operacional";
+        const existing = categories.get(category);
+        
+        if (tx.amount > 0) {
+          if (existing) {
+            existing.inflows += tx.amount;
+          } else {
+            categories.set(category, { inflows: tx.amount, outflows: 0 });
+          }
+        } else {
+          if (existing) {
+            existing.outflows += Math.abs(tx.amount);
+          } else {
+            categories.set(category, { inflows: 0, outflows: Math.abs(tx.amount) });
+          }
+        }
+      }
+      
+      const dfc = Array.from(categories.entries()).map(([category, data]) => ({
+        category,
+        inflows: data.inflows,
+        outflows: data.outflows,
+        net: data.inflows - data.outflows,
+      }));
+      
+      res.json({ dfc });
+    } catch (error: any) {
+      console.error("Erro ao buscar DFC PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar DFC" });
+    }
+  });
+}
+
+/**
+ * Helper: Verificar se descrição match com padrão
+ */
+function matchesPattern(desc: string, pattern: string, matchType: string): boolean {
+  const descLower = desc.toLowerCase();
+  const patternLower = pattern.toLowerCase();
+  
+  switch (matchType) {
+    case "exact":
+      return descLower === patternLower;
+    case "contains":
+      return descLower.includes(patternLower);
+    case "startsWith":
+      return descLower.startsWith(patternLower);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Helper: Extrair padrão de uma descrição
+ */
+function extractPattern(desc: string, matchType: string): string {
+  switch (matchType) {
+    case "exact":
+      return desc;
+    case "contains":
+      // Extrai primeira palavra significativa (>3 caracteres)
+      const words = desc.split(/\s+/).filter(w => w.length > 3);
+      return words[0] || desc;
+    case "startsWith":
+      // Extrai primeiros 10 caracteres
+      return desc.substring(0, 10);
+    default:
+      return desc;
+  }
 }
