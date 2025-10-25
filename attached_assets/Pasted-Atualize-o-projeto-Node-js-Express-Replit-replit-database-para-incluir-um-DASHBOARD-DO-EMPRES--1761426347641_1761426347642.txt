@@ -1,0 +1,146 @@
+Atualize o projeto Node.js + Express (Replit, @replit/database) para incluir um DASHBOARD DO EMPRESÁRIO, com:
+
+- PÁGINA: GET /dashboard/empresa/:clientId
+- API de agregações:
+  - GET /api/pj/dashboard/summary?clientId=...&period=AAAA-MM
+  - GET /api/pj/dashboard/trends?clientId=...&months=12
+  - GET /api/pj/dashboard/top-costs?clientId=...&period=AAAA-MM&limit=5
+  - GET /api/pj/dashboard/revenue-split?clientId=...&period=AAAA-MM
+  - GET /api/pj/dashboard/sales-kpis?clientId=...&period=AAAA-MM
+
+Requisitos de UX (primeira dobra da tela):
+1) Cards: Receita, Deduções, Lucro Bruto, Despesas, Lucro Líquido, Margem (ajustada), Saldo de Caixa.
+2) Gráfico de tendência (últimos 6-12 meses): Receita x Lucro Líquido x Margem (R$).
+3) Top 3 custos do mês (lista).
+4) Origem da Receita (pizza).
+5) Ticket médio e Nº de vendas.
+
+Regras de negócio (já implementadas na API):
+- Plano de contas:
+  RECEITA,
+  DEDUCOES_RECEITA,
+  GEA (Despesas Gerais e Administrativas),
+  COMERCIAL_MKT,
+  FINANCEIRAS,
+  OUTRAS.
+- Lucro Bruto = Receita − |Deduções da Receita|.
+- Lucro Líquido = Receita − |Deduções| − |GEA| − |COMERCIAL_MKT| − |FINANCEIRAS| − |OUTRAS|.
+- Margem (ajustada) = Receita − Σ despesas **excluindo** subcategorias com `excludeFromMargin=true`.
+  Por padrão, marque como `excludeFromMargin=true`:
+    - "Distribuição de Lucro"
+    - "Aporte/Resgate de caixa"
+  (estas duas costumam residir em FINANCEIRAS).
+- Ticket Médio = Receita / Nº de vendas (conta headers de venda no período).
+- Nº de Vendas = quantidade de sales headers no período.
+- Saldo de Caixa = soma de bank_tx conciliadas (ou, se inexistente, 0). Exiba card ainda assim.
+
+Fontes de dados (Replit DB):
+- `sales_${clientId}`: headers de venda (cada uma pode ter vários legs).
+  { saleId, date: "DD/MM/YYYY", invoiceNumber, customer, channel, status, grossAmount, netAmount, comment, legs: [saleLegId] }
+- `sale_legs_${clientId}`: legs/pagamentos da venda (pix/crédito/etc.), com fees e settlementPlan.
+- `ledger_${clientId}` (se existir) OU derivar de sales/legs + despesas manuais:
+  Lançamentos normalizados >> { id, group, subcategory, amount(±), recognizedAt(DD/MM/YYYY), cashAt?, excludeFromMargin?, origin, saleId?, saleLegId? }
+  Observação: Se `ledger_${clientId}` NÃO existir, derive:
+    - RECEITA = soma dos `grossAmount` dos legs das vendas no período (recognizedAt = date da venda).
+    - DEDUCOES_RECEITA = soma `fees` dos legs no período.
+    - Demais despesas: se não houver tabela, retorne 0.
+- `bank_tx_${clientId}`: transações bancárias (para Saldo de Caixa).
+- `policies_${clientId}`: manter flags `excludeFromMargin` para subcategorias (se não existir, use padrão mencionado).
+
+Datas:
+- Sempre EXIBIR em **DD/MM/YYYY**.
+- Filtros de período usam `AAAA-MM` (competência); agregação considera recognizedAt ∈ mês.
+
+========== IMPLEMENTAÇÃO ==========
+1) UTILITÁRIOS
+- `toISOFromBR("DD/MM/YYYY")` → "YYYY-MM-DD"
+- `formatBR(isoDate)` → "DD/MM/YYYY"
+- `getMonthKey(dateBR)` → "AAAA-MM"
+- `inPeriod(dateBR, periodAAAA_MM)` → boolean
+- `sum(values[])` seguro.
+- `ensureArray(dbKey)` para listas no Replit DB.
+
+2) SUMMARY (GET /api/pj/dashboard/summary)
+Entrada: clientId, period=AAAA-MM.
+Processo:
+- Calcular:
+  Receita(P)
+  Deducoes(P)
+  LucroBruto(P)
+  Despesas por grupo (GEA, COMERCIAL_MKT, FINANCEIRAS, OUTRAS) → somas absolutas negativas
+  DespesasTotais(P)
+  LucroLiquido(P)
+  MargemAjustada(P) = Receita − Σ despesas onde (group ∈ {GEA, COMERCIAL_MKT, FINANCEIRAS, OUTRAS}) E (subcategory.excludeFromMargin != true)
+- TicketMédio(P) = Receita / Nº de Vendas(P).
+  Nº de Vendas(P): contar headers em `sales_${clientId}` com date em P (DD/MM/YYYY).
+- SaldoCaixa: soma de `bank_tx_${clientId}` (entradas − saídas) até o final de P (se não houver, 0).
+- Top3 custos: maiores subcategorias negativas no período (por valor absoluto).
+Resposta JSON:
+{
+  period, receita, deducoes, lucroBruto, despesas: { gea, comercialMkt, financeiras, outras, total },
+  lucroLiquido, margemAjustada, margemAjustadaPct, ticketMedio, nVendas, saldoCaixa,
+  topCosts: [{subcategory, group, amountAbs}]
+}
+
+3) TRENDS (GET /api/pj/dashboard/trends)
+Entrada: clientId, months=12 (default).
+Processo:
+- Montar vetor dos últimos N meses (AAAA-MM) ordenados.
+- Para cada mês, calcular: Receita, LucroLiquido, MargemAjustada.
+Resposta:
+{ months: ["AAAA-MM", ...], receita:[], lucroLiquido:[], margemAjustada:[] }
+
+4) TOP COSTS (GET /api/pj/dashboard/top-costs)
+Entrada: clientId, period, limit=5
+Resposta: { items: [{subcategory, group, amountAbs}] }
+
+5) REVENUE SPLIT (GET /api/pj/dashboard/revenue-split)
+Entrada: clientId, period
+Processo:
+- Distribuição da RECEITA por `channel` (loja, ecommerce, marketplace, etc.) OU por `subcategory` (se houver no ledger).
+- Caso não haja channels, use subcategorias de RECEITA se existirem; se não, retorne vazio.
+Resposta: { labels:[], values:[] }
+
+6) SALES KPIS (GET /api/pj/dashboard/sales-kpis)
+Entrada: clientId, period
+Resposta:
+{
+  receita, nVendas, ticketMedio,
+  porMetodo: [{method, gross, legs}],   // agregado por payment method
+  porCanal: [{channel, gross, nVendas}]
+}
+
+7) PÁGINA HTML (GET /dashboard/empresa/:clientId)
+- Layout com:
+  - Seletor de Mês (AAAA-MM) → atualiza cards e gráficos.
+  - Cards (grid 2x3): Receita, Deduções, Lucro Bruto, Despesas Totais, Lucro Líquido, Margem (ajustada % e valor).
+  - Linha: Saldo de Caixa.
+  - Gráfico linha (Chart.js via CDN): Receita x Lucro Líquido x Margem (últimos 12 meses).
+  - Top 3 custos (lista).
+  - Pizza "Origem da Receita".
+  - KPIs de vendas (Ticket médio e Nº de vendas).
+- Usar fetch() para chamar endpoints criados.
+- Datas mostradas em **DD/MM/YYYY** (quando houver).
+- Sem dependências adicionais de build; Chart.js via CDN em <script>.
+
+8) PERFORMANCE
+- Agregações em memória (dataset esperado pequeno no MVP).
+- Caso ausentes tabelas de ledger ou sales, trate nulos como coleções vazias.
+
+9) ERROS
+- 400 se faltar clientId/period.
+- 200 com zeros quando coleções vazias (não quebrar UI).
+- Mensagens claras em JSON.
+
+10) LOGS
+- Console: "📊 Dashboard Empresário carregado para {clientId}" quando servir a página.
+
+11) SEED OPCIONAL
+Se `process.env.SEED_DASH === "1"`:
+- Criar client de exemplo, 3 meses de dados sintéticos em sales/legs e ledger, e alguns bank_tx.
+- Datas sempre em **DD/MM/YYYY**.
+
+Finalize atualizando o `server.js` com essas rotas e servindo o HTML simples de dashboard.
+Garanta:
+- Todas as respostas públicas já venham com datas em **DD/MM/YYYY**.
+- Não remover funcionalidades já existentes (login, OFX/CSV, conciliação).

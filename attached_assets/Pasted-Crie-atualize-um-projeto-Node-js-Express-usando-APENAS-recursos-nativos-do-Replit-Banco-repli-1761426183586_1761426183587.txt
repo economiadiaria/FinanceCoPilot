@@ -1,0 +1,295 @@
+Crie/atualize um projeto Node.js + Express usando APENAS recursos nativos do Replit:
+- Banco: @replit/database (KV)
+- Sessão: express-session
+- Upload: multer
+- OFX: ofx-parse
+- CSV: csv-parse/sync
+- Datas públicas: DD/MM/YYYY SEMPRE
+- Linguagem da interface: pt-BR
+
+==============================
+⚠️ PRINCÍPIO DE ISOLAÇÃO PF x PJ
+==============================
+- A visão PF e a visão PJ são independentes e NÃO podem se impactar.
+- No banco, separe por NAMESPACES e CHAVES distintas:
+  - PF: `pf_*`
+  - PJ: `pj_*`
+- Toda rota deve validar `scope` (PF ou PJ) e `clientId` coerente com o scope.
+- Se um usuário tiver os dois perfis (PF e PJ), trate como **dois clientIds diferentes** (ex.: "lucas_pf" e "empresa_xyz_pj").
+
+==============================
+📦 DEPENDÊNCIAS (package.json)
+==============================
+Scripts:
+  "start": "node server.js"
+Dependências:
+  express, express-session, cors, @replit/database, multer, ofx-parse, csv-parse, uuid, iconv-lite
+
+==============================
+🔐 AUTENTICAÇÃO E AUTORIZAÇÃO
+==============================
+- Login com sessão (express-session).
+- Usuários: { email, passwordHash, role: "consultor"|"cliente", name, scopes: ["PF"|"PJ"|"BOTH"], clients: [clientId...] }
+- Middleware `authRequired(role?)` e `scopeRequired("PF"|"PJ")`.
+- Um consultor só acessa `clientId` dentro dos seus `clients`. Um cliente só acessa os seus.
+- Rotas HTML de login /logout simples:
+  - GET /login (form)
+  - POST /auth/login
+  - POST /auth/logout
+  - GET /auth/me (json)
+
+==============================
+🗂️ ESTRUTURA DE DADOS (REPLIT DB)
+==============================
+# Meta
+- users: { [email]: {id, email, passwordHash, role, scopes, clients[]} }
+- pj_clients: { [clientId]: { id, name, cnpj?, email?, assignedTo: [consultantUserId], createdAt } }
+- pf_clients: (NÃO implementar aqui; apenas manter separação)
+
+# Configurações PJ
+- pj_payment_methods_${clientId}: [
+   { id, name, gateway?, taxa_pct?, taxa_fixa?, liquidacao?("D+X"|"D+30_por_parcela"|"D+1"), metadata? }
+]
+
+# Vendas (headers) e legs (multi-pagamento) PJ
+- pj_sales_${clientId}: [
+   { saleId, date:"DD/MM/YYYY", invoiceNumber?, customer:{name,doc?,email?,telefone?}, channel, status:"aberta|fechada|cancelada",
+     grossAmount, netAmount, comment?, legs:[saleLegId...] }
+]
+- pj_sale_legs_${clientId}: [
+   { saleLegId, saleId, method:"pix|credito|debito|boleto|dinheiro|transferencia|link|gateway|outro",
+     gateway?, authorizedCode?, installments:1, grossAmount, fees, netAmount, status:"autorizado|pago|liquidado|estornado|chargeback|cancelado",
+     provider:"manual|gateway|pluggy", providerPaymentId?, providerAccountId?, settlementPlan:[ {n, due:"DD/MM/YYYY", expected, receivedTxId?, receivedAt?} ],
+     reconciliation:{ state:"pendente|parcial|conciliado|divergente", notes? },
+     events:[ {type:"created|authorized|paid|settled|refund|chargeback", at:"DD/MM/YYYY", meta?} ] }
+]
+
+# Ledger PJ (opcional; derivável)
+- pj_ledger_${clientId}: [
+   { id, group:"RECEITA|DEDUCOES_RECEITA|GEA|COMERCIAL_MKT|FINANCEIRAS|OUTRAS",
+     subcategory?, amount(+/-), recognizedAt:"DD/MM/YYYY", cashAt?:"DD/MM/YYYY",
+     excludeFromMargin?:boolean, origin:"sale_leg|manual|bank|gateway", saleId?, saleLegId?, note? }
+]
+
+# Extratos bancários PJ (OFX/OF)
+- pj_bank_tx_${clientId}: [
+   { bankTxId, date:"DD/MM/YYYY", desc, amount(+/-), accountId?, fitid?, sourceHash?, linkedLegs:[{saleLegId, nParcela?}], reconciled?:boolean }
+]
+
+# Relatórios
+- pj_reports_${clientId}: { [period:"AAAA-MM"]: { kpis, html } }
+
+# Open Finance (opcional; já preparado, mas não obrigatório agora)
+- pj_of_items_${clientId}: [{ itemId, institutionName, status, lastSyncAt }]
+- pj_of_accounts_${clientId}: [{ accountId, name, type, currency }]
+- pj_of_sync_meta_${clientId}: { lastTxSyncAt?, lastPosSyncAt? }
+
+==============================
+🧩 UTILITÁRIOS
+==============================
+- formatBR(isoDateOrBR) → sempre retorna "DD/MM/YYYY"
+- toISOFromBR("DD/MM/YYYY") → "YYYY-MM-DD"
+- getMonthKey("DD/MM/YYYY") → "AAAA-MM"
+- inPeriod("DD/MM/YYYY", "AAAA-MM") → boolean
+- sum(array) seguro contra null/undefined
+- ensureArray(dbKey) → []
+
+==============================
+📥 IMPORTAÇÃO DE DADOS (PJ)
+==============================
+1) OFX (extrato bancário PJ)
+POST /pj/import/ofx
+- multipart: { ofx:file, clientId }
+- Gera fileHash (sha256). Se existir igual, 409 "OFX duplicado".
+- Parseia com ofx-parse; normaliza transações em pj_bank_tx_${clientId}:
+   { bankTxId(uuid), date(DD/MM/YYYY), desc, amount, accountId, fitid, sourceHash:fileHash, reconciled:false }
+- Dedup por fitid ou (date+amount+desc).
+- Resposta: { imported, total }
+
+2) CSV de vendas (multi-pagamento)
+POST /pj/sales/importCsv
+- multipart: { csv:file, clientId }
+- Layout: 1 LINHA = 1 LEG
+  date;invoiceNumber;customer_name;customer_doc;channel;item;qty;unit_price;discount;payment_method;gateway;installments;gross_leg;fees_leg;status;comment
+- Backend agrupa por invoiceNumber+date → cria/atualiza header (pj_sales) + legs (pj_sale_legs).
+- Cálculos: net_leg = gross_leg - fees_leg; header.gross/net = soma dos legs.
+- Dedup do LEG por (invoiceNumber+gateway+authorizedCode) OU fallback (date+gross_leg+payment_method+gateway).
+- Sempre formatar datas em DD/MM/YYYY.
+
+3) Inclusão manual de venda (multi-pagamento)
+POST /pj/sales/add
+Body:
+{
+  clientId, date:"DD/MM/YYYY", invoiceNumber?, customer:{...}, channel, comment?,
+  legs:[ { method, gateway?, installments, grossAmount, fees, authorizedCode? } ]
+}
+- Gera saleId e saleLegId p/ cada leg.
+- Gera settlementPlan conforme regras do método/gateway em pj_payment_methods_${clientId}:
+   - "D+X": parcela única due = date + X dias
+   - "D+30_por_parcela": N parcelas due a cada 30 dias
+   - "D+1": due = date + 1 dia
+- Calcula header.gross/net e salva.
+
+==============================
+🔌 INTEGRAÇÕES DE PAGAMENTO (webhook/sync) — PJ
+==============================
+1) Webhook
+POST /pj/integrations/payments/webhook/:gateway
+- Idempotência por eventId do gateway.
+- Mapeia evento → leg por providerPaymentId ou (invoiceNumber+authorizedCode).
+- Atualiza status do leg, fees, net, adiciona event e marca parc/settlement recebida quando houver referência bancária.
+- Responde { ok:true } sempre que idempotente.
+
+2) Pull manual (sync)
+POST /pj/integrations/payments/sync
+Body: { clientId, gateway, from?, to?, full? }
+- Busca cobranças no gateway (mock se não houver credencial).
+- Upsert em legs por providerPaymentId.
+- Recalcula header.
+
+==============================
+🧾 CONCILIAÇÃO BANCÁRIA (PJ)
+==============================
+- Sugerir match por parcela do settlementPlan.
+POST /pj/reconciliation/suggest
+Body: { clientId, saleLegId }
+Lógica:
+  - Busca parcela(s) pendentes no leg.
+  - Tenta match por:
+     1) valor == expected e date ≈ due (±1..3 dias)
+     2) fallback: agrupar múltiplos créditos do mesmo dia para formar expected (marketplaces)
+  - Retorna sugestões: [{ bankTxId, date, amount, score }]
+
+POST /pj/reconciliation/confirm
+Body: { clientId, saleLegId, matches:[{ bankTxId }], note? }
+- Marca parcela(s) como recebidas: receivedTxId, receivedAt=bankTx.date; reconciliation.state="conciliado" ou "parcial".
+- Atualiza bank_tx vinculando o leg. Impede vincular a mesma bankTxId a duas parcelas diferentes (a não ser que `allowGroup=true` futuro).
+
+==============================
+📚 PLANO DE CONTAS (PJ)
+==============================
+Macrogrupos:
+- RECEITA
+- DEDUCOES_RECEITA (taxas gateway, impostos sobre venda, devoluções, descontos comerciais)
+- GEA (Despesas Gerais e Administrativas)
+- COMERCIAL_MKT
+- FINANCEIRAS
+- OUTRAS
+Flags:
+- `excludeFromMargin` (default=false). Por padrão **true** para subcategorias: "Distribuição de Lucro", "Aporte/Resgate de caixa".
+
+==============================
+📈 MÉTRICAS (PJ)
+==============================
+Período P = "AAAA-MM" (competência, com recognizedAt das entradas/saídas).
+
+- Receita(P) = Σ amount onde group=RECEITA
+- Deducoes(P) = Σ amount onde group=DEDUCOES_RECEITA (valor negativo)
+- LucroBruto(P) = Receita(P) − |Deducoes(P)|
+- DespesasTotais(P) = Σ |amount| onde group ∈ {GEA, COMERCIAL_MKT, FINANCEIRAS, OUTRAS}
+- LucroLiquido(P) = Receita(P) − |Deducoes(P)| − DespesasTotais(P)
+- MargemAjustada(P) = Receita(P) − Σ |amount| (grupos de despesa) EXCLUINDO subcategorias com `excludeFromMargin=true`
+- TicketMédio(P) = Receita(P) / Nº de Vendas(P) (conta headers com date em P)
+- Nº de Vendas(P) = quantidade de headers em P
+- Saldo de Caixa = soma de pj_bank_tx até o final do período (ou 0 se vazio)
+
+==============================
+🧮 DFC (método direto) — PJ
+==============================
+GET /pj/dfc?clientId=...&period=AAAA-MM
+- Operacional: entradas conciliadas de legs + saídas operacionais (GEA, COMERCIAL_MKT, DEDUCOES_RECEITA consideradas como saída operacional).
+- Investimento: lançamentos marcados (ex.: CAPEX) — pode ser subcategoria de OUTRAS com flag "investimento".
+- Financiamento: empréstimos/juros/amortizações; Distribuição de Lucros; Aportes/Resgates (via FINANCEIRAS).
+Resposta:
+{ period, caixaInicial?, operacional:{in,out,net}, investimento:{in,out,net}, financiamento:{in,out,net}, caixaFinal }
+
+==============================
+🛠️ ENDPOINTS (PJ) — RESUMO
+==============================
+# Config
+POST /pj/payment-methods/upsert
+GET  /pj/payment-methods/list?clientId=...
+
+# Vendas
+POST /pj/sales/add
+POST /pj/sales/importCsv
+GET  /pj/sales/list?clientId=...&from=...&to=...&status=...&method=...&channel=...
+GET  /pj/sales/:saleId
+PATCH /pj/sales/:saleId/leg/:saleLegId
+
+# Conciliação
+POST /pj/reconciliation/suggest
+POST /pj/reconciliation/confirm
+
+# Ledger (opcional)
+POST /pj/ledger/add (para despesas manuais fora de venda)
+GET  /pj/ledger/list?clientId=...&period=...
+
+# Dashboard do empresário (PJ)
+GET /api/pj/dashboard/summary?clientId=...&period=AAAA-MM
+GET /api/pj/dashboard/trends?clientId=...&months=12
+GET /api/pj/dashboard/top-costs?clientId=...&period=AAAA-MM&limit=5
+GET /api/pj/dashboard/revenue-split?clientId=...&period=AAAA-MM
+GET /api/pj/dashboard/sales-kpis?clientId=...&period=AAAA-MM
+GET /dashboard/empresa/:clientId  (HTML com Chart.js via CDN)
+
+# DFC
+GET /pj/dfc?clientId=...&period=AAAA-MM
+
+# Importações
+POST /pj/import/ofx
+POST /pj/import/csv (vendas fallback já coberta acima)
+
+# Open Finance (opcional — preparado, mas não obrigatório)
+POST /pj/openfinance/consent/start
+POST /pj/openfinance/webhook     (idempotente)
+POST /pj/openfinance/sync
+
+==============================
+🎨 PÁGINA HTML — /dashboard/empresa/:clientId
+==============================
+- Primeira dobra:
+  - Seletor de período (AAAA-MM)
+  - Cards: Receita, Deduções, Lucro Bruto, Despesas, Lucro Líquido, Margem (valor e %), Saldo de Caixa
+  - Top 3 custos (lista)
+- Gráficos:
+  - Linha (12 meses): Receita x Lucro Líquido x Margem (R$) — Chart.js (CDN)
+  - Pizza: Origem da Receita (por canal ou subcategoria)
+- KPIs comerciais: Ticket médio, Nº de vendas
+- Todas as datas exibidas em DD/MM/YYYY quando houver.
+
+==============================
+🧪 REGRAS DE DEDUPLICAÇÃO
+==============================
+- OFX: por fitid e fileHash; ignorar linhas repetidas (date+amount+desc).
+- CSV vendas: 1 linha = 1 LEG; dedup por (invoiceNumber+gateway+authorizedCode) ou fallback (date+gross+method+gateway).
+- Webhooks: idempotência por eventId.
+- Conciliação: uma bankTx não pode ser vinculada a duas parcelas sem "agrupamento" explícito.
+
+==============================
+⚠️ ERROS E MENSAGENS
+==============================
+- Sempre retornar mensagens claras em JSON para APIs; HTML só para páginas.
+- 400 para parâmetros faltantes; 401 sem sessão; 403 sem permissão; 409 duplicado; 500 erro interno.
+- Nunca vazar dados PF em rotas PJ e vice-versa. Validar `scope` e `clientId`.
+
+==============================
+🚀 STARTUP / SEED OPCIONAL
+==============================
+- Se `process.env.SEED_PJ === "1"`:
+  - Criar usuário consultor (consultor@demo.com / 123456) com scope PJ.
+  - Criar `pj_clients` de exemplo, dados de 3 meses em `pj_sales` + `pj_sale_legs` + `pj_bank_tx` + `pj_ledger`.
+  - Abrir console: 
+    "🚀 PJ pronto • Login em /login • Dashboard: /dashboard/empresa/<clientId>"
+- Sempre logar:
+  "🚀 App Economia Diária (PJ) na porta 3000"
+  "🌐 Dashboard Empresário (PJ): /dashboard/empresa/:clientId"
+  "📅 Datas públicas: DD/MM/YYYY"
+
+==============================
+🔒 LEMBRETES FINAIS
+==============================
+- PF e PJ isolados por namespace e checagem de scope. Uma visão NUNCA impacta a outra.
+- Datas públicas em DD/MM/YYYY.
+- Nada de serviços externos obrigatórios; tudo nativo Replit.
+- Código limpo e comentado.
