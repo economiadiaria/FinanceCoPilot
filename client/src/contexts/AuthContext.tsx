@@ -49,20 +49,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const login = async (email: string, password: string) => {
-    const res = await apiRequest('POST', '/api/auth/login', { email, password });
-    const data = await res.json();
-    setUser(data.user);
+    console.log('[AuthContext] login() called with email:', email);
+    try {
+      const res = await apiRequest('POST', '/api/auth/login', { email, password });
+      console.log('[AuthContext] API request completed, status:', res.status);
+      const data = await res.json();
+      console.log('[AuthContext] Response data:', data);
+      setUser(data.user);
+      console.log('[AuthContext] User state updated');
+    } catch (error) {
+      console.error('[AuthContext] Login error:', error);
+      throw error;
+    }
   };
 
   const register = async (email: string, password: string, name: string) => {
-    const res = await apiRequest('POST', '/api/auth/register', {
-      email,
-      password,
-      name,
-      role: 'cliente',
-    });
-    const data = await res.json();
-    setUser(data.user);
+    console.log('[AuthContext] register() called with email:', email);
+    try {
+      const res = await apiRequest('POST', '/api/auth/register', {
+        email,
+        password,
+        name,
+        role: 'cliente',
+      });
+      console.log('[AuthContext] API request completed, status:', res.status);
+      const data = await res.json();
+      console.log('[AuthContext] Response data:', data);
+      setUser(data.user);
+      console.log('[AuthContext] User state updated');
+    } catch (error) {
+      console.error('[AuthContext] Register error:', error);
+      throw error;
+    }
   };
 
   const logout = async () => {

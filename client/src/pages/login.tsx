@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,7 @@ import { LogIn, UserPlus } from 'lucide-react';
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
-  const { login, register } = useAuth();
+  const { user, login, register } = useAuth();
   const { toast } = useToast();
   
   // Login form
@@ -25,25 +25,35 @@ export default function LoginPage() {
   const [registerName, setRegisterName] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
 
+  // Redirect to home when user is authenticated
+  useEffect(() => {
+    if (user) {
+      console.log('[Login] User detected, redirecting to home:', user);
+      setLocation('/');
+    }
+  }, [user, setLocation]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoggingIn(true);
     
     try {
+      console.log('[Login] Attempting login with:', loginEmail);
       await login(loginEmail, loginPassword);
+      console.log('[Login] Login successful, user should be set');
       toast({
         title: 'Login realizado com sucesso',
         description: 'Bem-vindo de volta!',
       });
-      setLocation('/');
+      // Redirecionamento é feito automaticamente pelo useEffect quando user muda
     } catch (error: any) {
+      console.error('[Login] Login failed:', error);
       toast({
         variant: 'destructive',
         title: 'Erro ao fazer login',
         description: error.message || 'Verifique suas credenciais e tente novamente.',
       });
-    } finally {
-      setIsLoggingIn(false);
+      setIsLoggingIn(false); // Reset loading state on error
     }
   };
 
@@ -52,20 +62,22 @@ export default function LoginPage() {
     setIsRegistering(true);
     
     try {
+      console.log('[Register] Attempting registration with:', registerEmail);
       await register(registerEmail, registerPassword, registerName);
+      console.log('[Register] Registration successful, user should be set');
       toast({
         title: 'Conta criada com sucesso',
         description: 'Bem-vindo ao Copiloto Financeiro!',
       });
-      setLocation('/');
+      // Redirecionamento é feito automaticamente pelo useEffect quando user muda
     } catch (error: any) {
+      console.error('[Register] Registration failed:', error);
       toast({
         variant: 'destructive',
         title: 'Erro ao criar conta',
         description: error.message || 'Tente novamente com um email diferente.',
       });
-    } finally {
-      setIsRegistering(false);
+      setIsRegistering(false); // Reset loading state on error
     }
   };
 
