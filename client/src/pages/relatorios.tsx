@@ -101,7 +101,15 @@ export default function Relatorios({ clientId }: RelatoriosProps) {
           <h1 className="text-3xl font-bold">Relatórios</h1>
           <p className="text-muted-foreground">Gere e visualize relatórios mensais</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog 
+          open={dialogOpen} 
+          onOpenChange={(open) => {
+            if (open && selectedPeriod) {
+              setPeriod(selectedPeriod);
+            }
+            setDialogOpen(open);
+          }}
+        >
           <DialogTrigger asChild>
             <Button data-testid="button-generate-report">
               <FileBarChart className="mr-2 h-4 w-4" />
@@ -208,7 +216,10 @@ export default function Relatorios({ clientId }: RelatoriosProps) {
                 <p className="text-muted-foreground">
                   Nenhum relatório encontrado para este período.
                 </p>
-                <Button onClick={() => setDialogOpen(true)} data-testid="button-generate-first">
+                <Button 
+                  onClick={() => setDialogOpen(true)} 
+                  data-testid="button-generate-first"
+                >
                   Gerar Relatório
                 </Button>
               </div>
