@@ -19,6 +19,7 @@ import Transacoes from "@/pages/transacoes";
 import Investimentos from "@/pages/investimentos";
 import Relatorios from "@/pages/relatorios";
 import Configuracoes from "@/pages/configuracoes";
+import OpenFinancePage from "@/pages/open-finance";
 import LoginPage from "@/pages/login";
 import type { Client } from "@shared/schema";
 
@@ -81,6 +82,9 @@ function AuthenticatedApp() {
               </Route>
               <Route path="/relatorios">
                 <Relatorios clientId={selectedClient} />
+              </Route>
+              <Route path="/open-finance">
+                <OpenFinancePage />
               </Route>
               <Route path="/configuracoes">
                 <Configuracoes

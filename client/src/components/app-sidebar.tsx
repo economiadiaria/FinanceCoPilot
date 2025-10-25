@@ -1,4 +1,4 @@
-import { Home, FileText, TrendingUp, FileBarChart, Settings } from "lucide-react";
+import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -31,6 +31,11 @@ const menuItems = [
     title: "Relatórios",
     url: "/relatorios",
     icon: FileBarChart,
+  },
+  {
+    title: "Open Finance",
+    url: "/open-finance",
+    icon: Building2,
   },
   {
     title: "Configurações",
