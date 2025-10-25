@@ -220,3 +220,179 @@ export const ofSyncMetaSchema = z.object({
 });
 
 export type OFSyncMeta = z.infer<typeof ofSyncMetaSchema>;
+
+// ============================================================================
+// PJ (Pessoa Jurídica) Types
+// ============================================================================
+
+// Payment Method Configuration (PJ)
+export const paymentMethodSchema = z.object({
+  id: z.string(),
+  name: z.string(), // ex: "PIX", "Crédito Visa"
+  gateway: z.string().optional(), // ex: "stripe", "mercadopago"
+  taxaPct: z.number().optional(), // taxa percentual
+  taxaFixa: z.number().optional(), // taxa fixa
+  liquidacao: z.string().optional(), // "D+X", "D+30_por_parcela", "D+1"
+  metadata: z.record(z.any()).optional(),
+});
+
+export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
+
+// Sale Leg (multi-pagamento) - PJ
+export const saleLegStatuses = ["autorizado", "pago", "liquidado", "estornado", "chargeback", "cancelado"] as const;
+export const paymentMethods = ["pix", "credito", "debito", "boleto", "dinheiro", "transferencia", "link", "gateway", "outro"] as const;
+export const reconciliationStates = ["pendente", "parcial", "conciliado", "divergente"] as const;
+
+export const settlementParcelSchema = z.object({
+  n: z.number(), // número da parcela
+  due: z.string(), // DD/MM/YYYY
+  expected: z.number(), // valor esperado
+  receivedTxId: z.string().optional(), // ID da transação bancária
+  receivedAt: z.string().optional(), // DD/MM/YYYY
+});
+
+export const saleLegEventSchema = z.object({
+  type: z.enum(["created", "authorized", "paid", "settled", "refund", "chargeback"]),
+  at: z.string(), // DD/MM/YYYY
+  meta: z.record(z.any()).optional(),
+});
+
+export const saleLegSchema = z.object({
+  saleLegId: z.string(),
+  saleId: z.string(),
+  method: z.enum(paymentMethods),
+  gateway: z.string().optional(),
+  authorizedCode: z.string().optional(),
+  installments: z.number().default(1),
+  grossAmount: z.number(),
+  fees: z.number(),
+  netAmount: z.number(),
+  status: z.enum(saleLegStatuses),
+  provider: z.enum(["manual", "gateway", "pluggy"]).default("manual"),
+  providerPaymentId: z.string().optional(),
+  providerAccountId: z.string().optional(),
+  settlementPlan: z.array(settlementParcelSchema),
+  reconciliation: z.object({
+    state: z.enum(reconciliationStates),
+    notes: z.string().optional(),
+  }),
+  events: z.array(saleLegEventSchema),
+});
+
+export type SaleLeg = z.infer<typeof saleLegSchema>;
+export type SettlementParcel = z.infer<typeof settlementParcelSchema>;
+
+// Sale (venda header) - PJ
+export const saleStatuses = ["aberta", "fechada", "cancelada"] as const;
+
+export const saleSchema = z.object({
+  saleId: z.string(),
+  date: z.string(), // DD/MM/YYYY
+  invoiceNumber: z.string().optional(),
+  customer: z.object({
+    name: z.string(),
+    doc: z.string().optional(), // CPF/CNPJ
+    email: z.string().optional(),
+    telefone: z.string().optional(),
+  }),
+  channel: z.string(), // "loja", "ecommerce", "marketplace", etc.
+  status: z.enum(saleStatuses),
+  grossAmount: z.number(),
+  netAmount: z.number(),
+  comment: z.string().optional(),
+  legs: z.array(z.string()), // IDs dos sale legs
+});
+
+export type Sale = z.infer<typeof saleSchema>;
+
+// Ledger Entry (lançamento contábil) - PJ
+export const ledgerGroups = ["RECEITA", "DEDUCOES_RECEITA", "GEA", "COMERCIAL_MKT", "FINANCEIRAS", "OUTRAS"] as const;
+export const ledgerOrigins = ["sale_leg", "manual", "bank", "gateway"] as const;
+
+export const ledgerEntrySchema = z.object({
+  id: z.string(),
+  group: z.enum(ledgerGroups),
+  subcategory: z.string().optional(),
+  amount: z.number(), // positivo ou negativo
+  recognizedAt: z.string(), // DD/MM/YYYY - competência
+  cashAt: z.string().optional(), // DD/MM/YYYY - caixa
+  excludeFromMargin: z.boolean().default(false),
+  origin: z.enum(ledgerOrigins),
+  saleId: z.string().optional(),
+  saleLegId: z.string().optional(),
+  note: z.string().optional(),
+});
+
+export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
+
+// Bank Transaction (PJ)
+export const bankTransactionSchema = z.object({
+  bankTxId: z.string(),
+  date: z.string(), // DD/MM/YYYY
+  desc: z.string(),
+  amount: z.number(), // positivo = entrada, negativo = saída
+  accountId: z.string().optional(),
+  fitid: z.string().optional(), // OFX unique ID
+  sourceHash: z.string().optional(), // SHA256 do arquivo OFX
+  linkedLegs: z.array(z.object({
+    saleLegId: z.string(),
+    nParcela: z.number().optional(),
+  })).default([]),
+  reconciled: z.boolean().default(false),
+  categorizedAs: z.object({
+    group: z.enum(ledgerGroups).optional(),
+    subcategory: z.string().optional(),
+    auto: z.boolean().default(false), // categorização automática?
+  }).optional(),
+});
+
+export type BankTransaction = z.infer<typeof bankTransactionSchema>;
+
+// Categorization Rule (aprendizado) - PJ
+export const matchTypes = ["exact", "contains", "startsWith"] as const;
+export const categorizationActionTypes = ["link_to_sale", "categorize_as_expense"] as const;
+
+export const categorizationRuleSchema = z.object({
+  ruleId: z.string(),
+  pattern: z.string(), // "STRIPE*", "exact description"
+  matchType: z.enum(matchTypes),
+  action: z.object({
+    type: z.enum(categorizationActionTypes),
+    category: z.enum(ledgerGroups).optional(),
+    subcategory: z.string().optional(),
+    autoConfirm: z.boolean().default(false),
+  }),
+  confidence: z.number().min(0).max(100), // 0-100
+  learnedFrom: z.object({
+    bankTxId: z.string(),
+    date: z.string(), // DD/MM/YYYY
+  }),
+  appliedCount: z.number().default(0),
+  enabled: z.boolean().default(true),
+});
+
+export type CategorizationRule = z.infer<typeof categorizationRuleSchema>;
+
+// DFC (Demonstrativo de Fluxo de Caixa) - PJ
+export const dfcSchema = z.object({
+  period: z.string(), // AAAA-MM
+  caixaInicial: z.number().optional(),
+  operacional: z.object({
+    in: z.number(),
+    out: z.number(),
+    net: z.number(),
+  }),
+  investimento: z.object({
+    in: z.number(),
+    out: z.number(),
+    net: z.number(),
+  }),
+  financiamento: z.object({
+    in: z.number(),
+    out: z.number(),
+    net: z.number(),
+  }),
+  caixaFinal: z.number(),
+});
+
+export type DFC = z.infer<typeof dfcSchema>;

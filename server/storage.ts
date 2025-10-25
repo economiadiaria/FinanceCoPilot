@@ -1,4 +1,7 @@
-import type { Client, Transaction, Position, PFPolicy, PJPolicy, Report, User, OFXImport, OFItem, OFAccount, OFSyncMeta } from "@shared/schema";
+import type { 
+  Client, Transaction, Position, PFPolicy, PJPolicy, Report, User, OFXImport, OFItem, OFAccount, OFSyncMeta,
+  Sale, SaleLeg, PaymentMethod, LedgerEntry, BankTransaction, CategorizationRule
+} from "@shared/schema";
 import Database from "@replit/database";
 
 export interface IStorage {
@@ -48,6 +51,37 @@ export interface IStorage {
   
   getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null>;
   setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void>;
+
+  // PJ - Sales
+  getSales(clientId: string): Promise<Sale[]>;
+  setSales(clientId: string, sales: Sale[]): Promise<void>;
+  addSale(clientId: string, sale: Sale): Promise<void>;
+  
+  // PJ - Sale Legs
+  getSaleLegs(clientId: string): Promise<SaleLeg[]>;
+  setSaleLegs(clientId: string, legs: SaleLeg[]): Promise<void>;
+  updateSaleLeg(clientId: string, saleLegId: string, updates: Partial<SaleLeg>): Promise<void>;
+  
+  // PJ - Payment Methods
+  getPaymentMethods(clientId: string): Promise<PaymentMethod[]>;
+  setPaymentMethods(clientId: string, methods: PaymentMethod[]): Promise<void>;
+  
+  // PJ - Ledger
+  getLedgerEntries(clientId: string): Promise<LedgerEntry[]>;
+  setLedgerEntries(clientId: string, entries: LedgerEntry[]): Promise<void>;
+  addLedgerEntry(clientId: string, entry: LedgerEntry): Promise<void>;
+  
+  // PJ - Bank Transactions
+  getBankTransactions(clientId: string): Promise<BankTransaction[]>;
+  setBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void>;
+  addBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void>;
+  updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void>;
+  
+  // PJ - Categorization Rules
+  getCategorizationRules(clientId: string): Promise<CategorizationRule[]>;
+  setCategorizationRules(clientId: string, rules: CategorizationRule[]): Promise<void>;
+  addCategorizationRule(clientId: string, rule: CategorizationRule): Promise<void>;
+  updateCategorizationRule(clientId: string, ruleId: string, updates: Partial<CategorizationRule>): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -62,6 +96,14 @@ export class MemStorage implements IStorage {
   private ofItems: Map<string, OFItem[]>;
   private ofAccounts: Map<string, OFAccount[]>;
   private ofSyncMeta: Map<string, OFSyncMeta>;
+  
+  // PJ storage
+  private pjSales: Map<string, Sale[]>;
+  private pjSaleLegs: Map<string, SaleLeg[]>;
+  private pjPaymentMethods: Map<string, PaymentMethod[]>;
+  private pjLedgerEntries: Map<string, LedgerEntry[]>;
+  private pjBankTransactions: Map<string, BankTransaction[]>;
+  private pjCategorizationRules: Map<string, CategorizationRule[]>;
 
   constructor() {
     this.users = new Map();
@@ -75,6 +117,13 @@ export class MemStorage implements IStorage {
     this.ofItems = new Map();
     this.ofAccounts = new Map();
     this.ofSyncMeta = new Map();
+    
+    this.pjSales = new Map();
+    this.pjSaleLegs = new Map();
+    this.pjPaymentMethods = new Map();
+    this.pjLedgerEntries = new Map();
+    this.pjBankTransactions = new Map();
+    this.pjCategorizationRules = new Map();
   }
 
   // Users
@@ -218,6 +267,107 @@ export class MemStorage implements IStorage {
 
   async setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void> {
     this.ofSyncMeta.set(clientId, meta);
+  }
+
+  // PJ - Sales
+  async getSales(clientId: string): Promise<Sale[]> {
+    return this.pjSales.get(clientId) || [];
+  }
+
+  async setSales(clientId: string, sales: Sale[]): Promise<void> {
+    this.pjSales.set(clientId, sales);
+  }
+
+  async addSale(clientId: string, sale: Sale): Promise<void> {
+    const existing = await this.getSales(clientId);
+    this.pjSales.set(clientId, [...existing, sale]);
+  }
+
+  // PJ - Sale Legs
+  async getSaleLegs(clientId: string): Promise<SaleLeg[]> {
+    return this.pjSaleLegs.get(clientId) || [];
+  }
+
+  async setSaleLegs(clientId: string, legs: SaleLeg[]): Promise<void> {
+    this.pjSaleLegs.set(clientId, legs);
+  }
+
+  async updateSaleLeg(clientId: string, saleLegId: string, updates: Partial<SaleLeg>): Promise<void> {
+    const legs = await this.getSaleLegs(clientId);
+    const index = legs.findIndex(l => l.saleLegId === saleLegId);
+    if (index !== -1) {
+      legs[index] = { ...legs[index], ...updates };
+      this.pjSaleLegs.set(clientId, legs);
+    }
+  }
+
+  // PJ - Payment Methods
+  async getPaymentMethods(clientId: string): Promise<PaymentMethod[]> {
+    return this.pjPaymentMethods.get(clientId) || [];
+  }
+
+  async setPaymentMethods(clientId: string, methods: PaymentMethod[]): Promise<void> {
+    this.pjPaymentMethods.set(clientId, methods);
+  }
+
+  // PJ - Ledger
+  async getLedgerEntries(clientId: string): Promise<LedgerEntry[]> {
+    return this.pjLedgerEntries.get(clientId) || [];
+  }
+
+  async setLedgerEntries(clientId: string, entries: LedgerEntry[]): Promise<void> {
+    this.pjLedgerEntries.set(clientId, entries);
+  }
+
+  async addLedgerEntry(clientId: string, entry: LedgerEntry): Promise<void> {
+    const existing = await this.getLedgerEntries(clientId);
+    this.pjLedgerEntries.set(clientId, [...existing, entry]);
+  }
+
+  // PJ - Bank Transactions
+  async getBankTransactions(clientId: string): Promise<BankTransaction[]> {
+    return this.pjBankTransactions.get(clientId) || [];
+  }
+
+  async setBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
+    this.pjBankTransactions.set(clientId, transactions);
+  }
+
+  async addBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
+    const existing = await this.getBankTransactions(clientId);
+    this.pjBankTransactions.set(clientId, [...existing, ...transactions]);
+  }
+
+  async updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void> {
+    const transactions = await this.getBankTransactions(clientId);
+    const index = transactions.findIndex(t => t.bankTxId === bankTxId);
+    if (index !== -1) {
+      transactions[index] = { ...transactions[index], ...updates };
+      this.pjBankTransactions.set(clientId, transactions);
+    }
+  }
+
+  // PJ - Categorization Rules
+  async getCategorizationRules(clientId: string): Promise<CategorizationRule[]> {
+    return this.pjCategorizationRules.get(clientId) || [];
+  }
+
+  async setCategorizationRules(clientId: string, rules: CategorizationRule[]): Promise<void> {
+    this.pjCategorizationRules.set(clientId, rules);
+  }
+
+  async addCategorizationRule(clientId: string, rule: CategorizationRule): Promise<void> {
+    const existing = await this.getCategorizationRules(clientId);
+    this.pjCategorizationRules.set(clientId, [...existing, rule]);
+  }
+
+  async updateCategorizationRule(clientId: string, ruleId: string, updates: Partial<CategorizationRule>): Promise<void> {
+    const rules = await this.getCategorizationRules(clientId);
+    const index = rules.findIndex(r => r.ruleId === ruleId);
+    if (index !== -1) {
+      rules[index] = { ...rules[index], ...updates };
+      this.pjCategorizationRules.set(clientId, rules);
+    }
   }
 }
 
@@ -513,6 +663,149 @@ export class ReplitDbStorage implements IStorage {
     const result = await this.db.set(`of_sync_meta:${clientId}`, meta);
     if (!result.ok) {
       throw new Error(`Database error setting OF sync meta for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  // PJ - Sales
+  async getSales(clientId: string): Promise<Sale[]> {
+    const result = await this.db.get(`pj_sales:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting PJ sales for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setSales(clientId: string, sales: Sale[]): Promise<void> {
+    const result = await this.db.set(`pj_sales:${clientId}`, sales);
+    if (!result.ok) {
+      throw new Error(`Database error setting PJ sales for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  async addSale(clientId: string, sale: Sale): Promise<void> {
+    const existing = await this.getSales(clientId);
+    await this.setSales(clientId, [...existing, sale]);
+  }
+
+  // PJ - Sale Legs
+  async getSaleLegs(clientId: string): Promise<SaleLeg[]> {
+    const result = await this.db.get(`pj_sale_legs:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting PJ sale legs for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setSaleLegs(clientId: string, legs: SaleLeg[]): Promise<void> {
+    const result = await this.db.set(`pj_sale_legs:${clientId}`, legs);
+    if (!result.ok) {
+      throw new Error(`Database error setting PJ sale legs for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  async updateSaleLeg(clientId: string, saleLegId: string, updates: Partial<SaleLeg>): Promise<void> {
+    const legs = await this.getSaleLegs(clientId);
+    const index = legs.findIndex(l => l.saleLegId === saleLegId);
+    if (index !== -1) {
+      legs[index] = { ...legs[index], ...updates };
+      await this.setSaleLegs(clientId, legs);
+    }
+  }
+
+  // PJ - Payment Methods
+  async getPaymentMethods(clientId: string): Promise<PaymentMethod[]> {
+    const result = await this.db.get(`pj_payment_methods:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting PJ payment methods for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setPaymentMethods(clientId: string, methods: PaymentMethod[]): Promise<void> {
+    const result = await this.db.set(`pj_payment_methods:${clientId}`, methods);
+    if (!result.ok) {
+      throw new Error(`Database error setting PJ payment methods for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  // PJ - Ledger
+  async getLedgerEntries(clientId: string): Promise<LedgerEntry[]> {
+    const result = await this.db.get(`pj_ledger:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting PJ ledger for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setLedgerEntries(clientId: string, entries: LedgerEntry[]): Promise<void> {
+    const result = await this.db.set(`pj_ledger:${clientId}`, entries);
+    if (!result.ok) {
+      throw new Error(`Database error setting PJ ledger for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  async addLedgerEntry(clientId: string, entry: LedgerEntry): Promise<void> {
+    const existing = await this.getLedgerEntries(clientId);
+    await this.setLedgerEntries(clientId, [...existing, entry]);
+  }
+
+  // PJ - Bank Transactions
+  async getBankTransactions(clientId: string): Promise<BankTransaction[]> {
+    const result = await this.db.get(`pj_bank_tx:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting PJ bank transactions for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
+    const result = await this.db.set(`pj_bank_tx:${clientId}`, transactions);
+    if (!result.ok) {
+      throw new Error(`Database error setting PJ bank transactions for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  async addBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
+    const existing = await this.getBankTransactions(clientId);
+    await this.setBankTransactions(clientId, [...existing, ...transactions]);
+  }
+
+  async updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void> {
+    const transactions = await this.getBankTransactions(clientId);
+    const index = transactions.findIndex(t => t.bankTxId === bankTxId);
+    if (index !== -1) {
+      transactions[index] = { ...transactions[index], ...updates };
+      await this.setBankTransactions(clientId, transactions);
+    }
+  }
+
+  // PJ - Categorization Rules
+  async getCategorizationRules(clientId: string): Promise<CategorizationRule[]> {
+    const result = await this.db.get(`pj_categorization_rules:${clientId}`);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting PJ categorization rules for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    return result.ok ? (result.value ?? []) : [];
+  }
+
+  async setCategorizationRules(clientId: string, rules: CategorizationRule[]): Promise<void> {
+    const result = await this.db.set(`pj_categorization_rules:${clientId}`, rules);
+    if (!result.ok) {
+      throw new Error(`Database error setting PJ categorization rules for ${clientId}: ${result.error.message}`);
+    }
+  }
+
+  async addCategorizationRule(clientId: string, rule: CategorizationRule): Promise<void> {
+    const existing = await this.getCategorizationRules(clientId);
+    await this.setCategorizationRules(clientId, [...existing, rule]);
+  }
+
+  async updateCategorizationRule(clientId: string, ruleId: string, updates: Partial<CategorizationRule>): Promise<void> {
+    const rules = await this.getCategorizationRules(clientId);
+    const index = rules.findIndex(r => r.ruleId === ruleId);
+    if (index !== -1) {
+      rules[index] = { ...rules[index], ...updates };
+      await this.setCategorizationRules(clientId, rules);
     }
   }
 }
