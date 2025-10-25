@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { MetricCard } from "@/components/metric-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { DollarSign, TrendingUp, Percent, Upload, FileBarChart } from "lucide-react";
+import { DollarSign, TrendingDown, Wallet, Upload, FileBarChart } from "lucide-react";
 import { Link } from "wouter";
 import type { Summary, Transaction } from "@shared/schema";
 import { formatToBR } from "@/lib/dateUtils";
@@ -57,23 +57,22 @@ export default function Dashboard({ clientId }: DashboardProps) {
       {/* KPI Metrics */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <MetricCard
-          title="Receita Total"
-          value={summary?.totalIn.toLocaleString("pt-BR", { minimumFractionDigits: 2 }) || "0,00"}
+          title="Receitas"
+          value={(summary?.totalIn || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
           icon={<DollarSign className="h-8 w-8" />}
           testId="metric-receita"
         />
         <MetricCard
-          title="Lucro"
-          value={summary?.profit?.toLocaleString("pt-BR", { minimumFractionDigits: 2 }) || "0,00"}
-          icon={<TrendingUp className="h-8 w-8" />}
-          testId="metric-lucro"
+          title="Despesas"
+          value={Math.abs(summary?.totalOut || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+          icon={<TrendingDown className="h-8 w-8" />}
+          testId="metric-despesas"
         />
         <MetricCard
-          title="Margem"
-          value={summary?.margin?.toFixed(1) || "0.0"}
-          prefix=""
-          icon={<Percent className="h-8 w-8" />}
-          testId="metric-margem"
+          title="Saldo"
+          value={(summary?.balance || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+          icon={<Wallet className="h-8 w-8" />}
+          testId="metric-saldo"
         />
       </div>
 
