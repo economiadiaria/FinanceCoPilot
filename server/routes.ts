@@ -54,7 +54,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         passwordHash,
         role: data.role,
         name: data.name,
-        clientIds: data.clientIds || [],
+        clientIds: data.clientIds ?? [],
+        managedConsultantIds: data.managedConsultantIds ?? [],
+        managedClientIds: data.managedClientIds ?? [],
+        managerId: data.managerId,
+        consultantId: data.consultantId,
       };
       
       await storage.createUser(user);
@@ -163,18 +167,128 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/client/upsert", async (req, res) => {
     try {
       const data = clientSchema.parse(req.body);
-      const client = await storage.upsertClient(data);
-      
-      // Associate client with current user if not already associated
+      const consultantId = data.consultantId ?? undefined;
+      const masterId = data.masterId ?? undefined;
+      const users = await storage.getUsers();
+
+      const assignedConsultant = consultantId
+        ? users.find(u => u.userId === consultantId)
+        : undefined;
+      if (consultantId && (!assignedConsultant || assignedConsultant.role !== "consultor")) {
+        return res.status(400).json({ error: "Consultor responsável inválido" });
+      }
+
+      const assignedMaster = masterId
+        ? users.find(u => u.userId === masterId)
+        : undefined;
+      if (masterId && (!assignedMaster || assignedMaster.role !== "master")) {
+        return res.status(400).json({ error: "Usuário master inválido" });
+      }
+
+      const client = await storage.upsertClient({
+        ...data,
+        consultantId,
+        masterId,
+      });
+
+      if (assignedConsultant) {
+        const consultantClientIds = assignedConsultant.clientIds ?? [];
+        if (!consultantClientIds.includes(client.clientId)) {
+          const nextClientIds = Array.from(new Set([...consultantClientIds, client.clientId]));
+          await storage.updateUser(assignedConsultant.userId, { clientIds: nextClientIds });
+        }
+
+        const consultantsToClean = users.filter(u =>
+          u.role === "consultor" &&
+          u.userId !== assignedConsultant.userId &&
+          (u.clientIds ?? []).includes(client.clientId)
+        );
+        await Promise.all(
+          consultantsToClean.map(consultant =>
+            storage.updateUser(consultant.userId, {
+              clientIds: (consultant.clientIds ?? []).filter(id => id !== client.clientId),
+            })
+          )
+        );
+      } else {
+        const consultantsToClean = users.filter(u =>
+          u.role === "consultor" && (u.clientIds ?? []).includes(client.clientId)
+        );
+        await Promise.all(
+          consultantsToClean.map(consultant =>
+            storage.updateUser(consultant.userId, {
+              clientIds: (consultant.clientIds ?? []).filter(id => id !== client.clientId),
+            })
+          )
+        );
+      }
+
+      if (assignedMaster) {
+        const managedIds = assignedMaster.managedClientIds ?? [];
+        if (!managedIds.includes(client.clientId)) {
+          const nextManaged = Array.from(new Set([...managedIds, client.clientId]));
+          await storage.updateUser(assignedMaster.userId, { managedClientIds: nextManaged });
+        }
+
+        const mastersToClean = users.filter(u =>
+          u.role === "master" &&
+          u.userId !== assignedMaster.userId &&
+          (u.managedClientIds ?? []).includes(client.clientId)
+        );
+        await Promise.all(
+          mastersToClean.map(master =>
+            storage.updateUser(master.userId, {
+              managedClientIds: (master.managedClientIds ?? []).filter(id => id !== client.clientId),
+            })
+          )
+        );
+      } else {
+        const mastersToClean = users.filter(u =>
+          u.role === "master" && (u.managedClientIds ?? []).includes(client.clientId)
+        );
+        await Promise.all(
+          mastersToClean.map(master =>
+            storage.updateUser(master.userId, {
+              managedClientIds: (master.managedClientIds ?? []).filter(id => id !== client.clientId),
+            })
+          )
+        );
+      }
+
+      const clientUsers = users.filter(u => u.role === "cliente" && (u.clientIds ?? []).includes(client.clientId));
+      const clientUserUpdates = clientUsers
+        .map(clientUser => {
+          const updates: Partial<User> = {};
+          if (clientUser.consultantId !== client.consultantId) {
+            updates.consultantId = client.consultantId;
+          }
+          if (clientUser.managerId !== client.masterId) {
+            updates.managerId = client.masterId;
+          }
+          return { clientUser, updates };
+        })
+        .filter(({ updates }) => Object.keys(updates).length > 0);
+
+      await Promise.all(
+        clientUserUpdates.map(({ clientUser, updates }) =>
+          storage.updateUser(clientUser.userId, updates)
+        )
+      );
+
+      // Associate client with current user if applicable
       const userId = req.session.userId;
       if (userId) {
-        const user = await storage.getUserById(userId);
-        if (user && !user.clientIds.includes(client.clientId)) {
-          const updatedClientIds = [...user.clientIds, client.clientId];
-          await storage.updateUser(userId, { clientIds: updatedClientIds });
+        const currentUser = users.find(u => u.userId === userId) ?? (await storage.getUserById(userId));
+        if (
+          currentUser &&
+          currentUser.role !== "master" &&
+          !(currentUser.clientIds ?? []).includes(client.clientId)
+        ) {
+          const nextClientIds = Array.from(new Set([...(currentUser.clientIds ?? []), client.clientId]));
+          await storage.updateUser(userId, { clientIds: nextClientIds });
         }
       }
-      
+
       res.json(client);
     } catch (error) {
       if (error instanceof z.ZodError) {
