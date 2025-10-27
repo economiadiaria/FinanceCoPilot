@@ -9,6 +9,7 @@ import { Link } from "wouter";
 
 interface DashboardPJProps {
   clientId: string | null;
+  clientType: string | null;
 }
 
 interface Summary {
@@ -17,6 +18,9 @@ interface Summary {
   despesas: number;
   saldo: number;
   contasReceber: number;
+  lucroBruto: number;
+  lucroLiquido: number;
+  margemLiquida: number;
 }
 
 interface Trend {
@@ -43,39 +47,43 @@ interface SalesKPIs {
   topClientes: { customer: string; amount: number }[];
 }
 
-export default function DashboardPJ({ clientId }: DashboardPJProps) {
+export default function DashboardPJ({ clientId, clientType }: DashboardPJProps) {
   const [month, setMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
+  
+  const [year, setYear] = useState(() => new Date().getFullYear().toString());
 
   const trendsChartRef = useRef<HTMLCanvasElement>(null);
   const revenueChartRef = useRef<HTMLCanvasElement>(null);
   const costsChartRef = useRef<HTMLCanvasElement>(null);
 
+  const isPJClient = clientType === "PJ" || clientType === "BOTH";
+
   const { data: summary, isLoading: loadingSummary, error: errorSummary } = useQuery<Summary>({
     queryKey: ["/api/pj/dashboard/summary", { clientId, month }],
-    enabled: !!clientId,
+    enabled: !!clientId && isPJClient,
   });
 
   const { data: trendsData, error: errorTrends } = useQuery<{ trends: Trend[] }>({
-    queryKey: ["/api/pj/dashboard/trends", { clientId }],
-    enabled: !!clientId,
+    queryKey: ["/api/pj/dashboard/trends", { clientId, year }],
+    enabled: !!clientId && isPJClient,
   });
 
   const { data: revenueSplitData, error: errorRevenue } = useQuery<{ revenueSplit: RevenueSplit[] }>({
     queryKey: ["/api/pj/dashboard/revenue-split", { clientId, month }],
-    enabled: !!clientId,
+    enabled: !!clientId && isPJClient,
   });
 
   const { data: topCostsData, error: errorCosts } = useQuery<{ topCosts: TopCost[] }>({
     queryKey: ["/api/pj/dashboard/top-costs", { clientId, month }],
-    enabled: !!clientId,
+    enabled: !!clientId && isPJClient,
   });
 
   const { data: salesKPIs, error: errorKPIs } = useQuery<SalesKPIs>({
     queryKey: ["/api/pj/dashboard/sales-kpis", { clientId, month }],
-    enabled: !!clientId,
+    enabled: !!clientId && isPJClient,
   });
 
   // Chart.js rendering
@@ -206,6 +214,20 @@ export default function DashboardPJ({ clientId }: DashboardPJProps) {
     );
   }
 
+  if (!isPJClient) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <BarChart3 className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">
+          Esta funcionalidade é exclusiva para clientes PJ
+        </h1>
+        <p className="text-muted-foreground">
+          Selecione um cliente do tipo Pessoa Jurídica para acessar o dashboard empresarial
+        </p>
+      </div>
+    );
+  }
+
   if (loadingSummary) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -240,10 +262,20 @@ export default function DashboardPJ({ clientId }: DashboardPJProps) {
             className="w-40"
             data-testid="input-month"
           />
+          <select
+            value={year}
+            onChange={(e) => setYear(e.target.value)}
+            className="flex h-9 w-32 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            data-testid="select-year"
+          >
+            {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(y => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
         </div>
       </div>
 
-      {/* KPI Metrics */}
+      {/* KPI Metrics - Financeiro */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         <MetricCard
           title="Receitas"
@@ -271,11 +303,33 @@ export default function DashboardPJ({ clientId }: DashboardPJProps) {
         />
       </div>
 
+      {/* KPI Metrics - Lucro e Margem */}
+      <div className="grid gap-6 md:grid-cols-3">
+        <MetricCard
+          title="Lucro Bruto"
+          value={(summary?.lucroBruto || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+          icon={<DollarSign className="h-8 w-8" />}
+          testId="metric-lucro-bruto"
+        />
+        <MetricCard
+          title="Lucro Líquido"
+          value={(summary?.lucroLiquido || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+          icon={<Wallet className="h-8 w-8" />}
+          testId="metric-lucro-liquido"
+        />
+        <MetricCard
+          title="Margem Líquida"
+          value={`${(summary?.margemLiquida || 0).toFixed(1)}%`}
+          icon={<BarChart3 className="h-8 w-8" />}
+          testId="metric-margem-liquida"
+        />
+      </div>
+
       {/* Charts Row 1 */}
       <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Tendências (6 meses)</CardTitle>
+            <CardTitle>Tendências ({year})</CardTitle>
           </CardHeader>
           <CardContent>
             <div style={{ height: "300px" }}>

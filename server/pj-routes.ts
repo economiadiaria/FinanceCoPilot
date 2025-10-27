@@ -540,9 +540,6 @@ export function registerPJRoutes(app: Express) {
         }
       }
       
-      // Salvar transações
-      await storage.addBankTransactions(clientId, newTransactions);
-      
       // Aplicar categorização prospectiva (auto-categorizar com regras existentes)
       const rules = await storage.getCategorizationRules(clientId);
       let categorizedCount = 0;
@@ -551,20 +548,21 @@ export function registerPJRoutes(app: Express) {
         for (const tx of newTransactions) {
           for (const rule of rules) {
             if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
-              tx.dfcCategory = rule.dfcCategory;
-              tx.dfcItem = rule.dfcItem;
-              tx.categorizedBy = "rule";
-              tx.categorizedRuleId = rule.ruleId;
+              // Usar categorizedAs conforme o schema
+              tx.categorizedAs = {
+                group: rule.action.category,
+                subcategory: rule.action.subcategory,
+                auto: true,
+              };
               categorizedCount++;
               break; // Primeira regra que match
             }
           }
         }
-        
-        // Atualizar transações com categorização
-        const allBankTxs = await storage.getBankTransactions(clientId);
-        await storage.setBankTransactions(clientId, allBankTxs);
       }
+      
+      // Salvar transações (já com categorização aplicada)
+      await storage.addBankTransactions(clientId, newTransactions);
       
       // Registrar importação
       await storage.addOFXImport({
@@ -949,12 +947,20 @@ export function registerPJRoutes(app: Express) {
         }
       }
       
+      // Calcular lucros e margem
+      const lucroBruto = receitas; // Simplificado: assumindo que não temos CMV separado
+      const lucroLiquido = saldo; // receitas - despesas
+      const margemLiquida = receitas > 0 ? (lucroLiquido / receitas) * 100 : 0;
+      
       res.json({
         month,
         receitas,
         despesas,
         saldo,
         contasReceber,
+        lucroBruto,
+        lucroLiquido,
+        margemLiquida,
       });
     } catch (error: any) {
       console.error("Erro ao buscar summary PJ:", error);
@@ -964,11 +970,12 @@ export function registerPJRoutes(app: Express) {
   
   /**
    * GET /api/pj/dashboard/trends
-   * Tendências de receita/despesa dos últimos 6 meses
+   * Tendências de receita/despesa do ano vigente
    */
   app.get("/api/pj/dashboard/trends", scopeRequired("PJ"), async (req, res) => {
     try {
       const clientId = req.query.clientId as string;
+      const year = req.query.year as string; // Opcional, se não fornecido usa ano atual
       
       if (!clientId) {
         return res.status(400).json({ error: "clientId é obrigatório" });
@@ -976,15 +983,13 @@ export function registerPJRoutes(app: Express) {
       
       const bankTxs = await storage.getBankTransactions(clientId);
       
-      // Agrupar por mês (últimos 6)
-      const now = new Date();
+      // Usar ano fornecido ou ano atual
+      const targetYear = year ? parseInt(year) : new Date().getFullYear();
       const trends: any[] = [];
       
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const year = d.getFullYear();
-        const month = d.getMonth() + 1;
-        const monthKey = `${year}-${month.toString().padStart(2, "0")}`;
+      // Iterar pelos 12 meses do ano
+      for (let month = 1; month <= 12; month++) {
+        const monthKey = `${targetYear}-${month.toString().padStart(2, "0")}`;
         
         const txsInMonth = bankTxs.filter(tx => {
           const [day, m, y] = tx.date.split("/");

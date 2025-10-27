@@ -344,6 +344,11 @@ export const bankTransactionSchema = z.object({
     subcategory: z.string().optional(),
     auto: z.boolean().default(false), // categorização automática?
   }).optional(),
+  // Campos de categorização DFC (compatibilidade com código existente)
+  dfcCategory: z.string().optional(),
+  dfcItem: z.string().optional(),
+  categorizedBy: z.enum(["manual", "rule", "auto"]).optional(),
+  categorizedRuleId: z.string().optional(),
 });
 
 export type BankTransaction = z.infer<typeof bankTransactionSchema>;
@@ -369,6 +374,10 @@ export const categorizationRuleSchema = z.object({
   }),
   appliedCount: z.number().default(0),
   enabled: z.boolean().default(true),
+  createdAt: z.string().optional(), // ISO timestamp
+  // Campos DFC (compatibilidade com código existente)
+  dfcCategory: z.string().optional(),
+  dfcItem: z.string().optional(),
 });
 
 export type CategorizationRule = z.infer<typeof categorizationRuleSchema>;

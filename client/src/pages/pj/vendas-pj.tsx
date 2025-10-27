@@ -37,6 +37,7 @@ import { z } from "zod";
 
 interface VendasPJProps {
   clientId: string | null;
+  clientType: string | null;
 }
 
 interface Sale {
@@ -81,7 +82,7 @@ const addSaleSchema = z.object({
 
 type AddSaleForm = z.infer<typeof addSaleSchema>;
 
-export default function VendasPJ({ clientId }: VendasPJProps) {
+export default function VendasPJ({ clientId, clientType }: VendasPJProps) {
   const { toast } = useToast();
   const [month, setMonth] = useState(() => {
     const now = new Date();
@@ -112,7 +113,7 @@ export default function VendasPJ({ clientId }: VendasPJProps) {
 
   const { data: salesData, isLoading, error } = useQuery<{ sales: Sale[] }>({
     queryKey: ["/api/pj/sales/list", { clientId, month }],
-    enabled: !!clientId,
+    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
   });
 
   const addSaleMutation = useMutation({
@@ -214,6 +215,20 @@ export default function VendasPJ({ clientId }: VendasPJProps) {
         <h1 className="text-2xl font-bold text-muted-foreground">
           Selecione um cliente PJ
         </h1>
+      </div>
+    );
+  }
+
+  if (clientType !== "PJ" && clientType !== "BOTH") {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <Plus className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">
+          Esta funcionalidade é exclusiva para clientes PJ
+        </h1>
+        <p className="text-muted-foreground">
+          Selecione um cliente do tipo Pessoa Jurídica para gerenciar vendas
+        </p>
       </div>
     );
   }

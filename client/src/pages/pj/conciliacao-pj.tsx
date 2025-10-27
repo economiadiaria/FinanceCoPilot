@@ -23,6 +23,7 @@ import {
 
 interface ConciliacaoPJProps {
   clientId: string | null;
+  clientType: string | null;
 }
 
 interface SaleLeg {
@@ -61,7 +62,7 @@ interface Suggestion {
   matchReason: string;
 }
 
-export default function ConciliacaoPJ({ clientId }: ConciliacaoPJProps) {
+export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJProps) {
   const { toast } = useToast();
   const ofxInputRef = useRef<HTMLInputElement>(null);
   const [selectedLeg, setSelectedLeg] = useState<SaleLeg | null>(null);
@@ -70,12 +71,12 @@ export default function ConciliacaoPJ({ clientId }: ConciliacaoPJProps) {
 
   const { data: legsData, isLoading: loadingLegs, error: errorLegs } = useQuery<{ legs: SaleLeg[] }>({
     queryKey: ["/api/pj/sales/legs", { clientId }],
-    enabled: !!clientId,
+    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
   });
 
   const { data: bankTxsData, isLoading: loadingTxs, error: errorTxs } = useQuery<{ transactions: BankTransaction[] }>({
     queryKey: ["/api/pj/bank/transactions", { clientId }],
-    enabled: !!clientId,
+    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
   });
 
   const uploadOfxMutation = useMutation({
@@ -179,6 +180,20 @@ export default function ConciliacaoPJ({ clientId }: ConciliacaoPJProps) {
         <h1 className="text-2xl font-bold text-muted-foreground">
           Selecione um cliente PJ
         </h1>
+      </div>
+    );
+  }
+
+  if (clientType !== "PJ" && clientType !== "BOTH") {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <AlertCircle className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">
+          Esta funcionalidade é exclusiva para clientes PJ
+        </h1>
+        <p className="text-muted-foreground">
+          Selecione um cliente do tipo Pessoa Jurídica para acessar a conciliação bancária
+        </p>
       </div>
     );
   }

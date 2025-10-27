@@ -97,16 +97,16 @@ function AuthenticatedApp() {
                 />
               </Route>
               <Route path="/pj/dashboard">
-                <DashboardPJ clientId={selectedClient} />
+                <DashboardPJ clientId={selectedClient} clientType={currentClient?.type || null} />
               </Route>
               <Route path="/pj/vendas">
-                <VendasPJ clientId={selectedClient} />
+                <VendasPJ clientId={selectedClient} clientType={currentClient?.type || null} />
               </Route>
               <Route path="/pj/conciliacao">
-                <ConciliacaoPJ clientId={selectedClient} />
+                <ConciliacaoPJ clientId={selectedClient} clientType={currentClient?.type || null} />
               </Route>
               <Route path="/pj/regras">
-                <RegrasPJ clientId={selectedClient} />
+                <RegrasPJ clientId={selectedClient} clientType={currentClient?.type || null} />
               </Route>
             </Switch>
           </div>

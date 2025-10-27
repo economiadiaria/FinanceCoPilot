@@ -33,6 +33,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 
 interface RegrasPJProps {
   clientId: string | null;
+  clientType: string | null;
 }
 
 interface CategorizationRule {
@@ -44,7 +45,7 @@ interface CategorizationRule {
   createdAt: string;
 }
 
-export default function RegrasPJ({ clientId }: RegrasPJProps) {
+export default function RegrasPJ({ clientId, clientType }: RegrasPJProps) {
   const { toast } = useToast();
   const [openDialog, setOpenDialog] = useState(false);
   const [pattern, setPattern] = useState("");
@@ -54,7 +55,7 @@ export default function RegrasPJ({ clientId }: RegrasPJProps) {
 
   const { data: rulesData, isLoading, error } = useQuery<{ rules: CategorizationRule[] }>({
     queryKey: ["/api/pj/categorization/rules", { clientId }],
-    enabled: !!clientId,
+    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
   });
 
   const createRuleMutation = useMutation({
@@ -108,6 +109,20 @@ export default function RegrasPJ({ clientId }: RegrasPJProps) {
         <h1 className="text-2xl font-bold text-muted-foreground">
           Selecione um cliente PJ
         </h1>
+      </div>
+    );
+  }
+
+  if (clientType !== "PJ" && clientType !== "BOTH") {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <Brain className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">
+          Esta funcionalidade é exclusiva para clientes PJ
+        </h1>
+        <p className="text-muted-foreground">
+          Selecione um cliente do tipo Pessoa Jurídica para configurar regras de categorização
+        </p>
       </div>
     );
   }
