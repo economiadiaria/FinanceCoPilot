@@ -525,61 +525,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         insights: [],
       };
 
-      // Calculate PJ-specific metrics
-      if (client.type === "PJ" || client.type === "BOTH") {
-        const revenue = totalIn;
-        const costs = transactions
-          .filter((t) => t.amount < 0 && t.category !== "Impostos")
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-        const profit = revenue - costs;
-        const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
-
-        // Calculate ticket médio (average revenue per transaction)
-        const revenueTransactions = transactions.filter((t) => t.amount > 0 && t.category === "Receita");
-        const ticketMedio = revenueTransactions.length > 0 ? revenue / revenueTransactions.length : 0;
-
-        // Top costs by category
-        const costsByCategory = new Map<string, number>();
-        transactions.filter((t) => t.amount < 0 && t.category).forEach((t) => {
-          const current = costsByCategory.get(t.category!) || 0;
-          costsByCategory.set(t.category!, current + Math.abs(t.amount));
-        });
-
-        const topCosts = Array.from(costsByCategory.entries())
-          .map(([category, amount]) => ({ category, amount }))
-          .sort((a, b) => b.amount - a.amount)
-          .slice(0, 5);
-
-        summary.revenue = revenue;
-        summary.costs = costs;
-        summary.profit = profit;
-        summary.margin = margin;
-        summary.ticketMedio = ticketMedio;
-        summary.topCosts = topCosts;
-
-        // PJ Heuristics
-        const taxas = transactions
-          .filter((t) => t.amount < 0 && t.category === "Taxas")
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-        if (revenue > 0 && (taxas / revenue) > 0.05) {
-          summary.insights!.push(
-            `Suas taxas representam ${((taxas / revenue) * 100).toFixed(1)}% da receita (> 5%). Recomendamos renegociar com adquirente/banco.`
-          );
-        }
-
-        const positions = await storage.getPositions(clientId as string);
-        const totalPositions = positions.reduce((sum, p) => sum + p.value, 0);
-
-        if (totalPositions === 0 && revenue > 0 && balance > revenue * 0.2) {
-          summary.insights!.push(
-            `Você tem R$ ${balance.toFixed(2)} em caixa parado (> 20% da receita). Sugerimos aplicar em RF curta (D+0/D+1).`
-          );
-        }
-      }
-
-      // Calculate PF-specific metrics
+      // PF-specific insights only
       if (client.type === "PF" || client.type === "BOTH") {
         const lazer = transactions
           .filter((t) => t.amount < 0 && t.category === "Lazer")
