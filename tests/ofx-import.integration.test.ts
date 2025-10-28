@@ -8,7 +8,7 @@ import crypto from "crypto";
 
 import { registerRoutes } from "../server/routes";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
-import type { Client, OFXImport, User } from "@shared/schema";
+import type { BankTransaction, Client, OFXImport, SaleLeg, User } from "@shared/schema";
 import { maskPIIValue } from "@shared/utils";
 import * as metrics from "../server/observability/metrics";
 
@@ -71,6 +71,17 @@ function getErrorCount(snapshot: any[], stage: string, bankAccountId: string, ba
       value.labels?.stage === stage
   );
   return entry?.value ?? 0;
+}
+
+function maskAccountNumber(accountId: string): string {
+  const digits = accountId.replace(/\D/g, "");
+  if (digits.length >= 4) {
+    return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+  }
+  if (accountId.length >= 4) {
+    return `${"*".repeat(Math.max(0, accountId.length - 4))}${accountId.slice(-4)}`;
+  }
+  return "***";
 }
 
 async function seedStorage(storage: IStorage) {
@@ -191,6 +202,40 @@ describe("OFX ingestion robustness", () => {
 
     const storedAfterDedup = await currentStorage.getBankTransactions(CLIENT_ID);
     assert.equal(storedAfterDedup.length, 2, "re-import should not duplicate transactions");
+  });
+
+  it("records bank metadata in audit logs for OFX imports", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    const sampleBuffer = Buffer.from(SAMPLE_OFX, "utf8");
+    const response = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", sampleBuffer, { filename: "audit.ofx", contentType: "application/ofx" });
+
+    assert.equal(response.status, 200);
+
+    const auditEntries = await currentStorage.getAuditLogs(ORGANIZATION_ID);
+    const importEvent = auditEntries.find(entry => entry.eventType === "pj.ofx.import");
+    assert.ok(importEvent, "audit log should record OFX import event");
+
+    const metadata = (importEvent?.metadata ?? {}) as Record<string, unknown>;
+    const bankAccountId = metadata.bankAccountId as string | null | undefined;
+    const accountNumberMask = metadata.accountNumberMask as string | null | undefined;
+    const accountCount = metadata.accounts as number | undefined;
+    assert.equal(bankAccountId, SAMPLE_ACCOUNT_ID);
+    assert.equal(accountNumberMask, maskAccountNumber(SAMPLE_ACCOUNT_ID));
+    assert.equal(accountCount, 1);
+
+    const accountIdentifiers = metadata.accountIdentifiers as Array<Record<string, unknown>> | undefined;
+    assert.ok(Array.isArray(accountIdentifiers));
+    assert.equal(accountIdentifiers?.length, 1);
+    const [accountMeta] = accountIdentifiers ?? [];
+    assert.equal(accountMeta?.bankAccountId as string | undefined, SAMPLE_ACCOUNT_ID);
+    assert.equal(accountMeta?.accountNumberMask as string | undefined, maskAccountNumber(SAMPLE_ACCOUNT_ID));
   });
 
   it("imports OFX files when clientId is provided in the multipart body", async () => {
@@ -345,6 +390,77 @@ describe("OFX ingestion robustness", () => {
     const accountBTxsAfter = await currentStorage.getBankTransactions(CLIENT_ID, SECOND_ACCOUNT_ID);
     assert.equal(accountATxsAfter.length, 1);
     assert.equal(accountBTxsAfter.length, 1);
+  });
+
+  it("records bank metadata when confirming reconciliation", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    const saleLeg: SaleLeg = {
+      saleLegId: "sale-leg-1",
+      saleId: "sale-1",
+      method: "pix",
+      installments: 1,
+      grossAmount: 100,
+      fees: 0,
+      netAmount: 100,
+      status: "autorizado",
+      provider: "manual",
+      settlementPlan: [
+        {
+          n: 1,
+          due: "01/02/2024",
+          expected: 100,
+        },
+      ],
+      reconciliation: { state: "pendente" },
+      events: [{ type: "created", at: "01/01/2024" }],
+    };
+
+    await currentStorage.setSaleLegs(CLIENT_ID, [saleLeg]);
+
+    const bankTx: BankTransaction = {
+      bankTxId: "bank-tx-1",
+      date: "01/02/2024",
+      desc: "Recebimento Pix",
+      amount: 100,
+      bankAccountId: SAMPLE_ACCOUNT_ID,
+      accountId: SAMPLE_ACCOUNT_ID,
+      fitid: "reconcile-fitid",
+      sourceHash: "manual-seed",
+      linkedLegs: [],
+      reconciled: false,
+    };
+
+    await currentStorage.setBankTransactions(CLIENT_ID, [bankTx]);
+
+    const response = await agent.post("/api/pj/reconciliation/confirm").send({
+      clientId: CLIENT_ID,
+      saleLegId: saleLeg.saleLegId,
+      matches: [{ parcelN: 1, bankTxId: bankTx.bankTxId }],
+    });
+
+    assert.equal(response.status, 200);
+
+    const auditEntries = await currentStorage.getAuditLogs(ORGANIZATION_ID);
+    const reconcileEvent = auditEntries.find(entry => entry.eventType === "pj.sale.reconcile");
+    assert.ok(reconcileEvent, "audit log should capture reconciliation event");
+
+    const metadata = (reconcileEvent?.metadata ?? {}) as Record<string, unknown>;
+    const bankAccountId = metadata.bankAccountId as string | null | undefined;
+    const accountNumberMask = metadata.accountNumberMask as string | null | undefined;
+    assert.equal(bankAccountId, SAMPLE_ACCOUNT_ID);
+    assert.equal(accountNumberMask, maskAccountNumber(SAMPLE_ACCOUNT_ID));
+
+    const identifiers = metadata.accountIdentifiers as Array<Record<string, unknown>> | undefined;
+    assert.ok(Array.isArray(identifiers));
+    assert.equal(identifiers?.length, 1);
+    const [identifier] = identifiers ?? [];
+    assert.equal(identifier?.bankAccountId as string | undefined, SAMPLE_ACCOUNT_ID);
+    assert.equal(identifier?.accountNumberMask as string | undefined, maskAccountNumber(SAMPLE_ACCOUNT_ID));
   });
 
   it("migrates legacy OFX import entries keyed only by file hash", async () => {

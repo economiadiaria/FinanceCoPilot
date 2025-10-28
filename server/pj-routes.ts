@@ -97,6 +97,44 @@ function maskBankLabel(value: unknown): string {
   return typeof masked === "string" ? masked : String(masked);
 }
 
+function maskAccountNumber(accountId: unknown): string {
+  const normalized = coerceBankLabel(accountId);
+  if (!normalized) {
+    return UNKNOWN_BANK_LABEL;
+  }
+
+  const digits = normalized.replace(/\D/g, "");
+  if (digits.length >= 4) {
+    return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+  }
+
+  if (normalized.length >= 4) {
+    return `${"*".repeat(Math.max(0, normalized.length - 4))}${normalized.slice(-4)}`;
+  }
+
+  return "***";
+}
+
+function buildAccountAuditMetadata(
+  accountIds: Iterable<string | undefined | null>
+): Array<{ bankAccountId: string; accountNumberMask: string }> {
+  const seen = new Set<string>();
+  const entries: Array<{ bankAccountId: string; accountNumberMask: string }> = [];
+
+  for (const maybeId of accountIds) {
+    if (!maybeId) {
+      continue;
+    }
+    if (seen.has(maybeId)) {
+      continue;
+    }
+    seen.add(maybeId);
+    entries.push({ bankAccountId: maybeId, accountNumberMask: maskAccountNumber(maybeId) });
+  }
+
+  return entries;
+}
+
 function extractMaskedBankNameFromStatement(statement: any, fallbackBankName?: unknown): string {
   const candidates = [
     statement?.BANKACCTFROM?.BANKNAME,
@@ -941,15 +979,23 @@ export function registerPJRoutes(app: Express) {
       });
 
       errorStage = "audit";
+      const accountAuditMetadata = buildAccountAuditMetadata(
+        accountSummaries.map(summary => summary.accountId)
+      );
+      const singleAccount = accountAuditMetadata.length === 1 ? accountAuditMetadata[0] : null;
+
       await recordAuditEvent({
         user: req.authUser!,
         eventType: "pj.ofx.import",
         targetType: "bank-transactions",
         metadata: {
           clientId,
+          bankAccountId: singleAccount ? singleAccount.bankAccountId : null,
+          accountNumberMask: singleAccount ? singleAccount.accountNumberMask : null,
+          accountIdentifiers: accountAuditMetadata,
+          accounts: accountSummaries.length,
           imported: newTransactions.length,
           categorized: categorizedCount,
-          accounts: accountSummaries.length,
           duplicateFile: alreadyImported,
           duplicateAccounts,
           warnings: warnings.length,
@@ -1170,21 +1216,26 @@ export function registerPJRoutes(app: Express) {
       const bankTxs = await storage.getBankTransactions(clientId);
       
       // Atualizar parcelas e transações
+      const matchedAccountIds = new Set<string>();
       for (const match of matches) {
         const parcel = leg.settlementPlan.find(p => p.n === match.parcelN);
         const bankTx = bankTxs.find(t => t.bankTxId === match.bankTxId);
-        
+
         if (!parcel || !bankTx) {
           return res.status(400).json({ error: `Match inválido: parcela ${match.parcelN}` });
         }
-        
+
         // Verificar se transação já está conciliada
         if (bankTx.reconciled) {
-          return res.status(400).json({ 
-            error: `Transação ${bankTx.bankTxId} já está conciliada` 
+          return res.status(400).json({
+            error: `Transação ${bankTx.bankTxId} já está conciliada`
           });
         }
-        
+
+        if (bankTx.bankAccountId) {
+          matchedAccountIds.add(bankTx.bankAccountId);
+        }
+
         // Atualizar parcela
         parcel.receivedTxId = bankTx.bankTxId;
         parcel.receivedAt = bankTx.date;
@@ -1215,6 +1266,10 @@ export function registerPJRoutes(app: Express) {
       await storage.setSaleLegs(clientId, legs);
       await storage.setBankTransactions(clientId, bankTxs);
 
+      const reconciliationAccountMetadata = buildAccountAuditMetadata(matchedAccountIds);
+      const reconciliationSingleAccount =
+        reconciliationAccountMetadata.length === 1 ? reconciliationAccountMetadata[0] : null;
+
       await recordAuditEvent({
         user: req.authUser!,
         eventType: "pj.sale.reconcile",
@@ -1222,6 +1277,9 @@ export function registerPJRoutes(app: Express) {
         targetId: saleLegId,
         metadata: {
           clientId,
+          bankAccountId: reconciliationSingleAccount ? reconciliationSingleAccount.bankAccountId : null,
+          accountNumberMask: reconciliationSingleAccount ? reconciliationSingleAccount.accountNumberMask : null,
+          accountIdentifiers: reconciliationAccountMetadata,
           matches: matches.length,
           reconciledParcels,
           totalParcels,
@@ -1316,6 +1374,7 @@ export function registerPJRoutes(app: Express) {
       
       // Aplicação retroativa (se solicitado)
       let retroactiveCount = 0;
+      const affectedAccounts = new Set<string>();
       if (data.applyRetroactive) {
         const bankTxs = await storage.getBankTransactions(data.clientId);
 
@@ -1326,11 +1385,18 @@ export function registerPJRoutes(app: Express) {
             tx.categorizedBy = "rule";
             tx.categorizedRuleId = rule.ruleId;
             retroactiveCount++;
+            if (tx.bankAccountId) {
+              affectedAccounts.add(tx.bankAccountId);
+            }
           }
         }
 
         await storage.setBankTransactions(data.clientId, bankTxs);
       }
+
+      const retroactiveAccountMetadata = buildAccountAuditMetadata(affectedAccounts);
+      const retroactiveSingleAccount =
+        retroactiveAccountMetadata.length === 1 ? retroactiveAccountMetadata[0] : null;
 
       await recordAuditEvent({
         user: req.authUser!,
@@ -1340,6 +1406,9 @@ export function registerPJRoutes(app: Express) {
         metadata: {
           clientId: data.clientId,
           matchType: rule.matchType,
+          bankAccountId: retroactiveSingleAccount ? retroactiveSingleAccount.bankAccountId : null,
+          accountNumberMask: retroactiveSingleAccount ? retroactiveSingleAccount.accountNumberMask : null,
+          accountIdentifiers: retroactiveAccountMetadata,
           retroactiveCount,
         },
       });
@@ -1383,6 +1452,11 @@ export function registerPJRoutes(app: Express) {
         return res.status(404).json({ error: "Transação bancária não encontrada" });
       }
       
+      const affectedAccounts = new Set<string>();
+      if (tx.bankAccountId) {
+        affectedAccounts.add(tx.bankAccountId);
+      }
+
       // Aplicar categorização manual
       tx.dfcCategory = data.dfcCategory;
       tx.dfcItem = data.dfcItem;
@@ -1440,11 +1514,17 @@ export function registerPJRoutes(app: Express) {
             otherTx.categorizedBy = "rule";
             otherTx.categorizedRuleId = newRule.ruleId;
             prospectiveCount++;
+            if (otherTx.bankAccountId) {
+              affectedAccounts.add(otherTx.bankAccountId);
+            }
           }
         }
 
         await storage.setBankTransactions(data.clientId, bankTxs);
       }
+
+      const manualAccountMetadata = buildAccountAuditMetadata(affectedAccounts);
+      const manualSingleAccount = manualAccountMetadata.length === 1 ? manualAccountMetadata[0] : null;
 
       await recordAuditEvent({
         user: req.authUser!,
@@ -1453,6 +1533,9 @@ export function registerPJRoutes(app: Express) {
         targetId: tx.bankTxId,
         metadata: {
           clientId: data.clientId,
+          bankAccountId: manualSingleAccount ? manualSingleAccount.bankAccountId : null,
+          accountNumberMask: manualSingleAccount ? manualSingleAccount.accountNumberMask : null,
+          accountIdentifiers: manualAccountMetadata,
           category: data.dfcCategory,
           learnPattern: data.learnPattern,
           prospectiveCount,
