@@ -1,7 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import { type User } from "@shared/schema";
-import { getLogger, updateRequestLoggerContext } from "../observability/logger";
 
 type Role = User["role"];
 
@@ -22,13 +21,9 @@ export function requireRole(...allowedRoles: Role[]) {
       }
 
       req.authUser = user;
-      updateRequestLoggerContext(req, { userId: user.userId });
       next();
     } catch (error) {
-      getLogger(req).error("Erro ao validar permissões", {
-        event: "rbac.denied",
-        context: { allowedRoles },
-      }, error);
+      console.error("Erro ao validar permissões:", error);
       res.status(500).json({ error: "Erro ao validar permissões" });
     }
   };

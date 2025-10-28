@@ -18,56 +18,10 @@ import {
   extractPattern,
   isDuplicateTransaction,
   matchesPattern,
-  normalizeOfxAmount,
 } from "./pj-ingestion-helpers";
 import { buildCostBreakdown, buildMonthlyInsights } from "./pj-dashboard-helpers";
 import { z } from "zod";
 import { recordAuditEvent } from "./security/audit";
-import { getLogger } from "./observability/logger";
-import {
-  startOfxIngestionTimer,
-  recordOfxIngestionDuration,
-  incrementOfxError,
-} from "./observability/metrics";
-import { recordOfxImportOutcome } from "./observability/alerts";
-
-const ofxTransactionSchema = z.object({
-  DTPOSTED: z.string().min(1, "Transação OFX sem DTPOSTED"),
-  TRNAMT: z.string().min(1, "Transação OFX sem TRNAMT"),
-  TRNTYPE: z.string().optional(),
-  FITID: z.string().optional(),
-  UNIQUEID: z.string().optional(),
-  REFNUM: z.string().optional(),
-  CHECKNUM: z.string().optional(),
-  NAME: z.string().optional(),
-  MEMO: z.string().optional(),
-});
-
-const ofxStatementSchema = z.object({
-  STMTRS: z.object({
-    CURDEF: z.string().optional(),
-    BANKACCTFROM: z
-      .object({
-        ACCTID: z.string().optional(),
-        BANKID: z.string().optional(),
-        BRANCHID: z.string().optional(),
-      })
-      .optional(),
-    BANKTRANLIST: z
-      .object({
-        DTSTART: z.string().optional(),
-        DTEND: z.string().optional(),
-        STMTTRN: z.union([ofxTransactionSchema, z.array(ofxTransactionSchema)]),
-      })
-      .passthrough(),
-    LEDGERBAL: z
-      .object({
-        BALAMT: z.string(),
-        DTASOF: z.string().optional(),
-      })
-      .optional(),
-  }),
-});
 
 // Configure multer
 const upload = multer({
@@ -534,7 +488,7 @@ export function registerPJRoutes(app: Express) {
         | string
         | string[]
         | undefined;
-      clientId = Array.isArray(candidateClientId)
+      const clientId = Array.isArray(candidateClientId)
         ? candidateClientId[0]
         : candidateClientId;
 
@@ -542,34 +496,27 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
-      ingestionLogger = ingestionLogger.child({ clientId });
-      timer = startOfxIngestionTimer(clientId);
-      ingestionLogger.info("Importação OFX iniciada", {
-        event: "pj.ofx.import.start",
-        context: {
-          sizeBytes: req.file.size,
-        },
-      });
-
-      errorStage = "hashing";
       const buffer = req.file.buffer;
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
       const existingImport = await storage.getOFXImport(fileHash);
 
-      ingestionLogger.info("Arquivo OFX recebido", {
-        event: "pj.ofx.import.file",
-        context: {
-          fileHash,
-          duplicateFile: Boolean(existingImport),
-        },
-      });
+      if (existingImport) {
+        return res.json({
+          success: true,
+          imported: 0,
+          total: existingImport.transactionCount || 0,
+          deduped: existingImport.transactionCount || 0,
+          alreadyImported: true,
+          reconciliation: existingImport.reconciliation || { accounts: [], warnings: [] },
+          autoCategorized: 0,
+        });
+      }
 
       let fileContent = buffer.toString("utf8");
       if (fileContent.includes("�")) {
         fileContent = buffer.toString("latin1");
       }
 
-      errorStage = "parse";
       let ofxData: any;
       try {
         ofxData = await Ofx.parse(fileContent);
@@ -587,13 +534,6 @@ export function registerPJRoutes(app: Express) {
         throw new Error("Arquivo OFX não contém contas bancárias para importação");
       }
 
-      ingestionLogger.info("OFX parseado", {
-        event: "pj.ofx.import.parsed",
-        context: {
-          accounts: accountsArray.length,
-        },
-      });
-
       const parseDate = (value?: string): string | undefined => {
         if (!value) return undefined;
         const trimmed = value.trim();
@@ -607,7 +547,7 @@ export function registerPJRoutes(app: Express) {
 
       const existingBankTxs = await storage.getBankTransactions(clientId);
       const newTransactions: BankTransaction[] = [];
-      warnings = [];
+      const warnings: string[] = [];
       const accountSummaries: {
         accountId: string;
         currency?: string;
@@ -624,171 +564,120 @@ export function registerPJRoutes(app: Express) {
       let totalTransactionsInFile = 0;
       let dedupedCount = 0;
 
-      errorStage = "processing";
-
       for (const account of accountsArray) {
-        const parsedAccount = ofxStatementSchema.parse(account);
-        const statement = parsedAccount.STMTRS;
-
-        const accountId =
-          statement.BANKACCTFROM?.ACCTID ||
-          statement.BANKACCTFROM?.BANKID ||
-          `conta_${accountSummaries.length + 1}`;
-
-        const txArray = toArray(statement.BANKTRANLIST?.STMTTRN);
-        if (txArray.length === 0) {
-          warnings.push(`Conta ${accountId} sem transações no período informado.`);
-          accountSummaries.push({
-            accountId,
-            currency: statement.CURDEF,
-            startDate: parseDate(statement.BANKTRANLIST?.DTSTART),
-            endDate: parseDate(statement.BANKTRANLIST?.DTEND),
-            openingBalance: undefined,
-            ledgerClosingBalance: undefined,
-            computedClosingBalance: undefined,
-            totalCredits: 0,
-            totalDebits: 0,
-            net: 0,
-          });
-          continue;
-        }
-
+        const statement = account.STMTRS;
+        if (!statement) continue;
+        
+        const accountId = statement.BANKACCTFROM?.ACCTID || "unknown";
+        const currency = statement.CURDEF || "BRL";
         const startDate = parseDate(statement.BANKTRANLIST?.DTSTART);
         const endDate = parseDate(statement.BANKTRANLIST?.DTEND);
-
+        
+        // Opening balance: use BALAMT from BANKTRANLIST if available, else 0
+        const openingBalance = statement.BANKTRANLIST?.BALAMT 
+          ? parseFloat(statement.BANKTRANLIST.BALAMT) 
+          : 0;
+        
+        // Closing balance from LEDGERBAL
+        const ledgerClosingBalance = statement.LEDGERBAL?.BALAMT 
+          ? parseFloat(statement.LEDGERBAL.BALAMT) 
+          : undefined;
+        
+        let net = 0;
         let totalCredits = 0;
         let totalDebits = 0;
-        let net = 0;
-
-        for (const rawTx of txArray) {
-          const parsedTx = ofxTransactionSchema.parse(rawTx);
-          const date = parseDate(parsedTx.DTPOSTED)!;
-          const { amount, adjusted } = normalizeOfxAmount(parsedTx.TRNAMT, parsedTx.TRNTYPE);
-          const desc = parsedTx.MEMO || parsedTx.NAME || "Sem descrição";
-          const fitid = parsedTx.FITID || parsedTx.UNIQUEID || parsedTx.REFNUM || parsedTx.CHECKNUM;
-
-          totalTransactionsInFile += 1;
-          if (amount > 0) {
-            totalCredits = round2(totalCredits + amount);
-          } else if (amount < 0) {
-            totalDebits = round2(totalDebits + Math.abs(amount));
+        
+        const transactions = statement.BANKTRANLIST?.STMTTRN || [];
+        const txArray = Array.isArray(transactions) ? transactions : [transactions];
+        totalTransactionsInFile += txArray.length;
+        
+        for (const tx of txArray) {
+          const date = tx.DTPOSTED ? formatBR(tx.DTPOSTED.substring(0, 8)) : "";
+          let amount = parseFloat(tx.TRNAMT) || 0;
+          const desc = tx.MEMO || tx.NAME || "Sem descrição";
+          const fitid = tx.FITID;
+          const trnType = tx.TRNTYPE;
+          
+          // Ajustar sinal se necessário
+          let adjusted = false;
+          if (trnType === "DEBIT" && amount > 0) {
+            amount = -amount;
+            adjusted = true;
+          } else if (trnType === "CREDIT" && amount < 0) {
+            amount = -amount;
+            adjusted = true;
           }
-          net = round2(net + amount);
-
-          if (adjusted && parsedTx.TRNTYPE) {
+          
+          if (adjusted) {
             warnings.push(
-              `Sinal ajustado automaticamente: transação ${fitid || desc} reinterpretada como ${parsedTx.TRNTYPE}.`
+              `Sinal ajustado automaticamente para ${trnType} em ${date} (${desc}).`
             );
           }
+          
+          // Dedup por fitid ou (date + amount + desc)
+          const candidate = { date, amount, desc, fitid };
+          const isDup = isDuplicateTransaction(existingBankTxs, newTransactions, candidate);
 
-          const isDuplicate = isDuplicateTransaction(
-            existingBankTxs,
-            newTransactions,
-            {
+          if (!isDup) {
+            const bankTx: BankTransaction = {
+              bankTxId: uuidv4(),
+              date,
+              desc,
               amount,
               desc,
               date,
               fitid,
-            }
-          );
+              sourceHash: fileHash,
+              linkedLegs: [],
+              reconciled: false,
+            };
 
-          if (isDuplicate) {
-            dedupedCount += 1;
-            continue;
-          }
-
-          const bankTx: BankTransaction = {
-            bankTxId: crypto.randomUUID(),
-            date,
-            desc,
-            amount,
-            accountId,
-            fitid,
-            sourceHash: fileHash,
-            linkedLegs: [],
-            reconciled: false,
-          };
-
-          newTransactions.push(bankTx);
-        }
-
-        const ledgerRaw = statement.LEDGERBAL?.BALAMT;
-        let ledgerClosingBalance: number | undefined;
-        if (ledgerRaw !== undefined) {
-          const parsedLedger = Number.parseFloat(String(ledgerRaw).replace(",", "."));
-          if (Number.isNaN(parsedLedger)) {
-            warnings.push(`Saldo final inválido informado para a conta ${accountId}.`);
+            newTransactions.push(bankTx);
           } else {
-            ledgerClosingBalance = round2(parsedLedger);
+            dedupedCount += 1;
           }
-        } else {
-          warnings.push(`Saldo final (LEDGERBAL) ausente na conta ${accountId}.`);
+          
+          net = round2(net + amount);
+          if (amount > 0) totalCredits = round2(totalCredits + amount);
+          else totalDebits = round2(totalDebits + Math.abs(amount));
         }
-
-        let openingBalance: number | undefined;
-        const openingRaw = (statement.BANKTRANLIST as any)?.BALAMT;
-        if (openingRaw !== undefined) {
-          const parsedOpening = Number.parseFloat(String(openingRaw).replace(",", "."));
-          if (!Number.isNaN(parsedOpening)) {
-            openingBalance = round2(parsedOpening);
-          }
-        }
-
-        if (openingBalance === undefined && ledgerClosingBalance !== undefined) {
-          openingBalance = round2(ledgerClosingBalance - net);
-        }
-
-        const computedClosingBalance =
-          openingBalance !== undefined ? round2(openingBalance + net) : undefined;
-
-        let divergence: number | undefined;
-        if (ledgerClosingBalance !== undefined && computedClosingBalance !== undefined) {
-          divergence = round2(computedClosingBalance - ledgerClosingBalance);
-          if (Math.abs(divergence) > 0.01) {
-            warnings.push(
-              `Divergência de R$ ${Math.abs(divergence).toFixed(2)} no saldo final da conta ${accountId}.`
-            );
-          }
-        }
-
+        
+        const computedClosingBalance = round2(openingBalance + net);
+        const divergence = ledgerClosingBalance !== undefined
+          ? round2(ledgerClosingBalance - computedClosingBalance)
+          : undefined;
+        
         accountSummaries.push({
           accountId,
-          currency: statement.CURDEF,
+          currency,
           startDate,
           endDate,
           openingBalance,
           ledgerClosingBalance,
           computedClosingBalance,
-          totalCredits: round2(totalCredits),
-          totalDebits: round2(totalDebits),
+          totalCredits,
+          totalDebits,
           net,
           divergence,
         });
+        
+        if (divergence !== undefined && Math.abs(divergence) > 0.01) {
+          warnings.push(
+            `Divergência de R$ ${divergence.toFixed(2)} detectada na conta ${accountId}. ` +
+            `Saldo de fechamento OFX: R$ ${ledgerClosingBalance?.toFixed(2)}, ` +
+            `Calculado: R$ ${computedClosingBalance.toFixed(2)}`
+          );
+        }
       }
 
-      if (totalTransactionsInFile === 0) {
-        throw new Error("Nenhuma transação encontrada no arquivo OFX enviado.");
-      }
-
-      ingestionLogger.info("Processamento OFX concluído", {
-        event: "pj.ofx.import.summary",
-        context: {
-          totalTransactionsInFile,
-          newTransactions: newTransactions.length,
-          deduped: dedupedCount,
-          warnings: warnings.length,
-        },
-      });
-
-      errorStage = "categorize";
+      // Aplicar categorização prospectiva (auto-categorizar com regras existentes)
       const rules = await storage.getCategorizationRules(clientId);
       const categorizedCount = applyCategorizationRules(newTransactions, rules);
 
-      if (newTransactions.length > 0) {
-        await storage.addBankTransactions(clientId, newTransactions);
-      }
+      // Salvar transações (já com categorização aplicada)
+      await storage.addBankTransactions(clientId, newTransactions);
 
-      errorStage = "persist";
+      // Registrar importação
       await storage.addOFXImport({
         fileHash,
         clientId,
@@ -800,15 +689,6 @@ export function registerPJRoutes(app: Express) {
         },
       });
 
-      ingestionLogger.info("Reconciliação OFX consolidada", {
-        event: "pj.ofx.import.reconciliation",
-        context: {
-          accounts: accountSummaries.length,
-          warnings: warnings.length,
-        },
-      });
-
-      errorStage = "audit";
       await recordAuditEvent({
         user: req.authUser!,
         eventType: "pj.ofx.import",
@@ -817,45 +697,21 @@ export function registerPJRoutes(app: Express) {
           clientId,
           imported: newTransactions.length,
           categorized: categorizedCount,
-          accounts: accountSummaries.length,
-          duplicateFile: Boolean(existingImport),
-          warnings: warnings.length,
-          deduped: dedupedCount,
+          accounts: accountsArray.length,
         },
       });
 
-      errorStage = "response";
-      const durationMs = timer ? recordOfxIngestionDuration(timer, "success") : 0;
-      recordOfxImportOutcome({
-        clientId,
-        importId,
-        success: true,
-        durationMs,
-        warnings: warnings.length,
-      });
-
-      ingestionLogger.info("Importação OFX concluída", {
-        event: "pj.ofx.import.success",
-        context: {
-          imported: newTransactions.length,
-          autoCategorized: categorizedCount,
-          deduped: dedupedCount,
-          warnings: warnings.length,
-          alreadyImported: Boolean(existingImport),
-        },
-      });
-
-      return res.json({
+      res.json({
         success: true,
         imported: newTransactions.length,
         total: totalTransactionsInFile,
         deduped: dedupedCount,
-        autoCategorized: categorizedCount,
-        alreadyImported: Boolean(existingImport),
+        alreadyImported: false,
         reconciliation: {
           accounts: accountSummaries,
           warnings,
         },
+        autoCategorized: categorizedCount,
       });
     } catch (error: any) {
       if (clientId) {
@@ -1310,10 +1166,7 @@ export function registerPJRoutes(app: Express) {
 
       res.json(insights);
     } catch (error: any) {
-      getLogger(req).error("Erro ao buscar monthly-insights PJ", {
-        event: "pj.dashboard.monthly-insights",
-        context: { clientId: req.query?.clientId },
-      }, error);
+      console.error("Erro ao buscar monthly-insights PJ:", error);
       res.status(500).json({ error: error.message || "Erro ao buscar monthly-insights" });
     }
   });
@@ -1340,10 +1193,7 @@ export function registerPJRoutes(app: Express) {
 
       res.json(breakdown);
     } catch (error: any) {
-      getLogger(req).error("Erro ao buscar costs-breakdown PJ", {
-        event: "pj.dashboard.costs-breakdown",
-        context: { clientId: req.query?.clientId },
-      }, error);
+      console.error("Erro ao buscar costs-breakdown PJ:", error);
       res.status(500).json({ error: error.message || "Erro ao buscar costs-breakdown" });
     }
   });

@@ -55,7 +55,6 @@ export function scopeRequired(requiredScope: "PF" | "PJ") {
       // Anexar informações do cliente na request para uso posterior
       req.clientContext = client;
       req.authUser = user;
-      updateRequestLoggerContext(req, { clientId: client.clientId, userId: user.userId });
 
       next();
     } catch (error) {
@@ -113,7 +112,6 @@ export async function validateClientAccess(req: Request, res: Response, next: Ne
     // Anexar informações na request
     req.clientContext = client;
     req.authUser = user;
-    updateRequestLoggerContext(req, { clientId: client.clientId, userId: user.userId });
 
     next();
   } catch (error) {
