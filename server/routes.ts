@@ -264,6 +264,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           if (clientUser.managerId !== client.masterId) {
             updates.managerId = client.masterId ?? undefined;
+            updates.consultantId = client.consultantId;
+          }
+          if (clientUser.managerId !== client.masterId) {
+            updates.managerId = client.masterId;
           }
           return { clientUser, updates };
         })
