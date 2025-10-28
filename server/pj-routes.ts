@@ -561,34 +561,10 @@ export function registerPJRoutes(app: Express) {
             };
 
             newTransactions.push(bankTx);
+          } else {
+            dedupedCount += 1;
           }
           net = round2(net + amount);
-
-          if (adjusted && parsedTx.TRNTYPE) {
-            warnings.push(
-              `Sinal ajustado automaticamente para ${parsedTx.TRNTYPE} em ${date} (${desc}).`
-            );
-          }
-
-          const candidate = { date, amount, desc, fitid };
-          if (isDuplicateTransaction(existingBankTxs, newTransactions, candidate)) {
-            dedupedCount += 1;
-            continue;
-          }
-
-          const bankTx: BankTransaction = {
-            bankTxId: uuidv4(),
-            date,
-            desc,
-            amount,
-            accountId,
-            fitid,
-            sourceHash: fileHash,
-            linkedLegs: [],
-            reconciled: false,
-          };
-
-          newTransactions.push(bankTx);
         }
       }
 
