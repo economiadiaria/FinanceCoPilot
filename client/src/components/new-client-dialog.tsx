@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +20,17 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Client } from "@shared/schema";
+type DirectoryUser = {
+  userId: string;
+  name: string;
+  email: string;
+  role: "master" | "consultor" | "cliente";
+};
+
+interface UsersDirectoryResponse {
+  consultants: DirectoryUser[];
+  masters: DirectoryUser[];
+}
 
 interface NewClientDialogProps {
   open: boolean;
@@ -35,14 +45,29 @@ export function NewClientDialog({ open, onOpenChange, onClientCreated }: NewClie
     name: "",
     type: "PF" as "PF" | "PJ" | "BOTH",
     email: "",
+    consultantId: "",
+    masterId: "",
+  });
+
+  const { data: directory, isLoading: directoryLoading } = useQuery<UsersDirectoryResponse>({
+    queryKey: ["/api/users/directory"],
+    enabled: open,
   });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      return apiRequest("POST", "/api/client/upsert", data);
+      return apiRequest("POST", "/api/client/upsert", {
+        clientId: data.clientId,
+        name: data.name,
+        type: data.type,
+        email: data.email,
+        consultantId: data.consultantId ? data.consultantId : null,
+        masterId: data.masterId ? data.masterId : null,
+      });
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
       toast({
         title: "Cliente criado",
         description: "Novo cliente cadastrado com sucesso!",
@@ -54,6 +79,8 @@ export function NewClientDialog({ open, onOpenChange, onClientCreated }: NewClie
         name: "",
         type: "PF",
         email: "",
+        consultantId: "",
+        masterId: "",
       });
     },
     onError: (error: any) => {
@@ -140,6 +167,56 @@ export function NewClientDialog({ open, onOpenChange, onClientCreated }: NewClie
                 data-testid="input-client-email"
                 required
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="consultantId">Consultor responsável</Label>
+              <Select
+                value={formData.consultantId || "none"}
+                onValueChange={(value: string) =>
+                  setFormData({
+                    ...formData,
+                    consultantId: value === "none" ? "" : value,
+                  })
+                }
+                disabled={directoryLoading || (directory?.consultants?.length ?? 0) === 0}
+              >
+                <SelectTrigger id="consultantId" data-testid="select-consultant">
+                  <SelectValue placeholder="Selecione um consultor" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Sem consultor atribuído</SelectItem>
+                  {(directory?.consultants ?? []).map((consultant) => (
+                    <SelectItem key={consultant.userId} value={consultant.userId}>
+                      {consultant.name} ({consultant.email})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="masterId">Usuário master responsável</Label>
+              <Select
+                value={formData.masterId || "none"}
+                onValueChange={(value: string) =>
+                  setFormData({
+                    ...formData,
+                    masterId: value === "none" ? "" : value,
+                  })
+                }
+                disabled={directoryLoading || (directory?.masters?.length ?? 0) === 0}
+              >
+                <SelectTrigger id="masterId" data-testid="select-master">
+                  <SelectValue placeholder="Selecione um usuário master" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Sem master atribuído</SelectItem>
+                  {(directory?.masters ?? []).map((master) => (
+                    <SelectItem key={master.userId} value={master.userId}>
+                      {master.name} ({master.email})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter>

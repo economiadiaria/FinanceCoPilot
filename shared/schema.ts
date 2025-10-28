@@ -8,6 +8,8 @@ export const clientSchema = z.object({
   name: z.string().min(1, "Nome é obrigatório"),
   type: z.enum(clientTypes),
   email: z.string().min(1, "Email é obrigatório").email("Email inválido"),
+  consultantId: z.string().min(1, "ID do consultor é obrigatório").optional().nullable(),
+  masterId: z.string().min(1, "ID do usuário master é obrigatório").optional().nullable(),
 });
 
 export type Client = z.infer<typeof clientSchema>;
@@ -150,7 +152,7 @@ export const summarySchema = z.object({
 export type Summary = z.infer<typeof summarySchema>;
 
 // User types and authentication
-export const userRoles = ["consultor", "cliente"] as const;
+export const userRoles = ["master", "consultor", "cliente"] as const;
 
 export const userSchema = z.object({
   userId: z.string().min(1, "ID do usuário é obrigatório"),
@@ -159,9 +161,16 @@ export const userSchema = z.object({
   role: z.enum(userRoles),
   name: z.string().min(1, "Nome é obrigatório"),
   clientIds: z.array(z.string()).default([]),
+  managedConsultantIds: z.array(z.string()).default([]),
+  managedClientIds: z.array(z.string()).default([]),
+  managerId: z.string().optional(),
+  consultantId: z.string().optional(),
 });
 
 export type User = z.infer<typeof userSchema>;
+
+export const userProfileSchema = userSchema.omit({ passwordHash: true });
+export type UserProfile = z.infer<typeof userProfileSchema>;
 
 export const registerUserSchema = userSchema.omit({ userId: true, passwordHash: true }).extend({
   password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres"),

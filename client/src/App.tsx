@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Switch, Route } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
@@ -12,7 +12,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ClientSelector } from "@/components/client-selector";
 import { NewClientDialog } from "@/components/new-client-dialog";
 import { UserMenu } from "@/components/user-menu";
-import { AuthProvider } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Dashboard from "@/pages/dashboard";
 import Transacoes from "@/pages/transacoes";
@@ -25,7 +25,9 @@ import DashboardPJ from "@/pages/pj/dashboard-pj";
 import VendasPJ from "@/pages/pj/vendas-pj";
 import ConciliacaoPJ from "@/pages/pj/conciliacao-pj";
 import RegrasPJ from "@/pages/pj/regras-pj";
+import RelatoriosPJ from "@/pages/pj/relatorios-pj";
 import type { Client } from "@shared/schema";
+import AdminAssociacoes from "@/pages/admin/associacoes";
 
 function Router() {
   return (
@@ -43,12 +45,37 @@ function Router() {
 function AuthenticatedApp() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [newClientDialogOpen, setNewClientDialogOpen] = useState(false);
+  const { user } = useAuth();
 
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
   });
 
-  const currentClient = clients.find((c) => c.clientId === selectedClient);
+  const filteredClients = useMemo(() => {
+    if (!user) {
+      return [] as Client[];
+    }
+
+    if (user.role === "master") {
+      return clients;
+    }
+
+    const allowedIds = new Set(user.clientIds ?? []);
+    return clients.filter((client) => allowedIds.has(client.clientId));
+  }, [clients, user]);
+
+  useEffect(() => {
+    if (!filteredClients.length) {
+      setSelectedClient(null);
+      return;
+    }
+
+    if (!selectedClient || !filteredClients.some((client) => client.clientId === selectedClient)) {
+      setSelectedClient(filteredClients[0].clientId);
+    }
+  }, [filteredClients, selectedClient]);
+
+  const currentClient = filteredClients.find((c) => c.clientId === selectedClient) ?? null;
 
   return (
     <div className="flex h-screen w-full">
@@ -63,10 +90,10 @@ function AuthenticatedApp() {
           </div>
           <div className="flex items-center gap-4">
             <ClientSelector
-              clients={clients}
+              clients={filteredClients}
               selectedClient={selectedClient}
               onSelectClient={setSelectedClient}
-              onNewClient={() => setNewClientDialogOpen(true)}
+              onNewClient={user?.role === "master" ? () => setNewClientDialogOpen(true) : undefined}
             />
             <ThemeToggle />
             <UserMenu />
@@ -108,15 +135,23 @@ function AuthenticatedApp() {
               <Route path="/pj/regras">
                 <RegrasPJ clientId={selectedClient} clientType={currentClient?.type || null} />
               </Route>
+              <Route path="/pj/relatorios">
+                <RelatoriosPJ clientId={selectedClient} clientType={currentClient?.type || null} />
+              </Route>
+              <Route path="/admin/associacoes">
+                <AdminAssociacoes />
+              </Route>
             </Switch>
           </div>
         </main>
       </div>
-      <NewClientDialog
-        open={newClientDialogOpen}
-        onOpenChange={setNewClientDialogOpen}
-        onClientCreated={setSelectedClient}
-      />
+      {user?.role === "master" && (
+        <NewClientDialog
+          open={newClientDialogOpen}
+          onOpenChange={setNewClientDialogOpen}
+          onClientCreated={setSelectedClient}
+        />
+      )}
     </div>
   );
 }

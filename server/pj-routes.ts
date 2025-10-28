@@ -8,12 +8,18 @@ import Ofx from "ofx-js";
 import {
   type Sale,
   type SaleLeg,
-  type SettlementParcel,
-  type PaymentMethod,
   type BankTransaction,
   type CategorizationRule,
 } from "@shared/schema";
-import { addDays, addMonths, formatBR, toISOFromBR, inPeriod } from "@shared/utils";
+import { formatBR, toISOFromBR, isBetweenDates } from "@shared/utils";
+import {
+  applyCategorizationRules,
+  calculateSettlementPlan,
+  extractPattern,
+  isDuplicateTransaction,
+  matchesPattern,
+} from "./pj-ingestion-helpers";
+import { buildCostBreakdown, buildMonthlyInsights } from "./pj-dashboard-helpers";
 import { z } from "zod";
 
 // Configure multer
@@ -21,51 +27,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
-
-/**
- * Calcula o plano de liquidação (settlementPlan) baseado no método de pagamento
- */
-function calculateSettlementPlan(
-  saleDate: string, // DD/MM/YYYY
-  method: PaymentMethod | undefined,
-  installments: number,
-  netAmount: number
-): SettlementParcel[] {
-  const plan: SettlementParcel[] = [];
-  
-  // Padrão se não houver configuração
-  const liquidacao = method?.liquidacao || "D+1";
-  
-  if (liquidacao.startsWith("D+") && !liquidacao.includes("por_parcela")) {
-    // D+X: parcela única
-    const days = parseInt(liquidacao.substring(2));
-    plan.push({
-      n: 1,
-      due: addDays(saleDate, days),
-      expected: netAmount,
-    });
-  } else if (liquidacao.includes("por_parcela")) {
-    // D+30_por_parcela: múltiplas parcelas a cada 30 dias (primeira parcela em +30 dias)
-    const amountPerInstallment = netAmount / installments;
-    
-    for (let i = 0; i < installments; i++) {
-      plan.push({
-        n: i + 1,
-        due: addMonths(saleDate, i + 1), // +1 para começar 30 dias após a venda
-        expected: amountPerInstallment,
-      });
-    }
-  } else {
-    // Fallback: D+1
-    plan.push({
-      n: 1,
-      due: addDays(saleDate, 1),
-      expected: netAmount,
-    });
-  }
-  
-  return plan;
-}
 
 export function registerPJRoutes(app: Express) {
   // ===== VENDAS PJ =====
@@ -516,12 +477,9 @@ export function registerPJRoutes(app: Express) {
           const fitid = tx.FITID;
           
           // Dedup por fitid ou (date + amount + desc)
-          const dupKey = fitid || `${date}-${amount}-${desc}`;
-          const isDup = existingBankTxs.some(t => 
-            (t.fitid && t.fitid === fitid) ||
-            (t.date === date && t.amount === amount && t.desc === desc)
-          );
-          
+          const candidate = { date, amount, desc, fitid };
+          const isDup = isDuplicateTransaction(existingBankTxs, newTransactions, candidate);
+
           if (!isDup) {
             const bankTx: BankTransaction = {
               bankTxId: uuidv4(),
@@ -534,36 +492,19 @@ export function registerPJRoutes(app: Express) {
               linkedLegs: [],
               reconciled: false,
             };
-            
+
             newTransactions.push(bankTx);
           }
         }
       }
-      
+
       // Aplicar categorização prospectiva (auto-categorizar com regras existentes)
       const rules = await storage.getCategorizationRules(clientId);
-      let categorizedCount = 0;
-      
-      if (rules.length > 0) {
-        for (const tx of newTransactions) {
-          for (const rule of rules) {
-            if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
-              // Usar categorizedAs conforme o schema
-              tx.categorizedAs = {
-                group: rule.action.category,
-                subcategory: rule.action.subcategory,
-                auto: true,
-              };
-              categorizedCount++;
-              break; // Primeira regra que match
-            }
-          }
-        }
-      }
-      
+      const categorizedCount = applyCategorizationRules(newTransactions, rules);
+
       // Salvar transações (já com categorização aplicada)
       await storage.addBankTransactions(clientId, newTransactions);
-      
+
       // Registrar importação
       await storage.addOFXImport({
         fileHash,
@@ -576,6 +517,7 @@ export function registerPJRoutes(app: Express) {
         success: true,
         imported: newTransactions.length,
         total: newTransactions.length,
+        autoCategorized: categorizedCount,
       });
     } catch (error: any) {
       console.error("Erro ao importar OFX PJ:", error);
@@ -781,13 +723,27 @@ export function registerPJRoutes(app: Express) {
       const data = schema.parse(req.body);
       
       // Criar regra
+      const createdAt = new Date().toISOString();
       const rule: CategorizationRule = {
         ruleId: uuidv4(),
         pattern: data.pattern,
         matchType: data.matchType,
+        action: {
+          type: "categorize_as_expense",
+          category: data.dfcCategory as CategorizationRule["action"]["category"],
+          subcategory: data.dfcItem,
+          autoConfirm: false,
+        },
+        confidence: 100,
+        learnedFrom: {
+          bankTxId: "manual-rule",
+          date: formatBR(createdAt.split("T")[0]),
+        },
+        appliedCount: 0,
+        enabled: true,
         dfcCategory: data.dfcCategory,
         dfcItem: data.dfcItem,
-        createdAt: new Date().toISOString(),
+        createdAt,
       };
       
       // Salvar regra
@@ -864,19 +820,35 @@ export function registerPJRoutes(app: Express) {
         const pattern = extractPattern(tx.desc, data.matchType);
         
         // Criar nova regra
-        rule = {
+        const createdAt = new Date().toISOString();
+        const newRule: CategorizationRule = {
           ruleId: uuidv4(),
           pattern,
           matchType: data.matchType,
+          action: {
+            type: "categorize_as_expense",
+            category: data.dfcCategory as CategorizationRule["action"]["category"],
+            subcategory: data.dfcItem,
+            autoConfirm: false,
+          },
+          confidence: 90,
+          learnedFrom: {
+            bankTxId: tx.bankTxId,
+            date: tx.date,
+          },
+          appliedCount: 1,
+          enabled: true,
           dfcCategory: data.dfcCategory,
           dfcItem: data.dfcItem,
-          createdAt: new Date().toISOString(),
+          createdAt,
         };
-        
+
+        rule = newRule;
+
         // Salvar regra
         const rules = await storage.getCategorizationRules(data.clientId);
-        await storage.setCategorizationRules(data.clientId, [...rules, rule]);
-        
+        await storage.setCategorizationRules(data.clientId, [...rules, newRule]);
+
         // Aplicação prospectiva (categorizar outras transações não categorizadas)
         for (const otherTx of bankTxs) {
           if (
@@ -887,14 +859,14 @@ export function registerPJRoutes(app: Express) {
             otherTx.dfcCategory = data.dfcCategory;
             otherTx.dfcItem = data.dfcItem;
             otherTx.categorizedBy = "rule";
-            otherTx.categorizedRuleId = rule.ruleId;
+            otherTx.categorizedRuleId = newRule.ruleId;
             prospectiveCount++;
           }
         }
-        
+
         await storage.setBankTransactions(data.clientId, bankTxs);
       }
-      
+
       res.json({
         success: true,
         transaction: tx,
@@ -909,6 +881,60 @@ export function registerPJRoutes(app: Express) {
   
   // ===== DASHBOARD BACKEND PJ =====
   
+  /**
+   * GET /api/pj/dashboard/monthly-insights
+   * Retorna KPIs mensais consolidados com base nas vendas e transações importadas
+   */
+  app.get("/api/pj/dashboard/monthly-insights", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = (req.query.month as string) || undefined;
+
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+
+      const [bankTxs, sales] = await Promise.all([
+        storage.getBankTransactions(clientId),
+        storage.getSales(clientId),
+      ]);
+
+      const insights = buildMonthlyInsights(bankTxs, sales, month);
+
+      res.json(insights);
+    } catch (error: any) {
+      console.error("Erro ao buscar monthly-insights PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar monthly-insights" });
+    }
+  });
+
+  /**
+   * GET /api/pj/dashboard/costs-breakdown
+   * Retorna a visão consolidada do DFC e custos por categoria
+   */
+  app.get("/api/pj/dashboard/costs-breakdown", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = (req.query.month as string) || undefined;
+
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+
+      const [bankTxs, sales] = await Promise.all([
+        storage.getBankTransactions(clientId),
+        storage.getSales(clientId),
+      ]);
+
+      const breakdown = buildCostBreakdown(bankTxs, sales, month);
+
+      res.json(breakdown);
+    } catch (error: any) {
+      console.error("Erro ao buscar costs-breakdown PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar costs-breakdown" });
+    }
+  });
+
   /**
    * GET /api/pj/dashboard/summary
    * KPIs do mês: receita, despesas, saldo, contas a receber
@@ -929,7 +955,7 @@ export function registerPJRoutes(app: Express) {
       
       // Buscar transações bancárias do mês
       const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => inPeriod(tx.date, startDate, endDate));
+      const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
       
       const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
       const despesas = Math.abs(txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0));
@@ -941,7 +967,7 @@ export function registerPJRoutes(app: Express) {
       
       for (const leg of legs) {
         for (const parcel of leg.settlementPlan) {
-          if (!parcel.receivedTxId && inPeriod(parcel.due, startDate, endDate)) {
+          if (!parcel.receivedTxId && isBetweenDates(parcel.due, startDate, endDate)) {
             contasReceber += parcel.expected;
           }
         }
@@ -1033,9 +1059,9 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => 
-        tx.amount < 0 && 
-        inPeriod(tx.date, startDate, endDate)
+      const txsInMonth = bankTxs.filter(tx =>
+        tx.amount < 0 &&
+        isBetweenDates(tx.date, startDate, endDate)
       );
       
       // Agrupar por dfcItem
@@ -1085,7 +1111,7 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const sales = await storage.getSales(clientId);
-      const salesInMonth = sales.filter(s => inPeriod(s.date, startDate, endDate));
+      const salesInMonth = sales.filter(s => isBetweenDates(s.date, startDate, endDate));
       
       // Agrupar por canal
       const grouped = new Map<string, number>();
@@ -1126,7 +1152,7 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const sales = await storage.getSales(clientId);
-      const salesInMonth = sales.filter(s => inPeriod(s.date, startDate, endDate));
+      const salesInMonth = sales.filter(s => isBetweenDates(s.date, startDate, endDate));
       
       const totalSales = salesInMonth.length;
       const totalRevenue = salesInMonth.reduce((sum, s) => sum + s.grossAmount, 0);
@@ -1136,10 +1162,15 @@ export function registerPJRoutes(app: Express) {
       const customerMap = new Map<string, number>();
       
       for (const sale of salesInMonth) {
-        const customer = sale.customer || "Cliente desconhecido";
-        customerMap.set(customer, (customerMap.get(customer) || 0) + sale.grossAmount);
+        const customerInfo = sale.customer;
+        const customerKey =
+          customerInfo?.name ||
+          customerInfo?.email ||
+          customerInfo?.doc ||
+          "Cliente desconhecido";
+        customerMap.set(customerKey, (customerMap.get(customerKey) || 0) + sale.grossAmount);
       }
-      
+
       const topClientes = Array.from(customerMap.entries())
         .map(([customer, amount]) => ({ customer, amount }))
         .sort((a, b) => b.amount - a.amount)
@@ -1176,7 +1207,7 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => inPeriod(tx.date, startDate, endDate));
+      const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
       
       // Agrupar por categoria DFC
       const categories = new Map<string, { inflows: number; outflows: number }>();
@@ -1215,40 +1246,3 @@ export function registerPJRoutes(app: Express) {
   });
 }
 
-/**
- * Helper: Verificar se descrição match com padrão
- */
-function matchesPattern(desc: string, pattern: string, matchType: string): boolean {
-  const descLower = desc.toLowerCase();
-  const patternLower = pattern.toLowerCase();
-  
-  switch (matchType) {
-    case "exact":
-      return descLower === patternLower;
-    case "contains":
-      return descLower.includes(patternLower);
-    case "startsWith":
-      return descLower.startsWith(patternLower);
-    default:
-      return false;
-  }
-}
-
-/**
- * Helper: Extrair padrão de uma descrição
- */
-function extractPattern(desc: string, matchType: string): string {
-  switch (matchType) {
-    case "exact":
-      return desc;
-    case "contains":
-      // Extrai primeira palavra significativa (>3 caracteres)
-      const words = desc.split(/\s+/).filter(w => w.length > 3);
-      return words[0] || desc;
-    case "startsWith":
-      // Extrai primeiros 10 caracteres
-      return desc.substring(0, 10);
-    default:
-      return desc;
-  }
-}

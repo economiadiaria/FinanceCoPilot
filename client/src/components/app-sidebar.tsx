@@ -1,4 +1,4 @@
-import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2, BarChart3, CreditCard, Brain } from "lucide-react";
+import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2, BarChart3, CreditCard, Brain, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -10,6 +10,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { useAuth } from "@/contexts/AuthContext";
 
 const menuItems = [
   {
@@ -61,14 +62,28 @@ const pjMenuItems = [
     icon: CreditCard,
   },
   {
+    title: "Relatórios PJ",
+    url: "/pj/relatorios",
+    icon: FileBarChart,
+  },
+  {
     title: "Regras",
     url: "/pj/regras",
     icon: Brain,
   },
 ];
 
+const adminMenuItems = [
+  {
+    title: "Associações",
+    url: "/admin/associacoes",
+    icon: Users,
+  },
+];
+
 export function AppSidebar() {
   const [location] = useLocation();
+  const { user } = useAuth();
 
   return (
     <Sidebar data-testid="sidebar-main">
@@ -120,6 +135,32 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {user?.role === "master" && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-xs uppercase tracking-wide">
+              Administração
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {adminMenuItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === item.url}
+                      data-testid={`link-admin-${item.title.toLowerCase()}`}
+                    >
+                      <Link href={item.url}>
+                        <item.icon className="h-5 w-5" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
     </Sidebar>
   );
