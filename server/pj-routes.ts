@@ -125,8 +125,9 @@ function buildAccountAuditMetadata(
 ): Array<{ bankAccountId: string; accountNumberMask: string }> {
   const seen = new Set<string>();
   const entries: Array<{ bankAccountId: string; accountNumberMask: string }> = [];
+  const normalizedAccountIds = Array.from(accountIds);
 
-  for (const maybeId of accountIds) {
+  for (const maybeId of normalizedAccountIds) {
     if (!maybeId) {
       continue;
     }
@@ -394,22 +395,26 @@ export function registerPJRoutes(app: Express) {
    * Formato: date;invoiceNumber;customer_name;customer_doc;channel;item;qty;unit_price;discount;payment_method;gateway;installments;gross_leg;fees_leg;status;comment
    */
   app.post("/api/pj/sales/importCsv", scopeRequired("PJ"), upload.single("csv"), async (req, res) => {
+    let currentClientId: string | null = null;
     try {
       if (!req.file) {
         return res.status(400).json({ error: "Arquivo CSV não enviado" });
       }
-      
+
       const candidateClientId = (req.body?.clientId ?? req.query?.clientId) as
         | string
         | string[]
         | undefined;
-      clientId = Array.isArray(candidateClientId)
+      const resolvedClientId = Array.isArray(candidateClientId)
         ? candidateClientId[0]
         : candidateClientId;
 
-      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
+      if (typeof resolvedClientId !== "string" || resolvedClientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
+
+      const clientId = resolvedClientId.trim();
+      currentClientId = clientId;
 
       // Parse CSV
       const csvContent = req.file.buffer.toString("utf-8");
@@ -785,7 +790,7 @@ export function registerPJRoutes(app: Express) {
     const activeTimers = new Map<string, ReturnType<typeof startOfxIngestionTimer>>();
     let warnings: string[] = [];
     let errorStage = "initial";
-    let clientId: string | undefined;
+    let currentClientId: string | null = null;
     let ingestionStartedAt: bigint | null = null;
 
     try {
@@ -797,13 +802,16 @@ export function registerPJRoutes(app: Express) {
         | string
         | string[]
         | undefined;
-      clientId = Array.isArray(candidateClientId)
+      const resolvedClientId = Array.isArray(candidateClientId)
         ? candidateClientId[0]
         : candidateClientId;
 
-      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
+      if (typeof resolvedClientId !== "string" || resolvedClientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
+
+      const clientId = resolvedClientId.trim();
+      currentClientId = clientId;
 
       ingestionStartedAt = process.hrtime.bigint();
 
@@ -1230,7 +1238,8 @@ export function registerPJRoutes(app: Express) {
         },
       });
     } catch (error: any) {
-      if (clientId) {
+      if (currentClientId) {
+        const safeClientId = currentClientId;
         const hrNow = process.hrtime.bigint();
         const timersSnapshot = Array.from(activeTimers.values());
         if (activeTimers.size > 0) {
@@ -1240,14 +1249,14 @@ export function registerPJRoutes(app: Express) {
           });
           activeTimers.clear();
         } else {
-          incrementOfxError(clientId, UNKNOWN_BANK_LABEL, errorStage);
+          incrementOfxError(safeClientId, UNKNOWN_BANK_LABEL, errorStage);
           const elapsedSeconds =
             ingestionStartedAt !== null
               ? Number(hrNow - ingestionStartedAt) / 1_000_000_000
               : 0;
           ofxIngestionDuration.observe(
             {
-              clientId,
+              clientId: safeClientId,
               bankAccountId: UNKNOWN_BANK_LABEL,
               bankName: UNKNOWN_BANK_LABEL,
               status: "error",
@@ -1262,7 +1271,7 @@ export function registerPJRoutes(app: Express) {
         if (timersSnapshot.length > 0) {
           timersSnapshot.forEach(timer => {
             recordOfxImportOutcome({
-              clientId,
+              clientId: safeClientId,
               importId,
               bankAccountId: timer.bankAccountId,
               bankName: timer.bankName,
@@ -1274,7 +1283,7 @@ export function registerPJRoutes(app: Express) {
           });
         } else {
           recordOfxImportOutcome({
-            clientId,
+            clientId: safeClientId,
             importId,
             bankAccountId: UNKNOWN_BANK_LABEL,
             bankName: UNKNOWN_BANK_LABEL,
@@ -1283,7 +1292,7 @@ export function registerPJRoutes(app: Express) {
             warnings: warnings.length,
             error,
           });
-        }
+      }
       }
 
       ingestionLogger.error("Erro ao importar OFX PJ", {

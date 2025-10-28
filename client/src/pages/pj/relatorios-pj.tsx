@@ -125,6 +125,7 @@ interface CostBreakdownResponse {
 interface RelatoriosPJProps {
   clientId: string | null;
   clientType: string | null;
+  bankAccountId: string | null;
 }
 
 const ledgerLabels: Record<string, string> = {
@@ -154,7 +155,7 @@ function formatNumber(value: number) {
   return value.toLocaleString("pt-BR", { minimumFractionDigits: 0 });
 }
 
-export default function RelatoriosPJ({ clientId, clientType }: RelatoriosPJProps) {
+export default function RelatoriosPJ({ clientId, clientType, bankAccountId }: RelatoriosPJProps) {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const faturamentoChartRef = useRef<HTMLCanvasElement>(null);
   const faturamentoChartInstance = useRef<any>(null);
@@ -166,14 +167,24 @@ export default function RelatoriosPJ({ clientId, clientType }: RelatoriosPJProps
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
   const { data: insights, isLoading: loadingInsights } = useQuery<MonthlyInsightsResponse>({
-    queryKey: ["/api/pj/dashboard/monthly-insights", { clientId, month: selectedMonth ?? undefined }],
-    enabled: !!clientId && isPJClient,
+    queryKey: [
+      "/api/pj/dashboard/monthly-insights",
+      { clientId, month: selectedMonth ?? undefined, bankAccountId },
+    ],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const { data: costBreakdown } = useQuery<CostBreakdownResponse>({
-    queryKey: ["/api/pj/dashboard/costs-breakdown", { clientId, month: selectedMonth ?? undefined }],
-    enabled: !!clientId && isPJClient,
+    queryKey: [
+      "/api/pj/dashboard/costs-breakdown",
+      { clientId, month: selectedMonth ?? undefined, bankAccountId },
+    ],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
+
+  useEffect(() => {
+    setSelectedMonth(null);
+  }, [bankAccountId]);
 
   useEffect(() => {
     if (!selectedMonth && insights?.month) {
@@ -341,8 +352,12 @@ export default function RelatoriosPJ({ clientId, clientType }: RelatoriosPJProps
 
   if (!clientId) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Selecione um cliente PJ para visualizar relatórios</p>
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <AlertCircle className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">
+          Selecione um cliente PJ para acessar os relatórios
+        </h1>
+        <p className="text-muted-foreground">Escolha um cliente com acesso PJ para continuar.</p>
       </div>
     );
   }
@@ -351,8 +366,24 @@ export default function RelatoriosPJ({ clientId, clientType }: RelatoriosPJProps
     return (
       <div className="flex flex-col items-center justify-center h-full space-y-4">
         <BarChart3 className="h-12 w-12 text-muted-foreground" />
-        <h1 className="text-2xl font-bold text-muted-foreground">Relatórios empresariais exclusivos para clientes PJ</h1>
-        <p className="text-muted-foreground">Altere o tipo do cliente para Pessoa Jurídica para acessar esta visão.</p>
+        <h1 className="text-2xl font-bold text-muted-foreground">
+          Relatórios empresariais exclusivos para clientes PJ
+        </h1>
+        <p className="text-muted-foreground">
+          Altere o tipo do cliente para Pessoa Jurídica para acessar esta visão.
+        </p>
+      </div>
+    );
+  }
+
+  if (!bankAccountId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <FileBarChart className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">Selecione uma conta PJ</h1>
+        <p className="text-muted-foreground">
+          Escolha uma conta bancária para visualizar os relatórios financeiros.
+        </p>
       </div>
     );
   }

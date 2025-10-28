@@ -577,6 +577,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     upload.single("ofx"),
     validateClientAccess,
     async (req, res) => {
+    let clientIdForLogging: string | null = null;
     try {
       const client = req.clientContext;
 
@@ -589,6 +590,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const clientId = client.clientId;
+      clientIdForLogging = clientId;
 
       if (!req.file) {
         return res.status(400).json({ error: "Nenhum arquivo OFX enviado." });
@@ -800,10 +802,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         duplicateAccounts: Array.from(duplicateAccounts),
       });
     } catch (error) {
-      getLogger(req).error("Erro ao importar OFX", {
-        event: "pf.ofx.import",
-          context: { clientId },
-      }, error);
+      getLogger(req).error(
+        "Erro ao importar OFX",
+        {
+          event: "pf.ofx.import",
+          context: { clientId: clientIdForLogging },
+        },
+        error
+      );
       res.status(400).json({
         error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX"
       });
