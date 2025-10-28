@@ -72,6 +72,46 @@ async function seedStorage(storage: IStorage) {
   await storage.createUser(foreignMaster);
   await storage.upsertClient(orgClient);
   await storage.upsertClient(foreignClient);
+
+  const now = new Date().toISOString();
+
+  await storage.upsertBankAccount({
+    id: "bank-acc-org-1",
+    orgId: orgClient.organizationId,
+    clientId: orgClient.clientId,
+    provider: "manual",
+    bankOrg: null,
+    bankFid: null,
+    bankName: "Banco Org 1",
+    bankCode: null,
+    branch: null,
+    accountNumberMask: "****1234",
+    accountType: "corrente",
+    currency: "BRL",
+    accountFingerprint: "org-1-account-1",
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await storage.upsertBankAccount({
+    id: "bank-acc-org-2",
+    orgId: foreignClient.organizationId,
+    clientId: foreignClient.clientId,
+    provider: "manual",
+    bankOrg: null,
+    bankFid: null,
+    bankName: "Banco Org 2",
+    bankCode: null,
+    branch: null,
+    accountNumberMask: "****5678",
+    accountType: "corrente",
+    currency: "BRL",
+    accountFingerprint: "org-2-account-1",
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 describe("RBAC and organization boundaries", () => {
@@ -118,7 +158,7 @@ describe("RBAC and organization boundaries", () => {
 
     const forbidden = await agent
       .get("/api/pj/bank/transactions")
-      .query({ clientId: "client-org-2" })
+      .query({ clientId: "client-org-2", bankAccountId: "bank-acc-org-2" })
       .expect(403);
 
     assert.match(forbidden.body.error, /outra organização/);

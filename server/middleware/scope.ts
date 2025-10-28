@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import { getLogger, updateRequestLoggerContext } from "../observability/logger";
+import type { BankAccount } from "@shared/schema";
 
 /**
  * Middleware de validação de scope (PF/PJ)
@@ -119,5 +120,67 @@ export async function validateClientAccess(req: Request, res: Response, next: Ne
       event: "scope.access",
     }, error);
     res.status(500).json({ error: "Erro ao validar permissões" });
+  }
+}
+
+export async function ensureBankAccountAccess(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const client = req.clientContext;
+    if (!client) {
+      return res.status(500).json({ error: "Contexto do cliente não carregado" });
+    }
+
+    const candidate =
+      req.query.bankAccountId ?? req.body?.bankAccountId ?? req.params?.bankAccountId;
+
+    const bankAccountId = Array.isArray(candidate) ? candidate[0] : candidate;
+
+    if (!bankAccountId || typeof bankAccountId !== "string") {
+      return res.status(400).json({ error: "bankAccountId é obrigatório" });
+    }
+
+    const orgId = client.organizationId;
+    const clientId = client.clientId;
+
+    const accountsForClient = await storage.getBankAccounts(orgId, clientId);
+    const matchedAccount = accountsForClient.find(
+      (account: BankAccount) => account.id === bankAccountId
+    );
+
+    if (matchedAccount) {
+      req.bankAccountContext = matchedAccount;
+      updateRequestLoggerContext(req, { bankAccountId: matchedAccount.id });
+      return next();
+    }
+
+    const accountsForOrg = await storage.getBankAccounts(orgId);
+    const accountInOrg = accountsForOrg.find(
+      (account: BankAccount) => account.id === bankAccountId
+    );
+
+    if (accountInOrg) {
+      return res.status(403).json({ error: "Conta bancária pertence a outro cliente" });
+    }
+
+    return res.status(404).json({ error: "Conta bancária não encontrada" });
+  } catch (error) {
+    getLogger(req).error(
+      "Erro ao validar acesso à conta bancária",
+      {
+        event: "scope.bankAccount",
+        context: {
+          bankAccountId:
+            (Array.isArray(req.query.bankAccountId)
+              ? req.query.bankAccountId[0]
+              : req.query.bankAccountId) ?? req.body?.bankAccountId ?? req.params?.bankAccountId,
+        },
+      },
+      error
+    );
+    return res.status(500).json({ error: "Erro ao validar conta bancária" });
   }
 }

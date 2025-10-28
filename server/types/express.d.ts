@@ -1,4 +1,4 @@
-import type { User, Client } from "@shared/schema";
+import type { User, Client, BankAccount } from "@shared/schema";
 import type { RequestLogger } from "../observability/logger";
 
 declare global {
@@ -6,6 +6,7 @@ declare global {
     interface Request {
       authUser?: User;
       clientContext?: Client;
+      bankAccountContext?: BankAccount;
       requestId?: string;
       logger?: RequestLogger;
     }
