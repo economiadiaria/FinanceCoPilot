@@ -1,0 +1,495 @@
+openapi: 3.1.0
+info:
+  title: PJ Banking API
+  version: 1.0.0
+  contact:
+    name: Finance CoPilot Engineering
+    email: engineering@financecopilot.local
+  description: |
+    OpenAPI specification describing the PJ banking endpoints exposed by the
+    Finance CoPilot backend. These routes power bank account discovery,
+    transaction browsing and financial summaries for PJ clients.
+servers:
+  - url: https://api.financecopilot.local
+    description: Example production-like environment
+  - url: http://localhost:3000
+    description: Local development server
+tags:
+  - name: PJ Banking
+    description: Endpoints that expose PJ-specific banking capabilities
+paths:
+  /api/pj/accounts:
+    get:
+      tags: [PJ Banking]
+      summary: List bank accounts available for the authenticated PJ client
+      description: |
+        Returns the bank accounts that are available to the authenticated PJ
+        client. Only a subset of bank account fields is exposed to avoid
+        leaking sensitive identifiers.
+      responses:
+        '200':
+          description: Bank accounts successfully retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while retrieving accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/pj/transactions:
+    get:
+      tags: [PJ Banking]
+      summary: List paginated bank transactions for a PJ client account
+      description: |
+        Returns the paginated bank transactions imported for a specific PJ
+        bank account. Transactions are filtered by the optional period and
+        sorted by posting date.
+      parameters:
+        - $ref: '#/components/parameters/ClientIdQuery'
+        - $ref: '#/components/parameters/BankAccountIdQuery'
+        - $ref: '#/components/parameters/FromDateQuery'
+        - $ref: '#/components/parameters/ToDateQuery'
+        - $ref: '#/components/parameters/PageQuery'
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/SortQuery'
+      responses:
+        '200':
+          description: Bank transactions successfully retrieved
+          headers:
+            ETag:
+              description: Strong ETag associated with the response payload
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BankTransactionListResponse'
+        '304':
+          description: Resource not modified since the provided ETag
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Authenticated user does not have access to the bank account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Requested bank account was not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while retrieving transactions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/pj/summary:
+    get:
+      tags: [PJ Banking]
+      summary: Retrieve aggregated cash-flow summary for a PJ client account
+      description: |
+        Calculates aggregated totals, KPIs and daily net flow series for a PJ
+        bank account inside the requested date range. When the date range is
+        omitted the backend automatically expands it to the available
+        transaction history.
+      parameters:
+        - $ref: '#/components/parameters/ClientIdQuery'
+        - $ref: '#/components/parameters/BankAccountIdQuery'
+        - $ref: '#/components/parameters/FromDateQuery'
+        - $ref: '#/components/parameters/ToDateQuery'
+      responses:
+        '200':
+          description: Summary successfully generated
+          headers:
+            ETag:
+              description: Strong ETag associated with the response payload
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryResponse'
+        '304':
+          description: Resource not modified since the provided ETag
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Authenticated user does not have access to the bank account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Requested bank account was not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while generating the summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  parameters:
+    ClientIdQuery:
+      name: clientId
+      in: query
+      required: true
+      description: Unique identifier for the PJ client
+      schema:
+        type: string
+        minLength: 1
+    BankAccountIdQuery:
+      name: bankAccountId
+      in: query
+      required: true
+      description: Unique identifier for the bank account that must be accessible by the authenticated user
+      schema:
+        type: string
+        minLength: 1
+    FromDateQuery:
+      name: from
+      in: query
+      required: false
+      description: Start of the reporting window in DD/MM/YYYY format
+      schema:
+        type: string
+        pattern: '^\d{2}/\d{2}/\d{4}$'
+    ToDateQuery:
+      name: to
+      in: query
+      required: false
+      description: End of the reporting window in DD/MM/YYYY format
+      schema:
+        type: string
+        pattern: '^\d{2}/\d{2}/\d{4}$'
+    PageQuery:
+      name: page
+      in: query
+      required: false
+      description: Results page to return (defaults to 1)
+      schema:
+        type: integer
+        minimum: 1
+    LimitQuery:
+      name: limit
+      in: query
+      required: false
+      description: Number of items per page (defaults to 50, capped at 200)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+    SortQuery:
+      name: sort
+      in: query
+      required: false
+      description: Sort direction for the transaction date
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: desc
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable description of the problem
+    BankAccountSummary:
+      type: object
+      required:
+        - id
+        - bankName
+        - accountNumberMask
+        - accountType
+        - currency
+        - isActive
+      properties:
+        id:
+          type: string
+          description: Bank account identifier
+        bankName:
+          type: string
+          description: Display name of the bank
+        accountNumberMask:
+          type: string
+          description: Masked bank account number where only the last digits are visible
+        accountType:
+          type: string
+          description: Type of the bank account (e.g. corrente, poupanca)
+        currency:
+          type: string
+          description: ISO currency code (e.g. BRL)
+        isActive:
+          type: boolean
+          description: Indicates whether the account is active and available for ingestion
+    AccountsResponse:
+      type: object
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/BankAccountSummary'
+    BankTransaction:
+      type: object
+      required:
+        - bankTxId
+        - date
+        - desc
+        - amount
+        - bankAccountId
+        - linkedLegs
+        - reconciled
+      properties:
+        bankTxId:
+          type: string
+          description: Unique identifier assigned to the transaction inside Finance CoPilot
+        date:
+          type: string
+          description: Transaction posting date in DD/MM/YYYY format
+        desc:
+          type: string
+          description: Raw description obtained from the bank statement
+        amount:
+          type: number
+          description: Positive values are inflows, negative values are outflows
+        bankAccountId:
+          type: string
+          description: Identifier of the bank account that owns the transaction
+        accountId:
+          type: string
+          nullable: true
+          description: Identifier provided by the originating bank, when available
+        fitid:
+          type: string
+          nullable: true
+          description: Unique identifier provided by the OFX file
+        sourceHash:
+          type: string
+          nullable: true
+          description: SHA256 hash of the imported OFX file used for deduplication
+        linkedLegs:
+          type: array
+          description: Sale legs that were reconciled against this transaction
+          items:
+            type: object
+            required: [saleLegId]
+            properties:
+              saleLegId:
+                type: string
+              nParcela:
+                type: integer
+                nullable: true
+        reconciled:
+          type: boolean
+          description: Indicates whether the transaction is reconciled with a sale
+        categorizedAs:
+          type: object
+          nullable: true
+          properties:
+            group:
+              type: string
+              nullable: true
+            subcategory:
+              type: string
+              nullable: true
+            auto:
+              type: boolean
+              description: Indicates whether the categorization was automatic
+              default: false
+        dfcCategory:
+          type: string
+          nullable: true
+          description: Legacy DFC category associated with the transaction
+        dfcItem:
+          type: string
+          nullable: true
+          description: Legacy DFC item associated with the transaction
+        categorizedBy:
+          type: string
+          nullable: true
+          description: Categorization source (manual, rule, auto)
+        categorizedRuleId:
+          type: string
+          nullable: true
+          description: Identifier of the rule used for categorization when applicable
+    Pagination:
+      type: object
+      required:
+        - page
+        - limit
+        - totalItems
+        - totalPages
+        - hasNextPage
+        - hasPreviousPage
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+        totalItems:
+          type: integer
+          minimum: 0
+        totalPages:
+          type: integer
+          minimum: 0
+        hasNextPage:
+          type: boolean
+        hasPreviousPage:
+          type: boolean
+    BankTransactionListResponse:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BankTransaction'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    DailyNetFlow:
+      type: object
+      required: [date, net]
+      properties:
+        date:
+          type: string
+          description: Day of the aggregated cash flow in DD/MM/YYYY format
+        net:
+          type: number
+          description: Net cash flow for the day (positive for inflow, negative for outflow)
+    SummaryResponse:
+      type: object
+      required:
+        - clientId
+        - bankAccountId
+        - totals
+        - kpis
+        - series
+        - metadata
+      properties:
+        clientId:
+          type: string
+        bankAccountId:
+          type: string
+        from:
+          type: string
+          nullable: true
+          description: Start of the effective analysis window in DD/MM/YYYY format
+        to:
+          type: string
+          nullable: true
+          description: End of the effective analysis window in DD/MM/YYYY format
+        totals:
+          type: object
+          required: [totalIn, totalOut, balance]
+          properties:
+            totalIn:
+              type: number
+            totalOut:
+              type: number
+            balance:
+              type: number
+        kpis:
+          type: object
+          required:
+            - inflowCount
+            - outflowCount
+            - averageTicketIn
+            - averageTicketOut
+            - largestIn
+            - largestOut
+            - averageDailyNetFlow
+            - cashConversionRatio
+            - receivableAmount
+            - receivableCount
+            - overdueReceivableAmount
+            - overdueReceivableCount
+            - projectedBalance
+          properties:
+            inflowCount:
+              type: integer
+            outflowCount:
+              type: integer
+            averageTicketIn:
+              type: number
+            averageTicketOut:
+              type: number
+            largestIn:
+              type: number
+            largestOut:
+              type: number
+            averageDailyNetFlow:
+              type: number
+            cashConversionRatio:
+              type: number
+            receivableAmount:
+              type: number
+            receivableCount:
+              type: integer
+            overdueReceivableAmount:
+              type: number
+            overdueReceivableCount:
+              type: integer
+            projectedBalance:
+              type: number
+        series:
+          type: object
+          required: [dailyNetFlows]
+          properties:
+            dailyNetFlows:
+              type: array
+              items:
+                $ref: '#/components/schemas/DailyNetFlow'
+        metadata:
+          type: object
+          required:
+            - transactionCount
+            - coverageDays
+            - generatedAt
+          properties:
+            transactionCount:
+              type: integer
+            coverageDays:
+              type: integer
+            generatedAt:
+              type: string
+              format: date-time
