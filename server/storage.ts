@@ -297,8 +297,13 @@ export class MemStorage implements IStorage {
   }
 
   // OFX Imports
-  private getOfxImportKey(clientId: string, bankAccountId: string, fileHash: string): string {
-    return `ofxImport:${clientId}:${bankAccountId}:${fileHash}`;
+  private getOfxImportKey(
+    clientId: string,
+    bankAccountId: string | undefined,
+    fileHash: string
+  ): string {
+    const namespacedBankAccountId = bankAccountId ?? "legacy";
+    return `ofxImport:${clientId}:${namespacedBankAccountId}:${fileHash}`;
   }
 
   async getOFXImport(
@@ -596,8 +601,13 @@ export class ReplitDbStorage implements IStorage {
     this.migrationsReady = this.normalizeLegacyOFXImports();
   }
 
-  private getOfxImportKey(clientId: string, bankAccountId: string, fileHash: string): string {
-    return `ofxImport:${clientId}:${bankAccountId}:${fileHash}`;
+  private getOfxImportKey(
+    clientId: string,
+    bankAccountId: string | undefined,
+    fileHash: string
+  ): string {
+    const namespacedBankAccountId = bankAccountId ?? "legacy";
+    return `ofxImport:${clientId}:${namespacedBankAccountId}:${fileHash}`;
   }
 
   private getLegacyClientOfxImportKey(clientId: string, fileHash: string): string {
