@@ -10,6 +10,7 @@ import {
   type SaleLeg,
   type BankTransaction,
   type CategorizationRule,
+  type OFXImport,
 } from "@shared/schema";
 import { formatBR, toISOFromBR, isBetweenDates } from "@shared/utils";
 import {
@@ -548,13 +549,12 @@ export function registerPJRoutes(app: Express) {
 
       const buffer = req.file.buffer;
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
-      const existingImport = await storage.getOFXImport(clientId, fileHash);
 
       ingestionLogger.info("Arquivo OFX recebido", {
         event: "pj.ofx.import.file",
         context: {
           fileHash,
-          duplicateFile: Boolean(existingImport),
+          duplicateFile: false,
         },
       });
 
@@ -599,9 +599,20 @@ export function registerPJRoutes(app: Express) {
 
       const round2 = (value: number) => Math.round(value * 100) / 100;
 
-      const existingBankTxs = await storage.getBankTransactions(clientId);
+      const existingImports = new Map<string, OFXImport | null>();
       const newTransactions: BankTransaction[] = [];
+      const newTransactionsByAccount = new Map<string, BankTransaction[]>();
+      const pendingTransactionsByAccount = new Map<string, BankTransaction[]>();
+      const existingTransactionsByAccount = new Map<string, BankTransaction[]>();
+      const warningsByAccount = new Map<string, string[]>();
+      const accountTransactionTotals = new Map<string, number>();
       warnings = [];
+      const addWarning = (accountId: string, message: string) => {
+        warnings.push(message);
+        const perAccount = warningsByAccount.get(accountId) ?? [];
+        perAccount.push(message);
+        warningsByAccount.set(accountId, perAccount);
+      };
       const accountSummaries: {
         accountId: string;
         currency?: string;
@@ -629,9 +640,13 @@ export function registerPJRoutes(app: Express) {
           statement.BANKACCTFROM?.BANKID ||
           `conta_${accountSummaries.length + 1}`;
 
+        const existingImport = await storage.getOFXImport(clientId, accountId, fileHash);
+        existingImports.set(accountId, existingImport);
+
         const txArray = toArray(statement.BANKTRANLIST?.STMTTRN);
         if (txArray.length === 0) {
-          warnings.push(`Conta ${accountId} sem transações no período informado.`);
+          accountTransactionTotals.set(accountId, 0);
+          addWarning(accountId, `Conta ${accountId} sem transações no período informado.`);
           accountSummaries.push({
             accountId,
             currency: statement.CURDEF,
@@ -647,12 +662,18 @@ export function registerPJRoutes(app: Express) {
           continue;
         }
 
+        accountTransactionTotals.set(accountId, txArray.length);
         const startDate = parseDate(statement.BANKTRANLIST?.DTSTART);
         const endDate = parseDate(statement.BANKTRANLIST?.DTEND);
 
         let totalCredits = 0;
         let totalDebits = 0;
         let net = 0;
+
+        const existingBankTxs = existingTransactionsByAccount.get(accountId) ??
+          (await storage.getBankTransactions(clientId, accountId));
+        existingTransactionsByAccount.set(accountId, existingBankTxs);
+        const pendingForAccount = pendingTransactionsByAccount.get(accountId) ?? [];
 
         for (const rawTx of txArray) {
           const parsedTx = ofxTransactionSchema.parse(rawTx);
@@ -670,14 +691,15 @@ export function registerPJRoutes(app: Express) {
           net = round2(net + amount);
 
           if (adjusted && parsedTx.TRNTYPE) {
-            warnings.push(
+            addWarning(
+              accountId,
               `Sinal ajustado automaticamente: transação ${fitid || desc} reinterpretada como ${parsedTx.TRNTYPE}.`
             );
           }
 
           const isDuplicate = isDuplicateTransaction(
             existingBankTxs,
-            newTransactions,
+            pendingForAccount,
             {
               amount,
               desc,
@@ -696,6 +718,7 @@ export function registerPJRoutes(app: Express) {
             date,
             desc,
             amount,
+            bankAccountId: accountId,
             accountId,
             fitid,
             sourceHash: fileHash,
@@ -704,6 +727,11 @@ export function registerPJRoutes(app: Express) {
           };
 
           newTransactions.push(bankTx);
+          pendingForAccount.push(bankTx);
+          pendingTransactionsByAccount.set(accountId, pendingForAccount);
+          const perAccountNew = newTransactionsByAccount.get(accountId) ?? [];
+          perAccountNew.push(bankTx);
+          newTransactionsByAccount.set(accountId, perAccountNew);
         }
 
         const ledgerRaw = statement.LEDGERBAL?.BALAMT;
@@ -711,12 +739,12 @@ export function registerPJRoutes(app: Express) {
         if (ledgerRaw !== undefined) {
           const parsedLedger = Number.parseFloat(String(ledgerRaw).replace(",", "."));
           if (Number.isNaN(parsedLedger)) {
-            warnings.push(`Saldo final inválido informado para a conta ${accountId}.`);
+            addWarning(accountId, `Saldo final inválido informado para a conta ${accountId}.`);
           } else {
             ledgerClosingBalance = round2(parsedLedger);
           }
         } else {
-          warnings.push(`Saldo final (LEDGERBAL) ausente na conta ${accountId}.`);
+          addWarning(accountId, `Saldo final (LEDGERBAL) ausente na conta ${accountId}.`);
         }
 
         let openingBalance: number | undefined;
@@ -739,7 +767,8 @@ export function registerPJRoutes(app: Express) {
         if (ledgerClosingBalance !== undefined && computedClosingBalance !== undefined) {
           divergence = round2(computedClosingBalance - ledgerClosingBalance);
           if (Math.abs(divergence) > 0.01) {
-            warnings.push(
+            addWarning(
+              accountId,
               `Divergência de R$ ${Math.abs(divergence).toFixed(2)} no saldo final da conta ${accountId}.`
             );
           }
@@ -759,6 +788,10 @@ export function registerPJRoutes(app: Express) {
           divergence,
         });
       }
+
+      const duplicateAccounts = Array.from(existingImports.values()).filter(Boolean).length;
+      const alreadyImported =
+        accountSummaries.length > 0 && duplicateAccounts === accountSummaries.length;
 
       if (totalTransactionsInFile === 0) {
         throw new Error("Nenhuma transação encontrada no arquivo OFX enviado.");
@@ -783,16 +816,26 @@ export function registerPJRoutes(app: Express) {
       }
 
       errorStage = "persist";
-      await storage.addOFXImport({
-        fileHash,
-        clientId,
-        importedAt: new Date().toISOString(),
-        transactionCount: totalTransactionsInFile,
-        reconciliation: {
-          accounts: accountSummaries,
-          warnings,
-        },
-      });
+      const importedAt = new Date().toISOString();
+      await Promise.all(
+        accountSummaries.map(async summary => {
+          const perAccountWarnings = warningsByAccount.get(summary.accountId) ?? [];
+          const accountTransactions = accountTransactionTotals.get(summary.accountId) ?? 0;
+          await storage.addOFXImport({
+            fileHash,
+            clientId,
+            bankAccountId: summary.accountId,
+            importedAt,
+            transactionCount: accountTransactions,
+            statementStart: summary.startDate,
+            statementEnd: summary.endDate,
+            reconciliation: {
+              accounts: [summary],
+              warnings: perAccountWarnings,
+            },
+          });
+        })
+      );
 
       ingestionLogger.info("Reconciliação OFX consolidada", {
         event: "pj.ofx.import.reconciliation",
@@ -812,7 +855,8 @@ export function registerPJRoutes(app: Express) {
           imported: newTransactions.length,
           categorized: categorizedCount,
           accounts: accountSummaries.length,
-          duplicateFile: Boolean(existingImport),
+          duplicateFile: alreadyImported,
+          duplicateAccounts,
           warnings: warnings.length,
           deduped: dedupedCount,
         },
@@ -835,7 +879,7 @@ export function registerPJRoutes(app: Express) {
           autoCategorized: categorizedCount,
           deduped: dedupedCount,
           warnings: warnings.length,
-          alreadyImported: Boolean(existingImport),
+          alreadyImported,
         },
       });
 
@@ -845,7 +889,7 @@ export function registerPJRoutes(app: Express) {
         total: totalTransactionsInFile,
         deduped: dedupedCount,
         autoCategorized: categorizedCount,
-        alreadyImported: Boolean(existingImport),
+        alreadyImported,
         reconciliation: {
           accounts: accountSummaries,
           warnings,

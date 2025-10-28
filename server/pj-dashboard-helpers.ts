@@ -100,8 +100,11 @@ function getSubcategoryLabel(tx: BankTransaction, group: LedgerGroup): string {
     return tx.dfcItem;
   }
 
-  if (group === "RECEITA" && tx.accountId) {
-    return `Conta ${tx.accountId}`;
+  if (group === "RECEITA") {
+    const accountLabel = tx.bankAccountId ?? tx.accountId;
+    if (accountLabel) {
+      return `Conta ${accountLabel}`;
+    }
   }
 
   return tx.desc;

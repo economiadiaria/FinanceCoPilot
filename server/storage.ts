@@ -57,7 +57,7 @@ export interface IStorage {
   setReportHtml(clientId: string, period: string, html: string): Promise<void>;
 
   // OFX Imports
-  getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null>;
+  getOFXImport(clientId: string, bankAccountId: string, fileHash: string): Promise<OFXImport | null>;
   addOFXImport(ofxImport: OFXImport): Promise<void>;
 
   // Open Finance (Pluggy)
@@ -95,8 +95,12 @@ export interface IStorage {
   addLedgerEntry(clientId: string, entry: LedgerEntry): Promise<void>;
   
   // PJ - Bank Transactions
-  getBankTransactions(clientId: string): Promise<BankTransaction[]>;
-  setBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void>;
+  getBankTransactions(clientId: string, bankAccountId?: string): Promise<BankTransaction[]>;
+  setBankTransactions(
+    clientId: string,
+    transactions: BankTransaction[],
+    bankAccountId?: string
+  ): Promise<void>;
   addBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void>;
   updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void>;
   
@@ -130,7 +134,7 @@ export class MemStorage implements IStorage {
   private pjSaleLegs: Map<string, SaleLeg[]>;
   private pjPaymentMethods: Map<string, PaymentMethod[]>;
   private pjLedgerEntries: Map<string, LedgerEntry[]>;
-  private pjBankTransactions: Map<string, BankTransaction[]>;
+  private pjBankTransactions: Map<string, Map<string, BankTransaction[]>>;
   private pjCategorizationRules: Map<string, CategorizationRule[]>;
   private auditLogs: Map<string, AuditLogEntry[]>;
 
@@ -293,25 +297,37 @@ export class MemStorage implements IStorage {
   }
 
   // OFX Imports
-  private getOfxImportKey(clientId: string, fileHash: string): string {
-    return `ofxImport:${clientId}:${fileHash}`;
+  private getOfxImportKey(clientId: string, bankAccountId: string, fileHash: string): string {
+    return `ofxImport:${clientId}:${bankAccountId}:${fileHash}`;
   }
 
-  async getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null> {
-    const normalizedKey = this.getOfxImportKey(clientId, fileHash);
+  async getOFXImport(
+    clientId: string,
+    bankAccountId: string,
+    fileHash: string
+  ): Promise<OFXImport | null> {
+    const normalizedKey = this.getOfxImportKey(clientId, bankAccountId, fileHash);
     const existing = this.ofxImports.get(normalizedKey);
     if (existing) {
       return existing;
     }
 
     const legacyEntry = this.ofxImports.get(fileHash);
-    if (legacyEntry && (!legacyEntry.clientId || legacyEntry.clientId === clientId)) {
+    if (
+      legacyEntry &&
+      (!legacyEntry.clientId || legacyEntry.clientId === clientId) &&
+      (!legacyEntry.bankAccountId || legacyEntry.bankAccountId === bankAccountId)
+    ) {
       const migrated: OFXImport = {
         ...legacyEntry,
         clientId: legacyEntry.clientId ?? clientId,
+        bankAccountId: legacyEntry.bankAccountId ?? bankAccountId,
       };
       this.ofxImports.delete(fileHash);
-      this.ofxImports.set(this.getOfxImportKey(migrated.clientId, fileHash), migrated);
+      this.ofxImports.set(
+        this.getOfxImportKey(migrated.clientId, migrated.bankAccountId, fileHash),
+        migrated
+      );
       return migrated;
     }
 
@@ -319,7 +335,10 @@ export class MemStorage implements IStorage {
   }
 
   async addOFXImport(ofxImport: OFXImport): Promise<void> {
-    this.ofxImports.set(this.getOfxImportKey(ofxImport.clientId, ofxImport.fileHash), ofxImport);
+    this.ofxImports.set(
+      this.getOfxImportKey(ofxImport.clientId, ofxImport.bankAccountId, ofxImport.fileHash),
+      ofxImport
+    );
   }
 
   // Open Finance (Pluggy)
@@ -446,26 +465,92 @@ export class MemStorage implements IStorage {
   }
 
   // PJ - Bank Transactions
-  async getBankTransactions(clientId: string): Promise<BankTransaction[]> {
-    return this.pjBankTransactions.get(clientId) || [];
+  private ensureBankTransactionBucket(clientId: string): Map<string, BankTransaction[]> {
+    const existing = this.pjBankTransactions.get(clientId);
+    if (existing instanceof Map) {
+      return existing;
+    }
+
+    if (Array.isArray(existing)) {
+      const bucket = new Map<string, BankTransaction[]>();
+      for (const tx of existing) {
+        const bankAccountId = tx.bankAccountId ?? tx.accountId ?? "unknown";
+        const list = bucket.get(bankAccountId) ?? [];
+        list.push({ ...tx, bankAccountId });
+        bucket.set(bankAccountId, list);
+      }
+      this.pjBankTransactions.set(clientId, bucket);
+      return bucket;
+    }
+
+    const bucket = new Map<string, BankTransaction[]>();
+    this.pjBankTransactions.set(clientId, bucket);
+    return bucket;
   }
 
-  async setBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
-    this.pjBankTransactions.set(clientId, transactions);
+  async getBankTransactions(clientId: string, bankAccountId?: string): Promise<BankTransaction[]> {
+    const bucket = this.ensureBankTransactionBucket(clientId);
+    if (bankAccountId) {
+      return bucket.get(bankAccountId) ? [...bucket.get(bankAccountId)!] : [];
+    }
+
+    return Array.from(bucket.values()).flat();
+  }
+
+  async setBankTransactions(
+    clientId: string,
+    transactions: BankTransaction[],
+    bankAccountId?: string
+  ): Promise<void> {
+    const bucket = this.ensureBankTransactionBucket(clientId);
+
+    if (bankAccountId) {
+      bucket.set(
+        bankAccountId,
+        transactions.map(tx => ({ ...tx, bankAccountId: tx.bankAccountId ?? bankAccountId }))
+      );
+      return;
+    }
+
+    bucket.clear();
+    for (const tx of transactions) {
+      const txAccountId = tx.bankAccountId;
+      if (!txAccountId) {
+        throw new Error("Bank transaction missing bankAccountId in setBankTransactions");
+      }
+      const list = bucket.get(txAccountId) ?? [];
+      list.push(tx);
+      bucket.set(txAccountId, list);
+    }
   }
 
   async addBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
-    const existing = await this.getBankTransactions(clientId);
-    this.pjBankTransactions.set(clientId, [...existing, ...transactions]);
+    const bucket = this.ensureBankTransactionBucket(clientId);
+    for (const tx of transactions) {
+      if (!tx.bankAccountId) {
+        throw new Error("Bank transaction missing bankAccountId in addBankTransactions");
+      }
+      const list = bucket.get(tx.bankAccountId) ?? [];
+      list.push(tx);
+      bucket.set(tx.bankAccountId, list);
+    }
   }
 
   async updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void> {
-    const transactions = await this.getBankTransactions(clientId);
-    const index = transactions.findIndex(t => t.bankTxId === bankTxId);
-    if (index !== -1) {
-      transactions[index] = { ...transactions[index], ...updates };
-      this.pjBankTransactions.set(clientId, transactions);
+    const bucket = this.ensureBankTransactionBucket(clientId);
+    for (const [accountId, list] of bucket.entries()) {
+      const index = list.findIndex(t => t.bankTxId === bankTxId);
+      if (index === -1) {
+        continue;
+      }
+      const updated = { ...list[index], ...updates };
+      updated.bankAccountId = updates.bankAccountId ?? list[index].bankAccountId ?? accountId;
+      list[index] = updated;
+      bucket.set(accountId, list);
+      return;
     }
+
+    throw new Error(`Bank transaction ${bankTxId} not found for client ${clientId}`);
   }
 
   // PJ - Categorization Rules
@@ -511,7 +596,11 @@ export class ReplitDbStorage implements IStorage {
     this.migrationsReady = this.normalizeLegacyOFXImports();
   }
 
-  private getOfxImportKey(clientId: string, fileHash: string): string {
+  private getOfxImportKey(clientId: string, bankAccountId: string, fileHash: string): string {
+    return `ofxImport:${clientId}:${bankAccountId}:${fileHash}`;
+  }
+
+  private getLegacyClientOfxImportKey(clientId: string, fileHash: string): string {
     return `ofxImport:${clientId}:${fileHash}`;
   }
 
@@ -527,6 +616,65 @@ export class ReplitDbStorage implements IStorage {
     return `bank_account_index:${orgId}`;
   }
 
+  private getBankTransactionsKey(clientId: string, bankAccountId: string): string {
+    return `pj_bank_tx:${clientId}:${bankAccountId}`;
+  }
+
+  private getBankTransactionIndexKey(clientId: string): string {
+    return `pj_bank_tx_index:${clientId}`;
+  }
+
+  private getLegacyBankTransactionsKey(clientId: string): string {
+    return `pj_bank_tx:${clientId}`;
+  }
+
+  private async loadBankTransactionIndex(clientId: string): Promise<string[]> {
+    const result = await this.db.get(this.getBankTransactionIndexKey(clientId));
+    if (!result.ok) {
+      if (result.error?.statusCode !== 404) {
+        throw new Error(`Database error getting bank transaction index for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+      }
+      return [];
+    }
+    return Array.isArray(result.value) ? result.value : [];
+  }
+
+  private async saveBankTransactionIndex(clientId: string, accountIds: string[]): Promise<void> {
+    const unique = Array.from(new Set(accountIds));
+    const result = await this.db.set(this.getBankTransactionIndexKey(clientId), unique);
+    if (!result.ok) {
+      throw new Error(`Database error setting bank transaction index for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+  }
+
+  private async migrateLegacyBankTransactions(clientId: string, legacy: BankTransaction[]): Promise<void> {
+    const grouped = new Map<string, BankTransaction[]>();
+    for (const tx of legacy) {
+      const accountId = tx.bankAccountId || tx.accountId || "unknown";
+      const list = grouped.get(accountId) ?? [];
+      list.push({ ...tx, bankAccountId: accountId });
+      grouped.set(accountId, list);
+    }
+
+    const accountIds: string[] = [];
+    for (const [accountId, transactions] of grouped.entries()) {
+      const key = this.getBankTransactionsKey(clientId, accountId);
+      const setResult = await this.db.set(key, transactions);
+      if (!setResult.ok) {
+        throw new Error(`Database error migrating bank transactions for ${clientId}:${accountId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+      }
+      accountIds.push(accountId);
+    }
+
+    await this.saveBankTransactionIndex(clientId, accountIds);
+
+    const legacyKey = this.getLegacyBankTransactionsKey(clientId);
+    const deleteResult = await this.db.delete(legacyKey);
+    if (!deleteResult.ok && deleteResult.error?.statusCode !== 404) {
+      throw new Error(`Database error deleting legacy bank transactions for ${clientId}: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`);
+    }
+  }
+
   private async normalizeLegacyOFXImports(): Promise<void> {
     try {
       const listResult = await this.db.list("ofxImport:");
@@ -535,46 +683,57 @@ export class ReplitDbStorage implements IStorage {
       }
 
       const keys = listResult.value ?? [];
-      const legacyKeys = keys.filter(key => key.split(":").length === 2);
-      if (legacyKeys.length === 0) {
-        return;
-      }
+      for (const key of keys) {
+        const parts = key.split(":");
+        if (parts.length >= 4) {
+          continue; // already normalized
+        }
 
-      for (const legacyKey of legacyKeys) {
-        const legacyResult = await this.db.get(legacyKey);
+        const legacyResult = await this.db.get(key);
         if (!legacyResult.ok) {
           if (legacyResult.error?.statusCode !== 404) {
-            throw new Error(`Error loading legacy OFX import ${legacyKey}: ${legacyResult.error?.message || JSON.stringify(legacyResult.error)}`);
+            throw new Error(`Error loading legacy OFX import ${key}: ${legacyResult.error?.message || JSON.stringify(legacyResult.error)}`);
           }
           continue;
         }
 
         const legacyImport = legacyResult.value as OFXImport | null;
         if (!legacyImport) {
-          await this.db.delete(legacyKey);
+          await this.db.delete(key);
           continue;
         }
 
         const clientId = legacyImport.clientId;
         const fileHash = legacyImport.fileHash;
+        const bankAccountId =
+          legacyImport.bankAccountId ||
+          legacyImport.reconciliation?.accounts?.[0]?.accountId ||
+          "unknown";
+
         if (!clientId || !fileHash) {
-          await this.db.delete(legacyKey);
+          await this.db.delete(key);
           continue;
         }
 
-        const normalizedKey = this.getOfxImportKey(clientId, fileHash);
-        const setResult = await this.db.set(normalizedKey, legacyImport);
+        const normalizedImport: OFXImport = {
+          ...legacyImport,
+          clientId,
+          bankAccountId,
+        };
+
+        const normalizedKey = this.getOfxImportKey(clientId, bankAccountId, fileHash);
+        const setResult = await this.db.set(normalizedKey, normalizedImport);
         if (!setResult.ok) {
-          throw new Error(`Error migrating OFX import ${legacyKey}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+          throw new Error(`Error migrating OFX import ${key}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
         }
 
-        const deleteResult = await this.db.delete(legacyKey);
+        const deleteResult = await this.db.delete(key);
         if (!deleteResult.ok) {
-          throw new Error(`Error deleting legacy OFX import ${legacyKey}: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`);
+          throw new Error(`Error deleting legacy OFX import ${key}: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`);
         }
       }
     } catch (error) {
-      throw new Error(`Failed to normalize legacy OFX imports: ${error instanceof Error ? error.message : String(error)}`);
+      console.error("Failed to normalize legacy OFX imports", error);
     }
   }
 
@@ -836,10 +995,10 @@ export class ReplitDbStorage implements IStorage {
   }
 
   // OFX Imports
-  async getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null> {
+  async getOFXImport(clientId: string, bankAccountId: string, fileHash: string): Promise<OFXImport | null> {
     await this.migrationsReady;
 
-    const key = this.getOfxImportKey(clientId, fileHash);
+    const key = this.getOfxImportKey(clientId, bankAccountId, fileHash);
     const result = await this.db.get(key);
     // 404 means key doesn't exist (file not imported before for this client)
     if (!result.ok && result.error?.statusCode !== 404) {
@@ -848,6 +1007,26 @@ export class ReplitDbStorage implements IStorage {
 
     if (result.ok) {
       return result.value ?? null;
+    }
+
+    const clientLegacyKey = this.getLegacyClientOfxImportKey(clientId, fileHash);
+    const clientLegacyResult = await this.db.get(clientLegacyKey);
+    if (clientLegacyResult.ok) {
+      const legacyImport = clientLegacyResult.value as OFXImport | null;
+      if (legacyImport) {
+        const normalized: OFXImport = {
+          ...legacyImport,
+          bankAccountId: legacyImport.bankAccountId || bankAccountId,
+        };
+        await this.addOFXImport(normalized);
+        await this.db.delete(clientLegacyKey);
+        return normalized;
+      }
+      await this.db.delete(clientLegacyKey);
+      return null;
+    }
+    if (clientLegacyResult.error && clientLegacyResult.error.statusCode !== 404) {
+      throw new Error(`Database error getting legacy client OFX import ${clientId}:${fileHash}: ${clientLegacyResult.error?.message || JSON.stringify(clientLegacyResult.error)}`);
     }
 
     const legacyKey = this.getLegacyOfxImportKey(fileHash);
@@ -864,16 +1043,24 @@ export class ReplitDbStorage implements IStorage {
       return null;
     }
 
-    await this.addOFXImport(legacyImport);
+    const normalized: OFXImport = {
+      ...legacyImport,
+      bankAccountId: legacyImport.bankAccountId || bankAccountId,
+    };
+
+    await this.addOFXImport(normalized);
     await this.db.delete(legacyKey);
 
-    return legacyImport;
+    return normalized;
   }
 
   async addOFXImport(ofxImport: OFXImport): Promise<void> {
     await this.migrationsReady;
 
-    const result = await this.db.set(this.getOfxImportKey(ofxImport.clientId, ofxImport.fileHash), ofxImport);
+    const result = await this.db.set(
+      this.getOfxImportKey(ofxImport.clientId, ofxImport.bankAccountId, ofxImport.fileHash),
+      ofxImport
+    );
     if (!result.ok) {
       throw new Error(`Database error adding OFX import: ${result.error?.message || JSON.stringify(result.error)}`);
     }
@@ -1091,33 +1278,192 @@ export class ReplitDbStorage implements IStorage {
   }
 
   // PJ - Bank Transactions
-  async getBankTransactions(clientId: string): Promise<BankTransaction[]> {
-    const result = await this.db.get(`pj_bank_tx:${clientId}`);
-    if (!result.ok && result.error?.statusCode !== 404) {
-      throw new Error(`Database error getting PJ bank transactions for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+  async getBankTransactions(clientId: string, bankAccountId?: string): Promise<BankTransaction[]> {
+    let index = await this.loadBankTransactionIndex(clientId);
+
+    if (bankAccountId) {
+      if (!index.includes(bankAccountId)) {
+        const legacyResult = await this.db.get(this.getLegacyBankTransactionsKey(clientId));
+        if (legacyResult.ok) {
+          await this.migrateLegacyBankTransactions(clientId, legacyResult.value ?? []);
+          index = await this.loadBankTransactionIndex(clientId);
+        } else if (legacyResult.error && legacyResult.error.statusCode !== 404) {
+          throw new Error(`Database error getting legacy bank transactions for ${clientId}: ${legacyResult.error?.message || JSON.stringify(legacyResult.error)}`);
+        }
+      }
+
+      const key = this.getBankTransactionsKey(clientId, bankAccountId);
+      const result = await this.db.get(key);
+      if (!result.ok) {
+        if (result.error?.statusCode === 404) {
+          return [];
+        }
+        throw new Error(`Database error getting PJ bank transactions for ${clientId}:${bankAccountId}: ${result.error?.message || JSON.stringify(result.error)}`);
+      }
+      return result.value ?? [];
     }
-    return result.ok ? (result.value ?? []) : [];
+
+    if (index.length === 0) {
+      const legacyResult = await this.db.get(this.getLegacyBankTransactionsKey(clientId));
+      if (legacyResult.ok) {
+        await this.migrateLegacyBankTransactions(clientId, legacyResult.value ?? []);
+        index = await this.loadBankTransactionIndex(clientId);
+      } else if (legacyResult.error && legacyResult.error.statusCode !== 404) {
+        throw new Error(`Database error getting legacy bank transactions for ${clientId}: ${legacyResult.error?.message || JSON.stringify(legacyResult.error)}`);
+      }
+    }
+
+    if (index.length === 0) {
+      return [];
+    }
+
+    const transactions: BankTransaction[] = [];
+    for (const accountId of index) {
+      const key = this.getBankTransactionsKey(clientId, accountId);
+      const result = await this.db.get(key);
+      if (!result.ok) {
+        if (result.error?.statusCode === 404) {
+          continue;
+        }
+        throw new Error(`Database error getting PJ bank transactions for ${clientId}:${accountId}: ${result.error?.message || JSON.stringify(result.error)}`);
+      }
+      transactions.push(...((result.value as BankTransaction[] | null) ?? []));
+    }
+    return transactions;
   }
 
-  async setBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
-    const result = await this.db.set(`pj_bank_tx:${clientId}`, transactions);
-    if (!result.ok) {
-      throw new Error(`Database error setting PJ bank transactions for ${clientId}: ${result.error.message}`);
+  async setBankTransactions(
+    clientId: string,
+    transactions: BankTransaction[],
+    bankAccountId?: string
+  ): Promise<void> {
+    if (bankAccountId) {
+      const normalized = transactions.map(tx => ({ ...tx, bankAccountId: tx.bankAccountId ?? bankAccountId }));
+      if (normalized.length === 0) {
+        await this.db.delete(this.getBankTransactionsKey(clientId, bankAccountId));
+        const index = await this.loadBankTransactionIndex(clientId);
+        const filtered = index.filter(id => id !== bankAccountId);
+        await this.saveBankTransactionIndex(clientId, filtered);
+        return;
+      }
+
+      const result = await this.db.set(this.getBankTransactionsKey(clientId, bankAccountId), normalized);
+      if (!result.ok) {
+        throw new Error(`Database error setting PJ bank transactions for ${clientId}:${bankAccountId}: ${result.error?.message || JSON.stringify(result.error)}`);
+      }
+
+      const index = await this.loadBankTransactionIndex(clientId);
+      if (!index.includes(bankAccountId)) {
+        index.push(bankAccountId);
+        await this.saveBankTransactionIndex(clientId, index);
+      }
+      return;
     }
+
+    const grouped = new Map<string, BankTransaction[]>();
+    for (const tx of transactions) {
+      if (!tx.bankAccountId) {
+        throw new Error("Bank transaction missing bankAccountId in setBankTransactions");
+      }
+      const list = grouped.get(tx.bankAccountId) ?? [];
+      list.push(tx);
+      grouped.set(tx.bankAccountId, list);
+    }
+
+    const existingIndex = await this.loadBankTransactionIndex(clientId);
+    const toRemove = new Set(existingIndex);
+    const newIndex: string[] = [];
+
+    for (const [accountId, accountTxs] of grouped.entries()) {
+      const result = await this.db.set(this.getBankTransactionsKey(clientId, accountId), accountTxs);
+      if (!result.ok) {
+        throw new Error(`Database error setting PJ bank transactions for ${clientId}:${accountId}: ${result.error?.message || JSON.stringify(result.error)}`);
+      }
+      toRemove.delete(accountId);
+      newIndex.push(accountId);
+    }
+
+    for (const accountId of toRemove) {
+      await this.db.delete(this.getBankTransactionsKey(clientId, accountId));
+    }
+
+    await this.saveBankTransactionIndex(clientId, newIndex);
   }
 
   async addBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void> {
-    const existing = await this.getBankTransactions(clientId);
-    await this.setBankTransactions(clientId, [...existing, ...transactions]);
+    const grouped = new Map<string, BankTransaction[]>();
+    for (const tx of transactions) {
+      if (!tx.bankAccountId) {
+        throw new Error("Bank transaction missing bankAccountId in addBankTransactions");
+      }
+      const list = grouped.get(tx.bankAccountId) ?? [];
+      list.push(tx);
+      grouped.set(tx.bankAccountId, list);
+    }
+
+    const index = await this.loadBankTransactionIndex(clientId);
+
+    for (const [accountId, accountTxs] of grouped.entries()) {
+      const key = this.getBankTransactionsKey(clientId, accountId);
+      const existingResult = await this.db.get(key);
+      if (!existingResult.ok && existingResult.error?.statusCode !== 404) {
+        throw new Error(`Database error getting PJ bank transactions for ${clientId}:${accountId}: ${existingResult.error?.message || JSON.stringify(existingResult.error)}`);
+      }
+
+      const existing = existingResult.ok ? ((existingResult.value as BankTransaction[] | null) ?? []) : [];
+      const result = await this.db.set(key, [...existing, ...accountTxs]);
+      if (!result.ok) {
+        throw new Error(`Database error setting PJ bank transactions for ${clientId}:${accountId}: ${result.error?.message || JSON.stringify(result.error)}`);
+      }
+
+      if (!index.includes(accountId)) {
+        index.push(accountId);
+      }
+    }
+
+    await this.saveBankTransactionIndex(clientId, index);
   }
 
   async updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void> {
-    const transactions = await this.getBankTransactions(clientId);
-    const index = transactions.findIndex(t => t.bankTxId === bankTxId);
-    if (index !== -1) {
-      transactions[index] = { ...transactions[index], ...updates };
-      await this.setBankTransactions(clientId, transactions);
+    let index = await this.loadBankTransactionIndex(clientId);
+    if (index.length === 0) {
+      const legacyResult = await this.db.get(this.getLegacyBankTransactionsKey(clientId));
+      if (legacyResult.ok) {
+        await this.migrateLegacyBankTransactions(clientId, legacyResult.value ?? []);
+        index = await this.loadBankTransactionIndex(clientId);
+      } else if (legacyResult.error && legacyResult.error.statusCode !== 404) {
+        throw new Error(`Database error getting legacy bank transactions for ${clientId}: ${legacyResult.error?.message || JSON.stringify(legacyResult.error)}`);
+      }
     }
+
+    for (const accountId of index) {
+      const key = this.getBankTransactionsKey(clientId, accountId);
+      const result = await this.db.get(key);
+      if (!result.ok) {
+        if (result.error?.statusCode === 404) {
+          continue;
+        }
+        throw new Error(`Database error getting PJ bank transactions for ${clientId}:${accountId}: ${result.error?.message || JSON.stringify(result.error)}`);
+      }
+
+      const transactions = (result.value as BankTransaction[] | null) ?? [];
+      const idx = transactions.findIndex(tx => tx.bankTxId === bankTxId);
+      if (idx === -1) {
+        continue;
+      }
+
+      const updated = { ...transactions[idx], ...updates };
+      updated.bankAccountId = updates.bankAccountId ?? transactions[idx].bankAccountId ?? accountId;
+      transactions[idx] = updated;
+
+      const setResult = await this.db.set(key, transactions);
+      if (!setResult.ok) {
+        throw new Error(`Database error updating PJ bank transactions for ${clientId}:${accountId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+      }
+      return;
+    }
+
+    throw new Error(`Bank transaction ${bankTxId} not found for client ${clientId}`);
   }
 
   // PJ - Categorization Rules
