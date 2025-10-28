@@ -1,4 +1,12 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { isAxiosError } from "axios";
+import {
+  getSummary as fetchSummary,
+  listAccounts,
+  listTransactions,
+  type SummaryQuery,
+  type TransactionsQuery,
+} from "@financecopilot/pj-banking-sdk";
 import { getApiHeaders } from "./api";
 
 async function throwIfResNotOk(res: Response) {
@@ -30,23 +38,69 @@ export async function apiRequest(
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
-  on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
+
+type SdkQueryExecutor = (params: unknown) => Promise<unknown>;
+
+const pjBankingExecutors: Record<string, SdkQueryExecutor> = {
+  "/api/pj/accounts": async () => listAccounts(),
+  "/api/pj/transactions": async (params) =>
+    listTransactions((params ?? {}) as TransactionsQuery),
+  "/api/pj/summary": async (params) =>
+    fetchSummary((params ?? {}) as SummaryQuery),
+};
+
+function formatAxiosError(error: unknown): Error {
+  if (!isAxiosError(error)) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  const status = error.response?.status;
+  if (typeof status === "number") {
+    const message =
+      typeof error.response?.data === "string"
+        ? error.response.data
+        : JSON.stringify(error.response?.data ?? error.message);
+    return new Error(`${status}: ${message}`);
+  }
+
+  return new Error(error.message);
+}
+
+export const getQueryFn =
+  <T>({
+    on401: unauthorizedBehavior,
+  }: {
+    on401: UnauthorizedBehavior;
+  }): QueryFunction<T> =>
   async ({ queryKey }) => {
     // Handle query key construction
     // First element is the base URL, rest are query parameters
     const [baseUrl, ...params] = queryKey;
+    const sdkExecutor = pjBankingExecutors[baseUrl as string];
+
+    if (sdkExecutor) {
+      try {
+        return (await sdkExecutor(params[0])) as T;
+      } catch (error) {
+        if (isAxiosError(error) && error.response?.status === 401) {
+          if (unauthorizedBehavior === "returnNull") {
+            return null as T;
+          }
+        }
+
+        throw formatAxiosError(error);
+      }
+    }
+
     let url = baseUrl as string;
-    
+
     // Build query string from remaining parameters
     if (params.length > 0) {
       const queryParams = new URLSearchParams();
-      
+
       // Handle object parameters (like filters)
       params.forEach((param, index) => {
-        if (param && typeof param === 'object') {
+        if (param && typeof param === "object") {
           Object.entries(param).forEach(([key, value]) => {
             if (value !== null && value !== undefined) {
               queryParams.append(key, String(value));
@@ -55,15 +109,15 @@ export const getQueryFn: <T>(options: {
         } else if (param !== null && param !== undefined) {
           // For simple parameters, use conventional query param names
           if (index === 0) {
-            queryParams.append('clientId', String(param));
+            queryParams.append("clientId", String(param));
           } else if (index === 1) {
-            queryParams.append('period', String(param));
+            queryParams.append("period", String(param));
           } else {
             queryParams.append(`param${index}`, String(param));
           }
         }
       });
-      
+
       const queryString = queryParams.toString();
       if (queryString) {
         url += `?${queryString}`;
