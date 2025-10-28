@@ -14,6 +14,7 @@ import type {
   SaleLeg,
   PaymentMethod,
   LedgerEntry,
+  BankAccount,
   BankTransaction,
   CategorizationRule,
   AuditLogEntry,
@@ -66,7 +67,11 @@ export interface IStorage {
   
   getOFAccounts(clientId: string): Promise<OFAccount[]>;
   setOFAccounts(clientId: string, accounts: OFAccount[]): Promise<void>;
-  
+
+  // Bank accounts
+  getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]>;
+  upsertBankAccount(account: BankAccount): Promise<BankAccount>;
+
   getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null>;
   setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void>;
 
@@ -118,6 +123,7 @@ export class MemStorage implements IStorage {
   private ofItems: Map<string, OFItem[]>;
   private ofAccounts: Map<string, OFAccount[]>;
   private ofSyncMeta: Map<string, OFSyncMeta>;
+  private bankAccounts: Map<string, BankAccount>;
   
   // PJ storage
   private pjSales: Map<string, Sale[]>;
@@ -140,6 +146,7 @@ export class MemStorage implements IStorage {
     this.ofItems = new Map();
     this.ofAccounts = new Map();
     this.ofSyncMeta = new Map();
+    this.bankAccounts = new Map();
     
     this.pjSales = new Map();
     this.pjSaleLegs = new Map();
@@ -337,6 +344,44 @@ export class MemStorage implements IStorage {
     this.ofAccounts.set(clientId, accounts);
   }
 
+  private getBankAccountKey(orgId: string, fingerprint: string): string {
+    return `${orgId}:${fingerprint}`;
+  }
+
+  async getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]> {
+    const accounts = Array.from(this.bankAccounts.values()).filter(account => {
+      if (account.orgId !== orgId) {
+        return false;
+      }
+      if (clientId && account.clientId !== clientId) {
+        return false;
+      }
+      return true;
+    });
+
+    const deduped = new Map<string, BankAccount>();
+    for (const account of accounts) {
+      deduped.set(account.accountFingerprint, account);
+    }
+
+    return Array.from(deduped.values());
+  }
+
+  async upsertBankAccount(account: BankAccount): Promise<BankAccount> {
+    const key = this.getBankAccountKey(account.orgId, account.accountFingerprint);
+    const existing = this.bankAccounts.get(key);
+    const now = new Date().toISOString();
+    const merged: BankAccount = {
+      ...existing,
+      ...account,
+      createdAt: existing?.createdAt ?? account.createdAt ?? now,
+      updatedAt: account.updatedAt ?? now,
+    } as BankAccount;
+
+    this.bankAccounts.set(key, merged);
+    return merged;
+  }
+
   async getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null> {
     return this.ofSyncMeta.get(clientId) || null;
   }
@@ -472,6 +517,14 @@ export class ReplitDbStorage implements IStorage {
 
   private getLegacyOfxImportKey(fileHash: string): string {
     return `ofxImport:${fileHash}`;
+  }
+
+  private getBankAccountKey(orgId: string, fingerprint: string): string {
+    return `bank_account:${orgId}:${fingerprint}`;
+  }
+
+  private getBankAccountIndexKey(orgId: string): string {
+    return `bank_account_index:${orgId}`;
   }
 
   private async normalizeLegacyOFXImports(): Promise<void> {
@@ -860,6 +913,83 @@ export class ReplitDbStorage implements IStorage {
     if (!result.ok) {
       throw new Error(`Database error setting OF accounts for ${clientId}: ${result.error.message}`);
     }
+  }
+
+  async getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]> {
+    await this.migrationsReady;
+
+    const indexKey = this.getBankAccountIndexKey(orgId);
+    const indexResult = await this.db.get(indexKey);
+    if (!indexResult.ok && indexResult.error?.statusCode !== 404) {
+      throw new Error(`Database error getting bank account index for ${orgId}: ${indexResult.error?.message || JSON.stringify(indexResult.error)}`);
+    }
+
+    const fingerprints: string[] = indexResult.ok ? (indexResult.value ?? []) : [];
+    const deduped = new Map<string, BankAccount>();
+
+    for (const fingerprint of fingerprints) {
+      const key = this.getBankAccountKey(orgId, fingerprint);
+      const accountResult = await this.db.get(key);
+      if (!accountResult.ok && accountResult.error?.statusCode !== 404) {
+        throw new Error(`Database error getting bank account ${fingerprint} for ${orgId}: ${accountResult.error?.message || JSON.stringify(accountResult.error)}`);
+      }
+
+      const account = accountResult.ok ? (accountResult.value as BankAccount | null) : null;
+      if (!account) {
+        continue;
+      }
+      if (account.orgId !== orgId) {
+        continue;
+      }
+      if (clientId && account.clientId !== clientId) {
+        continue;
+      }
+
+      deduped.set(account.accountFingerprint, account);
+    }
+
+    return Array.from(deduped.values());
+  }
+
+  async upsertBankAccount(account: BankAccount): Promise<BankAccount> {
+    await this.migrationsReady;
+
+    const key = this.getBankAccountKey(account.orgId, account.accountFingerprint);
+    const existingResult = await this.db.get(key);
+    if (!existingResult.ok && existingResult.error?.statusCode !== 404) {
+      throw new Error(`Database error loading bank account ${account.accountFingerprint} for ${account.orgId}: ${existingResult.error?.message || JSON.stringify(existingResult.error)}`);
+    }
+
+    const existing = existingResult.ok ? (existingResult.value as BankAccount | null) : null;
+    const now = new Date().toISOString();
+    const merged: BankAccount = {
+      ...(existing ?? {}),
+      ...account,
+      createdAt: existing?.createdAt ?? account.createdAt ?? now,
+      updatedAt: account.updatedAt ?? now,
+    };
+
+    const setResult = await this.db.set(key, merged);
+    if (!setResult.ok) {
+      throw new Error(`Database error upserting bank account ${account.accountFingerprint} for ${account.orgId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+    }
+
+    const indexKey = this.getBankAccountIndexKey(account.orgId);
+    const indexResult = await this.db.get(indexKey);
+    if (!indexResult.ok && indexResult.error?.statusCode !== 404) {
+      throw new Error(`Database error getting bank account index for ${account.orgId}: ${indexResult.error?.message || JSON.stringify(indexResult.error)}`);
+    }
+
+    const fingerprints: string[] = indexResult.ok ? (indexResult.value ?? []) : [];
+    if (!fingerprints.includes(account.accountFingerprint)) {
+      fingerprints.push(account.accountFingerprint);
+      const updateIndexResult = await this.db.set(indexKey, fingerprints);
+      if (!updateIndexResult.ok) {
+        throw new Error(`Database error updating bank account index for ${account.orgId}: ${updateIndexResult.error?.message || JSON.stringify(updateIndexResult.error)}`);
+      }
+    }
+
+    return merged;
   }
 
   async getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null> {
