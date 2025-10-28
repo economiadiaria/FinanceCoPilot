@@ -127,11 +127,22 @@ export function isDuplicateTransaction(
       return true;
     }
 
-    return (
-      tx.date === candidate.date &&
-      tx.amount === candidate.amount &&
-      tx.desc === candidate.desc
-    );
+    if (tx.date !== candidate.date || tx.amount !== candidate.amount) {
+      return false;
+    }
+
+    if (!candidate.desc || !tx.desc) {
+      return true;
+    }
+
+    const candidateDesc = candidate.desc.trim().toLowerCase();
+    const txDesc = tx.desc.trim().toLowerCase();
+
+    if (candidateDesc === txDesc) {
+      return true;
+    }
+
+    return candidateDesc.includes(txDesc) || txDesc.includes(candidateDesc);
   };
 
   return existing.some(matches) || pending.some(matches);
