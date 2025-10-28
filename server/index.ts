@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic } from "./vite";
 import type { User } from "@shared/schema";
 import { scrubPII } from "@shared/utils";
+import { requestLoggingMiddleware, getLogger, logger } from "./observability/logger";
 
 const app = express();
 
@@ -66,7 +67,7 @@ app.use((req, res, next) => {
         logLine = logLine.slice(0, 79) + "…";
       }
 
-      log(logLine);
+      logger.info(logLine);
     }
   });
 
