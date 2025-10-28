@@ -3,6 +3,7 @@ import session from "express-session";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import type { User } from "@shared/schema";
+import { scrubPII } from "@shared/utils";
 
 const app = express();
 
@@ -55,7 +56,8 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        const sanitized = scrubPII(capturedJsonResponse);
+        logLine += ` :: ${JSON.stringify(sanitized)}`;
       }
 
       if (logLine.length > 80) {
