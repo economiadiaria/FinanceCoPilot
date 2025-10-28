@@ -647,6 +647,7 @@ export function registerPJRoutes(app: Express) {
       const pendingTransactionsByAccount = new Map<string, BankTransaction[]>();
       const existingTransactionsByAccount = new Map<string, BankTransaction[]>();
       const warningsByAccount = new Map<string, string[]>();
+      const bankNameByAccount = new Map<string, string>();
       const accountTransactionTotals = new Map<string, number>();
       warnings = [];
       const addWarning = (accountId: string, message: string) => {
@@ -690,6 +691,8 @@ export function registerPJRoutes(app: Express) {
           bankAccountId: accountId,
           bankName: maskedBankName,
         });
+
+        bankNameByAccount.set(accountId, maskedBankName);
 
         accountLogger.info("Iniciando processamento de extrato bancário", {
           event: "pj.ofx.import.account.start",
@@ -964,12 +967,17 @@ export function registerPJRoutes(app: Express) {
         ingestionStartedAt !== null
           ? Number(process.hrtime.bigint() - ingestionStartedAt) / 1_000_000
           : 0;
-      recordOfxImportOutcome({
-        clientId,
-        importId,
-        success: true,
-        durationMs,
-        warnings: warnings.length,
+      accountSummaries.forEach(summary => {
+        const perAccountWarnings = warningsByAccount.get(summary.accountId) ?? [];
+        recordOfxImportOutcome({
+          clientId,
+          importId,
+          bankAccountId: summary.accountId,
+          bankName: bankNameByAccount.get(summary.accountId),
+          success: true,
+          durationMs,
+          warnings: perAccountWarnings.length,
+        });
       });
 
       ingestionLogger.info("Importação OFX concluída", {
@@ -998,8 +1006,9 @@ export function registerPJRoutes(app: Express) {
     } catch (error: any) {
       if (clientId) {
         const hrNow = process.hrtime.bigint();
+        const timersSnapshot = Array.from(activeTimers.values());
         if (activeTimers.size > 0) {
-          activeTimers.forEach(timer => {
+          timersSnapshot.forEach(timer => {
             incrementOfxError(timer.clientId, timer.bankAccountId, errorStage, timer.bankName);
             recordOfxIngestionDuration(timer, "error");
           });
@@ -1024,14 +1033,31 @@ export function registerPJRoutes(app: Express) {
         const durationMs =
           ingestionStartedAt !== null ? Number(hrNow - ingestionStartedAt) / 1_000_000 : 0;
 
-        recordOfxImportOutcome({
-          clientId,
-          importId,
-          success: false,
-          durationMs,
-          warnings: warnings.length,
-          error,
-        });
+        if (timersSnapshot.length > 0) {
+          timersSnapshot.forEach(timer => {
+            recordOfxImportOutcome({
+              clientId,
+              importId,
+              bankAccountId: timer.bankAccountId,
+              bankName: timer.bankName,
+              success: false,
+              durationMs,
+              warnings: warnings.length,
+              error,
+            });
+          });
+        } else {
+          recordOfxImportOutcome({
+            clientId,
+            importId,
+            bankAccountId: UNKNOWN_BANK_LABEL,
+            bankName: UNKNOWN_BANK_LABEL,
+            success: false,
+            durationMs,
+            warnings: warnings.length,
+            error,
+          });
+        }
       }
 
       ingestionLogger.error("Erro ao importar OFX PJ", {
