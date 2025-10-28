@@ -111,29 +111,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.createUser(user);
 
-      // Regenerate session ID to prevent fixation attacks
-      req.session.regenerate((err) => {
-        if (err) {
-          console.error("Erro ao regenerar sessão:", err);
-          return res.status(500).json({ error: "Erro ao criar sessão" });
-        }
+      const respondWithUser = () => {
+        res.json({ user: sanitizeUser(user) });
+      };
 
-        // Set session
-        req.session.userId = userId;
+      if (!sessionUser) {
+        // Regenerate session ID to prevent fixation attacks on self-registration
+        req.session.regenerate((err) => {
+          if (err) {
+            console.error("Erro ao regenerar sessão:", err);
+            return res.status(500).json({ error: "Erro ao criar sessão" });
+          }
 
-        // Return user without passwordHash
-        const { passwordHash: _, ...userResponse } = user;
-        res.json({ user: userResponse });
-      });
+          // Set session
+          req.session.userId = userId;
+
+          // Return user without passwordHash
+          respondWithUser();
+        });
+      } else {
+        // Preserve the existing admin session when provisioning new users
+        respondWithUser();
+      }
 
       if (sessionUser) {
-        await recordAuditEvent({
+        recordAuditEvent({
           user: sessionUser,
           eventType: "user.create",
           targetType: "user",
           targetId: userId,
           metadata: { role: data.role },
           piiSnapshot: { email: data.email, name: data.name },
+        }).catch(err => {
+          console.error("Falha ao registrar auditoria de criação de usuário:", err);
         });
       }
     } catch (error) {
