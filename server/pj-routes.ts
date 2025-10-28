@@ -8,64 +8,72 @@ import Ofx from "ofx-js";
 import {
   type Sale,
   type SaleLeg,
-  type SettlementParcel,
-  type PaymentMethod,
   type BankTransaction,
   type CategorizationRule,
 } from "@shared/schema";
-import { addDays, addMonths, formatBR, toISOFromBR, inPeriod } from "@shared/utils";
+import { formatBR, toISOFromBR, isBetweenDates } from "@shared/utils";
+import {
+  applyCategorizationRules,
+  calculateSettlementPlan,
+  extractPattern,
+  isDuplicateTransaction,
+  matchesPattern,
+  normalizeOfxAmount,
+} from "./pj-ingestion-helpers";
+import { buildCostBreakdown, buildMonthlyInsights } from "./pj-dashboard-helpers";
 import { z } from "zod";
+import { recordAuditEvent } from "./security/audit";
+import { getLogger } from "./observability/logger";
+import {
+  startOfxIngestionTimer,
+  recordOfxIngestionDuration,
+  incrementOfxError,
+} from "./observability/metrics";
+import { recordOfxImportOutcome } from "./observability/alerts";
+
+const ofxTransactionSchema = z.object({
+  DTPOSTED: z.string().min(1, "Transação OFX sem DTPOSTED"),
+  TRNAMT: z.string().min(1, "Transação OFX sem TRNAMT"),
+  TRNTYPE: z.string().optional(),
+  FITID: z.string().optional(),
+  UNIQUEID: z.string().optional(),
+  REFNUM: z.string().optional(),
+  CHECKNUM: z.string().optional(),
+  NAME: z.string().optional(),
+  MEMO: z.string().optional(),
+});
+
+const ofxStatementSchema = z.object({
+  STMTRS: z.object({
+    CURDEF: z.string().optional(),
+    BANKACCTFROM: z
+      .object({
+        ACCTID: z.string().optional(),
+        BANKID: z.string().optional(),
+        BRANCHID: z.string().optional(),
+      })
+      .optional(),
+    BANKTRANLIST: z
+      .object({
+        DTSTART: z.string().optional(),
+        DTEND: z.string().optional(),
+        STMTTRN: z.union([ofxTransactionSchema, z.array(ofxTransactionSchema)]),
+      })
+      .passthrough(),
+    LEDGERBAL: z
+      .object({
+        BALAMT: z.string(),
+        DTASOF: z.string().optional(),
+      })
+      .optional(),
+  }),
+});
 
 // Configure multer
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
-
-/**
- * Calcula o plano de liquidação (settlementPlan) baseado no método de pagamento
- */
-function calculateSettlementPlan(
-  saleDate: string, // DD/MM/YYYY
-  method: PaymentMethod | undefined,
-  installments: number,
-  netAmount: number
-): SettlementParcel[] {
-  const plan: SettlementParcel[] = [];
-  
-  // Padrão se não houver configuração
-  const liquidacao = method?.liquidacao || "D+1";
-  
-  if (liquidacao.startsWith("D+") && !liquidacao.includes("por_parcela")) {
-    // D+X: parcela única
-    const days = parseInt(liquidacao.substring(2));
-    plan.push({
-      n: 1,
-      due: addDays(saleDate, days),
-      expected: netAmount,
-    });
-  } else if (liquidacao.includes("por_parcela")) {
-    // D+30_por_parcela: múltiplas parcelas a cada 30 dias (primeira parcela em +30 dias)
-    const amountPerInstallment = netAmount / installments;
-    
-    for (let i = 0; i < installments; i++) {
-      plan.push({
-        n: i + 1,
-        due: addMonths(saleDate, i + 1), // +1 para começar 30 dias após a venda
-        expected: amountPerInstallment,
-      });
-    }
-  } else {
-    // Fallback: D+1
-    plan.push({
-      n: 1,
-      due: addDays(saleDate, 1),
-      expected: netAmount,
-    });
-  }
-  
-  return plan;
-}
 
 export function registerPJRoutes(app: Express) {
   // ===== VENDAS PJ =====
@@ -178,6 +186,19 @@ export function registerPJRoutes(app: Express) {
       await storage.addSale(clientId, sale);
       const existingLegs = await storage.getSaleLegs(clientId);
       await storage.setSaleLegs(clientId, [...existingLegs, ...saleLegs]);
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.sale.create",
+        targetType: "sale",
+        targetId: saleId,
+        metadata: { clientId, legs: saleLegs.length, channel: data.channel },
+        piiSnapshot: {
+          customerName: data.customer.name,
+          customerEmail: data.customer.email,
+          customerDoc: data.customer.doc,
+        },
+      });
       
       res.json({ 
         success: true, 
@@ -185,7 +206,10 @@ export function registerPJRoutes(app: Express) {
         legs: saleLegs,
       });
     } catch (error: any) {
-      console.error("Erro ao adicionar venda PJ:", error);
+      getLogger(req).error("Erro ao adicionar venda PJ", {
+        event: "pj.sales.create",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao adicionar venda" });
     }
   });
@@ -247,7 +271,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ sales: salesWithLegs });
     } catch (error: any) {
-      console.error("Erro ao listar vendas PJ:", error);
+      getLogger(req).error("Erro ao listar vendas PJ", {
+        event: "pj.sales.list",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar vendas" });
     }
   });
@@ -266,7 +293,10 @@ export function registerPJRoutes(app: Express) {
       const legs = await storage.getSaleLegs(clientId);
       res.json({ legs });
     } catch (error: any) {
-      console.error("Erro ao listar sale legs:", error);
+      getLogger(req).error("Erro ao listar sale legs", {
+        event: "pj.sales.legs",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar sale legs" });
     }
   });
@@ -282,8 +312,15 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "Arquivo CSV não enviado" });
       }
       
-      const clientId = req.body.clientId;
-      if (!clientId) {
+      const candidateClientId = (req.body?.clientId ?? req.query?.clientId) as
+        | string
+        | string[]
+        | undefined;
+      const clientId = Array.isArray(candidateClientId)
+        ? candidateClientId[0]
+        : candidateClientId;
+
+      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
       
@@ -428,7 +465,14 @@ export function registerPJRoutes(app: Express) {
       // Salvar
       await storage.setSales(clientId, [...existingSales, ...newSales]);
       await storage.setSaleLegs(clientId, [...existingLegs, ...newLegs]);
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.sale.create",
+        targetType: "sale-batch",
+        metadata: { clientId, imported, skipped, total: salesMap.size },
+      });
+
       res.json({
         success: true,
         imported,
@@ -436,7 +480,10 @@ export function registerPJRoutes(app: Express) {
         total: salesMap.size,
       });
     } catch (error: any) {
-      console.error("Erro ao importar CSV de vendas:", error);
+      getLogger(req).error("Erro ao importar CSV de vendas", {
+        event: "pj.sales.importCsv",
+        context: { clientId: req.body?.clientId ?? req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao importar CSV" });
     }
   });
@@ -457,7 +504,10 @@ export function registerPJRoutes(app: Express) {
       const transactions = await storage.getBankTransactions(clientId);
       res.json({ transactions });
     } catch (error: any) {
-      console.error("Erro ao listar transações bancárias:", error);
+      getLogger(req).error("Erro ao listar transações bancárias", {
+        event: "pj.bank.list",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar transações" });
     }
   });
@@ -467,122 +517,367 @@ export function registerPJRoutes(app: Express) {
    * Importar extrato bancário via OFX com deduplicação SHA256
    */
   app.post("/api/pj/import/ofx", scopeRequired("PJ"), upload.single("ofx"), async (req, res) => {
+    const baseLogger = getLogger(req);
+    const importId = crypto.randomUUID();
+    let ingestionLogger = baseLogger.child({ importId });
+    let timer: ReturnType<typeof startOfxIngestionTimer> | null = null;
+    let warnings: string[] = [];
+    let errorStage = "initial";
+    let clientId: string | undefined;
+
     try {
       if (!req.file) {
         return res.status(400).json({ error: "Arquivo OFX não enviado" });
       }
-      
-      const clientId = req.body.clientId;
-      if (!clientId) {
+
+      const candidateClientId = (req.body?.clientId ?? req.query?.clientId) as
+        | string
+        | string[]
+        | undefined;
+      clientId = Array.isArray(candidateClientId)
+        ? candidateClientId[0]
+        : candidateClientId;
+
+      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
-      
-      // Calcular hash do arquivo (deduplicação)
-      const fileContent = req.file.buffer.toString("utf-8");
-      const fileHash = crypto.createHash("sha256").update(fileContent).digest("hex");
-      
-      // Verificar se já foi importado
+
+      ingestionLogger = ingestionLogger.child({ clientId });
+      timer = startOfxIngestionTimer(clientId);
+      ingestionLogger.info("Importação OFX iniciada", {
+        event: "pj.ofx.import.start",
+        context: {
+          sizeBytes: req.file.size,
+        },
+      });
+
+      errorStage = "hashing";
+      const buffer = req.file.buffer;
+      const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
       const existingImport = await storage.getOFXImport(fileHash);
-      if (existingImport) {
-        return res.status(409).json({ 
-          error: "OFX duplicado. Este arquivo já foi importado anteriormente.",
-          importedAt: existingImport.importedAt,
-        });
+
+      ingestionLogger.info("Arquivo OFX recebido", {
+        event: "pj.ofx.import.file",
+        context: {
+          fileHash,
+          duplicateFile: Boolean(existingImport),
+        },
+      });
+
+      let fileContent = buffer.toString("utf8");
+      if (fileContent.includes("�")) {
+        fileContent = buffer.toString("latin1");
       }
-      
-      // Parse OFX
-      const ofxData = Ofx.parse(fileContent);
-      
-      // Extrair transações
+
+      errorStage = "parse";
+      let ofxData: any;
+      try {
+        ofxData = await Ofx.parse(fileContent);
+      } catch (parseError: any) {
+        throw new Error(`OFX inválido ou corrompido: ${parseError?.message || parseError}`);
+      }
+
+      const toArray = <T,>(value: T | T[] | undefined): T[] => {
+        if (!value) return [];
+        return Array.isArray(value) ? value : [value];
+      };
+
+      const accountsArray = toArray(ofxData?.OFX?.BANKMSGSRSV1?.STMTTRNRS);
+      if (accountsArray.length === 0) {
+        throw new Error("Arquivo OFX não contém contas bancárias para importação");
+      }
+
+      ingestionLogger.info("OFX parseado", {
+        event: "pj.ofx.import.parsed",
+        context: {
+          accounts: accountsArray.length,
+        },
+      });
+
+      const parseDate = (value?: string): string | undefined => {
+        if (!value) return undefined;
+        const trimmed = value.trim();
+        if (trimmed.length < 8) {
+          throw new Error(`Data OFX inválida: ${value}`);
+        }
+        return formatBR(trimmed.substring(0, 8));
+      };
+
+      const round2 = (value: number) => Math.round(value * 100) / 100;
+
       const existingBankTxs = await storage.getBankTransactions(clientId);
       const newTransactions: BankTransaction[] = [];
-      
-      // OFX pode ter múltiplas contas
-      const accounts = ofxData.OFX?.BANKMSGSRSV1?.STMTTRNRS || [];
-      const accountsArray = Array.isArray(accounts) ? accounts : [accounts];
-      
+      warnings = [];
+      const accountSummaries: {
+        accountId: string;
+        currency?: string;
+        startDate?: string;
+        endDate?: string;
+        openingBalance?: number;
+        ledgerClosingBalance?: number;
+        computedClosingBalance?: number;
+        totalCredits: number;
+        totalDebits: number;
+        net: number;
+        divergence?: number;
+      }[] = [];
+      let totalTransactionsInFile = 0;
+      let dedupedCount = 0;
+
+      errorStage = "processing";
+
       for (const account of accountsArray) {
-        const statement = account.STMTRS;
-        if (!statement) continue;
-        
-        const accountId = statement.BANKACCTFROM?.ACCTID || "unknown";
-        const transactions = statement.BANKTRANLIST?.STMTTRN || [];
-        const txArray = Array.isArray(transactions) ? transactions : [transactions];
-        
-        for (const tx of txArray) {
-          const date = tx.DTPOSTED ? formatBR(tx.DTPOSTED.substring(0, 8)) : "";
-          const amount = parseFloat(tx.TRNAMT) || 0;
-          const desc = tx.MEMO || tx.NAME || "Sem descrição";
-          const fitid = tx.FITID;
-          
-          // Dedup por fitid ou (date + amount + desc)
-          const dupKey = fitid || `${date}-${amount}-${desc}`;
-          const isDup = existingBankTxs.some(t => 
-            (t.fitid && t.fitid === fitid) ||
-            (t.date === date && t.amount === amount && t.desc === desc)
-          );
-          
-          if (!isDup) {
-            const bankTx: BankTransaction = {
-              bankTxId: uuidv4(),
-              date,
-              desc,
+        const parsedAccount = ofxStatementSchema.parse(account);
+        const statement = parsedAccount.STMTRS;
+
+        const accountId =
+          statement.BANKACCTFROM?.ACCTID ||
+          statement.BANKACCTFROM?.BANKID ||
+          `conta_${accountSummaries.length + 1}`;
+
+        const txArray = toArray(statement.BANKTRANLIST?.STMTTRN);
+        if (txArray.length === 0) {
+          warnings.push(`Conta ${accountId} sem transações no período informado.`);
+          accountSummaries.push({
+            accountId,
+            currency: statement.CURDEF,
+            startDate: parseDate(statement.BANKTRANLIST?.DTSTART),
+            endDate: parseDate(statement.BANKTRANLIST?.DTEND),
+            openingBalance: undefined,
+            ledgerClosingBalance: undefined,
+            computedClosingBalance: undefined,
+            totalCredits: 0,
+            totalDebits: 0,
+            net: 0,
+          });
+          continue;
+        }
+
+        const startDate = parseDate(statement.BANKTRANLIST?.DTSTART);
+        const endDate = parseDate(statement.BANKTRANLIST?.DTEND);
+
+        let totalCredits = 0;
+        let totalDebits = 0;
+        let net = 0;
+
+        for (const rawTx of txArray) {
+          const parsedTx = ofxTransactionSchema.parse(rawTx);
+          const date = parseDate(parsedTx.DTPOSTED)!;
+          const { amount, adjusted } = normalizeOfxAmount(parsedTx.TRNAMT, parsedTx.TRNTYPE);
+          const desc = parsedTx.MEMO || parsedTx.NAME || "Sem descrição";
+          const fitid = parsedTx.FITID || parsedTx.UNIQUEID || parsedTx.REFNUM || parsedTx.CHECKNUM;
+
+          totalTransactionsInFile += 1;
+          if (amount > 0) {
+            totalCredits = round2(totalCredits + amount);
+          } else if (amount < 0) {
+            totalDebits = round2(totalDebits + Math.abs(amount));
+          }
+          net = round2(net + amount);
+
+          if (adjusted && parsedTx.TRNTYPE) {
+            warnings.push(
+              `Sinal ajustado automaticamente: transação ${fitid || desc} reinterpretada como ${parsedTx.TRNTYPE}.`
+            );
+          }
+
+          const isDuplicate = isDuplicateTransaction(
+            existingBankTxs,
+            newTransactions,
+            {
               amount,
-              accountId,
+              desc,
+              date,
               fitid,
-              sourceHash: fileHash,
-              linkedLegs: [],
-              reconciled: false,
-            };
-            
-            newTransactions.push(bankTx);
-          }
-        }
-      }
-      
-      // Aplicar categorização prospectiva (auto-categorizar com regras existentes)
-      const rules = await storage.getCategorizationRules(clientId);
-      let categorizedCount = 0;
-      
-      if (rules.length > 0) {
-        for (const tx of newTransactions) {
-          for (const rule of rules) {
-            if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
-              // Usar categorizedAs conforme o schema
-              tx.categorizedAs = {
-                group: rule.action.category,
-                subcategory: rule.action.subcategory,
-                auto: true,
-              };
-              categorizedCount++;
-              break; // Primeira regra que match
             }
+          );
+
+          if (isDuplicate) {
+            dedupedCount += 1;
+            continue;
+          }
+
+          const bankTx: BankTransaction = {
+            bankTxId: crypto.randomUUID(),
+            date,
+            desc,
+            amount,
+            accountId,
+            fitid,
+            sourceHash: fileHash,
+            linkedLegs: [],
+            reconciled: false,
+          };
+
+          newTransactions.push(bankTx);
+        }
+
+        const ledgerRaw = statement.LEDGERBAL?.BALAMT;
+        let ledgerClosingBalance: number | undefined;
+        if (ledgerRaw !== undefined) {
+          const parsedLedger = Number.parseFloat(String(ledgerRaw).replace(",", "."));
+          if (Number.isNaN(parsedLedger)) {
+            warnings.push(`Saldo final inválido informado para a conta ${accountId}.`);
+          } else {
+            ledgerClosingBalance = round2(parsedLedger);
+          }
+        } else {
+          warnings.push(`Saldo final (LEDGERBAL) ausente na conta ${accountId}.`);
+        }
+
+        let openingBalance: number | undefined;
+        const openingRaw = (statement.BANKTRANLIST as any)?.BALAMT;
+        if (openingRaw !== undefined) {
+          const parsedOpening = Number.parseFloat(String(openingRaw).replace(",", "."));
+          if (!Number.isNaN(parsedOpening)) {
+            openingBalance = round2(parsedOpening);
           }
         }
+
+        if (openingBalance === undefined && ledgerClosingBalance !== undefined) {
+          openingBalance = round2(ledgerClosingBalance - net);
+        }
+
+        const computedClosingBalance =
+          openingBalance !== undefined ? round2(openingBalance + net) : undefined;
+
+        let divergence: number | undefined;
+        if (ledgerClosingBalance !== undefined && computedClosingBalance !== undefined) {
+          divergence = round2(computedClosingBalance - ledgerClosingBalance);
+          if (Math.abs(divergence) > 0.01) {
+            warnings.push(
+              `Divergência de R$ ${Math.abs(divergence).toFixed(2)} no saldo final da conta ${accountId}.`
+            );
+          }
+        }
+
+        accountSummaries.push({
+          accountId,
+          currency: statement.CURDEF,
+          startDate,
+          endDate,
+          openingBalance,
+          ledgerClosingBalance,
+          computedClosingBalance,
+          totalCredits: round2(totalCredits),
+          totalDebits: round2(totalDebits),
+          net,
+          divergence,
+        });
       }
-      
-      // Salvar transações (já com categorização aplicada)
-      await storage.addBankTransactions(clientId, newTransactions);
-      
-      // Registrar importação
+
+      if (totalTransactionsInFile === 0) {
+        throw new Error("Nenhuma transação encontrada no arquivo OFX enviado.");
+      }
+
+      ingestionLogger.info("Processamento OFX concluído", {
+        event: "pj.ofx.import.summary",
+        context: {
+          totalTransactionsInFile,
+          newTransactions: newTransactions.length,
+          deduped: dedupedCount,
+          warnings: warnings.length,
+        },
+      });
+
+      errorStage = "categorize";
+      const rules = await storage.getCategorizationRules(clientId);
+      const categorizedCount = applyCategorizationRules(newTransactions, rules);
+
+      if (newTransactions.length > 0) {
+        await storage.addBankTransactions(clientId, newTransactions);
+      }
+
+      errorStage = "persist";
       await storage.addOFXImport({
         fileHash,
         clientId,
         importedAt: new Date().toISOString(),
-        transactionCount: newTransactions.length,
+        transactionCount: totalTransactionsInFile,
+        reconciliation: {
+          accounts: accountSummaries,
+          warnings,
+        },
       });
-      
-      res.json({
+
+      ingestionLogger.info("Reconciliação OFX consolidada", {
+        event: "pj.ofx.import.reconciliation",
+        context: {
+          accounts: accountSummaries.length,
+          warnings: warnings.length,
+        },
+      });
+
+      errorStage = "audit";
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.ofx.import",
+        targetType: "bank-transactions",
+        metadata: {
+          clientId,
+          imported: newTransactions.length,
+          categorized: categorizedCount,
+          accounts: accountSummaries.length,
+          duplicateFile: Boolean(existingImport),
+          warnings: warnings.length,
+          deduped: dedupedCount,
+        },
+      });
+
+      errorStage = "response";
+      const durationMs = timer ? recordOfxIngestionDuration(timer, "success") : 0;
+      recordOfxImportOutcome({
+        clientId,
+        importId,
+        success: true,
+        durationMs,
+        warnings: warnings.length,
+      });
+
+      ingestionLogger.info("Importação OFX concluída", {
+        event: "pj.ofx.import.success",
+        context: {
+          imported: newTransactions.length,
+          autoCategorized: categorizedCount,
+          deduped: dedupedCount,
+          warnings: warnings.length,
+          alreadyImported: Boolean(existingImport),
+        },
+      });
+
+      return res.json({
         success: true,
         imported: newTransactions.length,
-        total: newTransactions.length,
+        total: totalTransactionsInFile,
+        deduped: dedupedCount,
+        autoCategorized: categorizedCount,
+        alreadyImported: Boolean(existingImport),
+        reconciliation: {
+          accounts: accountSummaries,
+          warnings,
+        },
       });
     } catch (error: any) {
-      console.error("Erro ao importar OFX PJ:", error);
-      res.status(500).json({ error: error.message || "Erro ao importar OFX" });
+      if (clientId) {
+        incrementOfxError(clientId, errorStage);
+        const durationMs = timer ? recordOfxIngestionDuration(timer, "error") : 0;
+        recordOfxImportOutcome({
+          clientId,
+          importId,
+          success: false,
+          durationMs,
+          warnings: warnings.length,
+          error,
+        });
+      }
+
+      ingestionLogger.error("Erro ao importar OFX PJ", {
+        event: "pj.ofx.import.error",
+        context: { stage: errorStage },
+      }, error);
+      return res.status(500).json({ error: error.message || "Erro ao importar OFX" });
     }
   });
-  
   /**
    * POST /api/pj/reconciliation/suggest
    * Sugerir matches automáticos entre transações bancárias e parcelas de vendas
@@ -648,7 +943,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ suggestions });
     } catch (error: any) {
-      console.error("Erro ao sugerir conciliação PJ:", error);
+      getLogger(req).error("Erro ao sugerir conciliação PJ", {
+        event: "pj.reconciliation.suggest",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao sugerir conciliação" });
     }
   });
@@ -727,7 +1025,20 @@ export function registerPJRoutes(app: Express) {
       // Salvar
       await storage.setSaleLegs(clientId, legs);
       await storage.setBankTransactions(clientId, bankTxs);
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.sale.reconcile",
+        targetType: "sale-leg",
+        targetId: saleLegId,
+        metadata: {
+          clientId,
+          matches: matches.length,
+          reconciledParcels,
+          totalParcels,
+        },
+      });
+
       res.json({
         success: true,
         leg,
@@ -736,7 +1047,10 @@ export function registerPJRoutes(app: Express) {
         totalParcels,
       });
     } catch (error: any) {
-      console.error("Erro ao confirmar conciliação PJ:", error);
+      getLogger(req).error("Erro ao confirmar conciliação PJ", {
+        event: "pj.reconciliation.confirm",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao confirmar conciliação" });
     }
   });
@@ -758,7 +1072,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ rules });
     } catch (error: any) {
-      console.error("Erro ao listar regras PJ:", error);
+      getLogger(req).error("Erro ao listar regras PJ", {
+        event: "pj.rules.list",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar regras" });
     }
   });
@@ -781,13 +1098,27 @@ export function registerPJRoutes(app: Express) {
       const data = schema.parse(req.body);
       
       // Criar regra
+      const createdAt = new Date().toISOString();
       const rule: CategorizationRule = {
         ruleId: uuidv4(),
         pattern: data.pattern,
         matchType: data.matchType,
+        action: {
+          type: "categorize_as_expense",
+          category: data.dfcCategory as CategorizationRule["action"]["category"],
+          subcategory: data.dfcItem,
+          autoConfirm: false,
+        },
+        confidence: 100,
+        learnedFrom: {
+          bankTxId: "manual-rule",
+          date: formatBR(createdAt.split("T")[0]),
+        },
+        appliedCount: 0,
+        enabled: true,
         dfcCategory: data.dfcCategory,
         dfcItem: data.dfcItem,
-        createdAt: new Date().toISOString(),
+        createdAt,
       };
       
       // Salvar regra
@@ -798,7 +1129,7 @@ export function registerPJRoutes(app: Express) {
       let retroactiveCount = 0;
       if (data.applyRetroactive) {
         const bankTxs = await storage.getBankTransactions(data.clientId);
-        
+
         for (const tx of bankTxs) {
           if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
             tx.dfcCategory = rule.dfcCategory;
@@ -808,17 +1139,32 @@ export function registerPJRoutes(app: Express) {
             retroactiveCount++;
           }
         }
-        
+
         await storage.setBankTransactions(data.clientId, bankTxs);
       }
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.transaction.update",
+        targetType: "categorization-rule",
+        targetId: rule.ruleId,
+        metadata: {
+          clientId: data.clientId,
+          matchType: rule.matchType,
+          retroactiveCount,
+        },
+      });
+
       res.json({
         success: true,
         rule,
         retroactiveCount,
       });
     } catch (error: any) {
-      console.error("Erro ao salvar regra PJ:", error);
+      getLogger(req).error("Erro ao salvar regra PJ", {
+        event: "pj.rules.save",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao salvar regra" });
     }
   });
@@ -864,19 +1210,35 @@ export function registerPJRoutes(app: Express) {
         const pattern = extractPattern(tx.desc, data.matchType);
         
         // Criar nova regra
-        rule = {
+        const createdAt = new Date().toISOString();
+        const newRule: CategorizationRule = {
           ruleId: uuidv4(),
           pattern,
           matchType: data.matchType,
+          action: {
+            type: "categorize_as_expense",
+            category: data.dfcCategory as CategorizationRule["action"]["category"],
+            subcategory: data.dfcItem,
+            autoConfirm: false,
+          },
+          confidence: 90,
+          learnedFrom: {
+            bankTxId: tx.bankTxId,
+            date: tx.date,
+          },
+          appliedCount: 1,
+          enabled: true,
           dfcCategory: data.dfcCategory,
           dfcItem: data.dfcItem,
-          createdAt: new Date().toISOString(),
+          createdAt,
         };
-        
+
+        rule = newRule;
+
         // Salvar regra
         const rules = await storage.getCategorizationRules(data.clientId);
-        await storage.setCategorizationRules(data.clientId, [...rules, rule]);
-        
+        await storage.setCategorizationRules(data.clientId, [...rules, newRule]);
+
         // Aplicação prospectiva (categorizar outras transações não categorizadas)
         for (const otherTx of bankTxs) {
           if (
@@ -887,14 +1249,28 @@ export function registerPJRoutes(app: Express) {
             otherTx.dfcCategory = data.dfcCategory;
             otherTx.dfcItem = data.dfcItem;
             otherTx.categorizedBy = "rule";
-            otherTx.categorizedRuleId = rule.ruleId;
+            otherTx.categorizedRuleId = newRule.ruleId;
             prospectiveCount++;
           }
         }
-        
+
         await storage.setBankTransactions(data.clientId, bankTxs);
       }
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.transaction.update",
+        targetType: "bank-transaction",
+        targetId: tx.bankTxId,
+        metadata: {
+          clientId: data.clientId,
+          category: data.dfcCategory,
+          learnPattern: data.learnPattern,
+          prospectiveCount,
+          ruleId: rule?.ruleId,
+        },
+      });
+
       res.json({
         success: true,
         transaction: tx,
@@ -902,13 +1278,76 @@ export function registerPJRoutes(app: Express) {
         prospectiveCount,
       });
     } catch (error: any) {
-      console.error("Erro ao aplicar categorização PJ:", error);
+      getLogger(req).error("Erro ao aplicar categorização PJ", {
+        event: "pj.rules.apply",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao aplicar categorização" });
     }
   });
   
   // ===== DASHBOARD BACKEND PJ =====
   
+  /**
+   * GET /api/pj/dashboard/monthly-insights
+   * Retorna KPIs mensais consolidados com base nas vendas e transações importadas
+   */
+  app.get("/api/pj/dashboard/monthly-insights", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = (req.query.month as string) || undefined;
+
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+
+      const [bankTxs, sales] = await Promise.all([
+        storage.getBankTransactions(clientId),
+        storage.getSales(clientId),
+      ]);
+
+      const insights = buildMonthlyInsights(bankTxs, sales, month);
+
+      res.json(insights);
+    } catch (error: any) {
+      getLogger(req).error("Erro ao buscar monthly-insights PJ", {
+        event: "pj.dashboard.monthly-insights",
+        context: { clientId: req.query?.clientId },
+      }, error);
+      res.status(500).json({ error: error.message || "Erro ao buscar monthly-insights" });
+    }
+  });
+
+  /**
+   * GET /api/pj/dashboard/costs-breakdown
+   * Retorna a visão consolidada do DFC e custos por categoria
+   */
+  app.get("/api/pj/dashboard/costs-breakdown", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = (req.query.month as string) || undefined;
+
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+
+      const [bankTxs, sales] = await Promise.all([
+        storage.getBankTransactions(clientId),
+        storage.getSales(clientId),
+      ]);
+
+      const breakdown = buildCostBreakdown(bankTxs, sales, month);
+
+      res.json(breakdown);
+    } catch (error: any) {
+      getLogger(req).error("Erro ao buscar costs-breakdown PJ", {
+        event: "pj.dashboard.costs-breakdown",
+        context: { clientId: req.query?.clientId },
+      }, error);
+      res.status(500).json({ error: error.message || "Erro ao buscar costs-breakdown" });
+    }
+  });
+
   /**
    * GET /api/pj/dashboard/summary
    * KPIs do mês: receita, despesas, saldo, contas a receber
@@ -929,7 +1368,7 @@ export function registerPJRoutes(app: Express) {
       
       // Buscar transações bancárias do mês
       const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => inPeriod(tx.date, startDate, endDate));
+      const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
       
       const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
       const despesas = Math.abs(txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0));
@@ -941,7 +1380,7 @@ export function registerPJRoutes(app: Express) {
       
       for (const leg of legs) {
         for (const parcel of leg.settlementPlan) {
-          if (!parcel.receivedTxId && inPeriod(parcel.due, startDate, endDate)) {
+          if (!parcel.receivedTxId && isBetweenDates(parcel.due, startDate, endDate)) {
             contasReceber += parcel.expected;
           }
         }
@@ -963,7 +1402,10 @@ export function registerPJRoutes(app: Express) {
         margemLiquida,
       });
     } catch (error: any) {
-      console.error("Erro ao buscar summary PJ:", error);
+      getLogger(req).error("Erro ao buscar summary PJ", {
+        event: "pj.dashboard.summary",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar summary" });
     }
   });
@@ -1009,7 +1451,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ trends });
     } catch (error: any) {
-      console.error("Erro ao buscar trends PJ:", error);
+      getLogger(req).error("Erro ao buscar trends PJ", {
+        event: "pj.dashboard.trends",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar trends" });
     }
   });
@@ -1033,9 +1478,9 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => 
-        tx.amount < 0 && 
-        inPeriod(tx.date, startDate, endDate)
+      const txsInMonth = bankTxs.filter(tx =>
+        tx.amount < 0 &&
+        isBetweenDates(tx.date, startDate, endDate)
       );
       
       // Agrupar por dfcItem
@@ -1061,7 +1506,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ topCosts: sorted });
     } catch (error: any) {
-      console.error("Erro ao buscar top-costs PJ:", error);
+      getLogger(req).error("Erro ao buscar top-costs PJ", {
+        event: "pj.dashboard.top-costs",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar top-costs" });
     }
   });
@@ -1085,7 +1533,7 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const sales = await storage.getSales(clientId);
-      const salesInMonth = sales.filter(s => inPeriod(s.date, startDate, endDate));
+      const salesInMonth = sales.filter(s => isBetweenDates(s.date, startDate, endDate));
       
       // Agrupar por canal
       const grouped = new Map<string, number>();
@@ -1102,7 +1550,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ revenueSplit });
     } catch (error: any) {
-      console.error("Erro ao buscar revenue-split PJ:", error);
+      getLogger(req).error("Erro ao buscar revenue-split PJ", {
+        event: "pj.dashboard.revenue-split",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar revenue-split" });
     }
   });
@@ -1126,7 +1577,7 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const sales = await storage.getSales(clientId);
-      const salesInMonth = sales.filter(s => inPeriod(s.date, startDate, endDate));
+      const salesInMonth = sales.filter(s => isBetweenDates(s.date, startDate, endDate));
       
       const totalSales = salesInMonth.length;
       const totalRevenue = salesInMonth.reduce((sum, s) => sum + s.grossAmount, 0);
@@ -1136,10 +1587,15 @@ export function registerPJRoutes(app: Express) {
       const customerMap = new Map<string, number>();
       
       for (const sale of salesInMonth) {
-        const customer = sale.customer || "Cliente desconhecido";
-        customerMap.set(customer, (customerMap.get(customer) || 0) + sale.grossAmount);
+        const customerInfo = sale.customer;
+        const customerKey =
+          customerInfo?.name ||
+          customerInfo?.email ||
+          customerInfo?.doc ||
+          "Cliente desconhecido";
+        customerMap.set(customerKey, (customerMap.get(customerKey) || 0) + sale.grossAmount);
       }
-      
+
       const topClientes = Array.from(customerMap.entries())
         .map(([customer, amount]) => ({ customer, amount }))
         .sort((a, b) => b.amount - a.amount)
@@ -1152,7 +1608,10 @@ export function registerPJRoutes(app: Express) {
         topClientes,
       });
     } catch (error: any) {
-      console.error("Erro ao buscar sales-kpis PJ:", error);
+      getLogger(req).error("Erro ao buscar sales-kpis PJ", {
+        event: "pj.dashboard.sales-kpis",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar sales-kpis" });
     }
   });
@@ -1176,7 +1635,7 @@ export function registerPJRoutes(app: Express) {
       const endDate = `${lastDay}/${monthNum}/${year}`;
       
       const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => inPeriod(tx.date, startDate, endDate));
+      const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
       
       // Agrupar por categoria DFC
       const categories = new Map<string, { inflows: number; outflows: number }>();
@@ -1209,46 +1668,12 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ dfc });
     } catch (error: any) {
-      console.error("Erro ao buscar DFC PJ:", error);
+      getLogger(req).error("Erro ao buscar DFC PJ", {
+        event: "pj.dashboard.cashflow",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar DFC" });
     }
   });
 }
 
-/**
- * Helper: Verificar se descrição match com padrão
- */
-function matchesPattern(desc: string, pattern: string, matchType: string): boolean {
-  const descLower = desc.toLowerCase();
-  const patternLower = pattern.toLowerCase();
-  
-  switch (matchType) {
-    case "exact":
-      return descLower === patternLower;
-    case "contains":
-      return descLower.includes(patternLower);
-    case "startsWith":
-      return descLower.startsWith(patternLower);
-    default:
-      return false;
-  }
-}
-
-/**
- * Helper: Extrair padrão de uma descrição
- */
-function extractPattern(desc: string, matchType: string): string {
-  switch (matchType) {
-    case "exact":
-      return desc;
-    case "contains":
-      // Extrai primeira palavra significativa (>3 caracteres)
-      const words = desc.split(/\s+/).filter(w => w.length > 3);
-      return words[0] || desc;
-    case "startsWith":
-      // Extrai primeiros 10 caracteres
-      return desc.substring(0, 10);
-    default:
-      return desc;
-  }
-}

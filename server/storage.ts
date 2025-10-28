@@ -1,6 +1,22 @@
-import type { 
-  Client, Transaction, Position, PFPolicy, PJPolicy, Report, User, OFXImport, OFItem, OFAccount, OFSyncMeta,
-  Sale, SaleLeg, PaymentMethod, LedgerEntry, BankTransaction, CategorizationRule
+import type {
+  Client,
+  Transaction,
+  Position,
+  PFPolicy,
+  PJPolicy,
+  Report,
+  User,
+  OFXImport,
+  OFItem,
+  OFAccount,
+  OFSyncMeta,
+  Sale,
+  SaleLeg,
+  PaymentMethod,
+  LedgerEntry,
+  BankTransaction,
+  CategorizationRule,
+  AuditLogEntry,
 } from "@shared/schema";
 import Database from "@replit/database";
 
@@ -11,11 +27,13 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: User): Promise<User>;
   updateUser(userId: string, updates: Partial<User>): Promise<User>;
+  anonymizeUser(userId: string): Promise<User | undefined>;
 
   // Clients
   getClients(): Promise<Client[]>;
   getClient(clientId: string): Promise<Client | undefined>;
   upsertClient(client: Client): Promise<Client>;
+  anonymizeClient(clientId: string): Promise<Client | undefined>;
 
   // Transactions
   getTransactions(clientId: string): Promise<Transaction[]>;
@@ -82,6 +100,10 @@ export interface IStorage {
   setCategorizationRules(clientId: string, rules: CategorizationRule[]): Promise<void>;
   addCategorizationRule(clientId: string, rule: CategorizationRule): Promise<void>;
   updateCategorizationRule(clientId: string, ruleId: string, updates: Partial<CategorizationRule>): Promise<void>;
+
+  // Audit trail
+  recordAudit(entry: AuditLogEntry): Promise<void>;
+  getAuditLogs(organizationId: string, limit?: number): Promise<AuditLogEntry[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -104,6 +126,7 @@ export class MemStorage implements IStorage {
   private pjLedgerEntries: Map<string, LedgerEntry[]>;
   private pjBankTransactions: Map<string, BankTransaction[]>;
   private pjCategorizationRules: Map<string, CategorizationRule[]>;
+  private auditLogs: Map<string, AuditLogEntry[]>;
 
   constructor() {
     this.users = new Map();
@@ -124,6 +147,7 @@ export class MemStorage implements IStorage {
     this.pjLedgerEntries = new Map();
     this.pjBankTransactions = new Map();
     this.pjCategorizationRules = new Map();
+    this.auditLogs = new Map();
   }
 
   // Users
@@ -154,6 +178,23 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
+  async anonymizeUser(userId: string): Promise<User | undefined> {
+    const existing = this.users.get(userId);
+    if (!existing) {
+      return undefined;
+    }
+    const anonymized: User = {
+      ...existing,
+      name: "Usuário Anonimizado",
+      email: `${userId}@anon.finco`,
+      passwordHash: existing.passwordHash,
+      managerId: undefined,
+      consultantId: undefined,
+    };
+    this.users.set(userId, anonymized);
+    return anonymized;
+  }
+
   // Clients
   async getClients(): Promise<Client[]> {
     return Array.from(this.clients.values());
@@ -166,6 +207,20 @@ export class MemStorage implements IStorage {
   async upsertClient(client: Client): Promise<Client> {
     this.clients.set(client.clientId, client);
     return client;
+  }
+
+  async anonymizeClient(clientId: string): Promise<Client | undefined> {
+    const existing = this.clients.get(clientId);
+    if (!existing) {
+      return undefined;
+    }
+    const anonymized: Client = {
+      ...existing,
+      name: "Cliente Anonimizado",
+      email: `${clientId}@anon.finco`,
+    };
+    this.clients.set(clientId, anonymized);
+    return anonymized;
   }
 
   // Transactions
@@ -369,6 +424,16 @@ export class MemStorage implements IStorage {
       this.pjCategorizationRules.set(clientId, rules);
     }
   }
+
+  async recordAudit(entry: AuditLogEntry): Promise<void> {
+    const existing = this.auditLogs.get(entry.organizationId) ?? [];
+    this.auditLogs.set(entry.organizationId, [...existing, entry].slice(-500));
+  }
+
+  async getAuditLogs(organizationId: string, limit = 100): Promise<AuditLogEntry[]> {
+    const entries = this.auditLogs.get(organizationId) ?? [];
+    return entries.slice(Math.max(0, entries.length - limit)).reverse();
+  }
 }
 
 export class ReplitDbStorage implements IStorage {
@@ -450,6 +515,26 @@ export class ReplitDbStorage implements IStorage {
     return updated;
   }
 
+  async anonymizeUser(userId: string): Promise<User | undefined> {
+    const existing = await this.getUserById(userId);
+    if (!existing) {
+      return undefined;
+    }
+    const anonymized: User = {
+      ...existing,
+      name: "Usuário Anonimizado",
+      email: `${userId}@anon.finco`,
+      passwordHash: existing.passwordHash,
+      managerId: undefined,
+      consultantId: undefined,
+    };
+    const setResult = await this.db.set(`user:${userId}`, anonymized);
+    if (!setResult.ok) {
+      throw new Error(`Database error anonymizing user: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+    }
+    return anonymized;
+  }
+
   // Clients - Use individual keys to avoid concurrency issues
   async getClients(): Promise<Client[]> {
     const listResult = await this.db.get("client_list");
@@ -500,8 +585,25 @@ export class ReplitDbStorage implements IStorage {
         throw new Error(`Database error updating client list: ${updateListResult.error?.message || JSON.stringify(updateListResult.error)}`);
       }
     }
-    
+
     return client;
+  }
+
+  async anonymizeClient(clientId: string): Promise<Client | undefined> {
+    const existing = await this.getClient(clientId);
+    if (!existing) {
+      return undefined;
+    }
+    const anonymized: Client = {
+      ...existing,
+      name: "Cliente Anonimizado",
+      email: `${clientId}@anon.finco`,
+    };
+    const setResult = await this.db.set(`client:${clientId}`, anonymized);
+    if (!setResult.ok) {
+      throw new Error(`Database error anonymizing client: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+    }
+    return anonymized;
   }
 
   // Transactions
@@ -808,7 +910,41 @@ export class ReplitDbStorage implements IStorage {
       await this.setCategorizationRules(clientId, rules);
     }
   }
+
+  async recordAudit(entry: AuditLogEntry): Promise<void> {
+    const key = `audit:${entry.organizationId}`;
+    const existingResult = await this.db.get(key);
+    if (!existingResult.ok && existingResult.error?.statusCode !== 404) {
+      throw new Error(`Database error getting audit log for ${entry.organizationId}: ${existingResult.error?.message || JSON.stringify(existingResult.error)}`);
+    }
+    const events: AuditLogEntry[] = existingResult.ok ? (existingResult.value ?? []) : [];
+    events.push(entry);
+    const trimmed = events.slice(-500);
+    const setResult = await this.db.set(key, trimmed);
+    if (!setResult.ok) {
+      throw new Error(`Database error writing audit log for ${entry.organizationId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+    }
+  }
+
+  async getAuditLogs(organizationId: string, limit = 100): Promise<AuditLogEntry[]> {
+    const key = `audit:${organizationId}`;
+    const result = await this.db.get(key);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(`Database error getting audit log for ${organizationId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+    const events: AuditLogEntry[] = result.ok ? (result.value ?? []) : [];
+    const trimmed = events.slice(Math.max(0, events.length - limit));
+    return trimmed.reverse();
+  }
 }
 
-// Use ReplitDbStorage by default for persistence
-export const storage = new ReplitDbStorage();
+// Use ReplitDbStorage by default when configuration is present
+const defaultStorage: IStorage = process.env.REPLIT_DB_URL
+  ? new ReplitDbStorage()
+  : new MemStorage();
+
+export let storage: IStorage = defaultStorage;
+
+export function setStorageProvider(next: IStorage) {
+  storage = next;
+}

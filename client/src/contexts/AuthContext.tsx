@@ -5,8 +5,13 @@ interface User {
   userId: string;
   email: string;
   name: string;
-  role: 'consultor' | 'cliente';
+  role: 'master' | 'consultor' | 'cliente';
+  organizationId: string;
   clientIds: string[];
+  managedConsultantIds?: string[];
+  managedClientIds?: string[];
+  managerId?: string;
+  consultantId?: string;
 }
 
 interface AuthContextType {
@@ -70,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email,
         password,
         name,
-        role: 'cliente',
+        role: 'master',
       });
       console.log('[AuthContext] API request completed, status:', res.status);
       const data = await res.json();

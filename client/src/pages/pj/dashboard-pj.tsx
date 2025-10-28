@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MetricCard } from "@/components/metric-card";
-import { DollarSign, TrendingDown, Wallet, CreditCard, BarChart3 } from "lucide-react";
+import { DollarSign, TrendingDown, Wallet, CreditCard, BarChart3, FileBarChart } from "lucide-react";
 import { useEffect, useState, useRef } from "react";
 import { Link } from "wouter";
 
@@ -443,6 +443,12 @@ export default function DashboardPJ({ clientId, clientType }: DashboardPJProps) 
             <Button variant="outline" data-testid="button-nav-regras">
               <BarChart3 className="mr-2 h-4 w-4" />
               Regras de Categorização
+            </Button>
+          </Link>
+          <Link href="/pj/relatorios">
+            <Button variant="outline" data-testid="button-nav-relatorios">
+              <FileBarChart className="mr-2 h-4 w-4" />
+              Relatórios Mensais
             </Button>
           </Link>
         </CardContent>

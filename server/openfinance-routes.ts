@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
 import { pluggyClient, hasPluggyCredentials } from "./pluggy";
+import { getLogger } from "./observability/logger";
 import type { OFItem, OFAccount, Transaction, Position } from "@shared/schema";
 import { v4 as uuidv4 } from "uuid";
 
@@ -71,7 +72,10 @@ export function registerOpenFinanceRoutes(app: Express) {
         },
       });
     } catch (error: any) {
-      console.error("Error creating connect token:", error);
+      getLogger(req).error("Error creating connect token", {
+        event: "openfinance.connect-token",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao criar token de conexão" });
     }
   });
@@ -89,21 +93,36 @@ export function registerOpenFinanceRoutes(app: Express) {
 
       // Get client ID from item (stored when item was created)
       // For now, we'll update the item status based on event type
-      console.log(`Webhook received: ${eventType} for item ${itemId}`);
+      getLogger(req).info("Webhook received", {
+        event: "openfinance.webhook",
+        context: { eventType, itemId },
+      });
 
       // Update item status based on event type
       if (eventType === "item/created" || eventType === "item/updated") {
         // Item was successfully created or updated
         // Mark for sync in next call
-        console.log(`Item ${itemId} ready for sync`);
+        getLogger(req).info("Item ready for sync", {
+          event: "openfinance.webhook.ready",
+          context: { itemId },
+        });
       } else if (eventType === "item/error" || eventType === "item/login_error") {
         // Update item status to error
-        console.log(`Item ${itemId} has error: ${JSON.stringify(data)}`);
+        getLogger(req).warn("Item reported error", {
+          event: "openfinance.webhook.error",
+          context: {
+            itemId,
+            code: data?.code ?? data?.errorCode ?? null,
+            status: data?.status ?? null,
+          },
+        });
       }
 
       res.json({ received: true });
     } catch (error: any) {
-      console.error("Error processing webhook:", error);
+      getLogger(req).error("Error processing webhook", {
+        event: "openfinance.webhook",
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao processar webhook" });
     }
   });
@@ -308,7 +327,10 @@ export function registerOpenFinanceRoutes(app: Express) {
           // Update item sync time
           item.lastSyncAt = new Date().toISOString();
         } catch (error: any) {
-          console.error(`Error syncing item ${item.itemId}:`, error);
+          getLogger(req).error("Error syncing item", {
+            event: "openfinance.sync.item",
+            context: { clientId, itemId: item.itemId },
+          }, error);
           item.status = "error";
         }
       }
@@ -342,7 +364,10 @@ export function registerOpenFinanceRoutes(app: Express) {
         })),
       });
     } catch (error: any) {
-      console.error("Error syncing data:", error);
+      getLogger(req).error("Error syncing data", {
+        event: "openfinance.sync",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao sincronizar dados" });
     }
   });
@@ -377,7 +402,10 @@ export function registerOpenFinanceRoutes(app: Express) {
 
       res.json({ items: formattedItems });
     } catch (error: any) {
-      console.error("Error getting items:", error);
+      getLogger(req).error("Error getting items", {
+        event: "openfinance.items",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar conexões" });
     }
   });
