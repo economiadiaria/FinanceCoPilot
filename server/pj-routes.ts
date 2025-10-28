@@ -21,6 +21,7 @@ import {
 } from "./pj-ingestion-helpers";
 import { buildCostBreakdown, buildMonthlyInsights } from "./pj-dashboard-helpers";
 import { z } from "zod";
+import { recordAuditEvent } from "./security/audit";
 
 // Configure multer
 const upload = multer({
@@ -139,6 +140,19 @@ export function registerPJRoutes(app: Express) {
       await storage.addSale(clientId, sale);
       const existingLegs = await storage.getSaleLegs(clientId);
       await storage.setSaleLegs(clientId, [...existingLegs, ...saleLegs]);
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.sale.create",
+        targetType: "sale",
+        targetId: saleId,
+        metadata: { clientId, legs: saleLegs.length, channel: data.channel },
+        piiSnapshot: {
+          customerName: data.customer.name,
+          customerEmail: data.customer.email,
+          customerDoc: data.customer.doc,
+        },
+      });
       
       res.json({ 
         success: true, 
@@ -389,7 +403,14 @@ export function registerPJRoutes(app: Express) {
       // Salvar
       await storage.setSales(clientId, [...existingSales, ...newSales]);
       await storage.setSaleLegs(clientId, [...existingLegs, ...newLegs]);
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.sale.create",
+        targetType: "sale-batch",
+        metadata: { clientId, imported, skipped, total: salesMap.size },
+      });
+
       res.json({
         success: true,
         imported,
@@ -512,7 +533,19 @@ export function registerPJRoutes(app: Express) {
         importedAt: new Date().toISOString(),
         transactionCount: newTransactions.length,
       });
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.ofx.import",
+        targetType: "bank-transactions",
+        metadata: {
+          clientId,
+          imported: newTransactions.length,
+          categorized: categorizedCount,
+          accounts: accountsArray.length,
+        },
+      });
+
       res.json({
         success: true,
         imported: newTransactions.length,
@@ -669,7 +702,20 @@ export function registerPJRoutes(app: Express) {
       // Salvar
       await storage.setSaleLegs(clientId, legs);
       await storage.setBankTransactions(clientId, bankTxs);
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.sale.reconcile",
+        targetType: "sale-leg",
+        targetId: saleLegId,
+        metadata: {
+          clientId,
+          matches: matches.length,
+          reconciledParcels,
+          totalParcels,
+        },
+      });
+
       res.json({
         success: true,
         leg,
@@ -754,7 +800,7 @@ export function registerPJRoutes(app: Express) {
       let retroactiveCount = 0;
       if (data.applyRetroactive) {
         const bankTxs = await storage.getBankTransactions(data.clientId);
-        
+
         for (const tx of bankTxs) {
           if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
             tx.dfcCategory = rule.dfcCategory;
@@ -764,10 +810,22 @@ export function registerPJRoutes(app: Express) {
             retroactiveCount++;
           }
         }
-        
+
         await storage.setBankTransactions(data.clientId, bankTxs);
       }
-      
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.transaction.update",
+        targetType: "categorization-rule",
+        targetId: rule.ruleId,
+        metadata: {
+          clientId: data.clientId,
+          matchType: rule.matchType,
+          retroactiveCount,
+        },
+      });
+
       res.json({
         success: true,
         rule,
@@ -866,6 +924,20 @@ export function registerPJRoutes(app: Express) {
 
         await storage.setBankTransactions(data.clientId, bankTxs);
       }
+
+      await recordAuditEvent({
+        user: req.authUser!,
+        eventType: "pj.transaction.update",
+        targetType: "bank-transaction",
+        targetId: tx.bankTxId,
+        metadata: {
+          clientId: data.clientId,
+          category: data.dfcCategory,
+          learnPattern: data.learnPattern,
+          prospectiveCount,
+          ruleId: rule?.ruleId,
+        },
+      });
 
       res.json({
         success: true,

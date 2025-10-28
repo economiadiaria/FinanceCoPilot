@@ -6,6 +6,7 @@ interface User {
   email: string;
   name: string;
   role: 'master' | 'consultor' | 'cliente';
+  organizationId: string;
   clientIds: string[];
   managedConsultantIds?: string[];
   managedClientIds?: string[];
@@ -74,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email,
         password,
         name,
-        role: 'cliente',
+        role: 'master',
       });
       console.log('[AuthContext] API request completed, status:', res.status);
       const data = await res.json();

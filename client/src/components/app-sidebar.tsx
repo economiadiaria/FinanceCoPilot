@@ -1,4 +1,4 @@
-import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2, BarChart3, CreditCard, Brain, Users } from "lucide-react";
+import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2, BarChart3, CreditCard, Brain, Users, ShieldCheck } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -78,6 +78,11 @@ const adminMenuItems = [
     title: "Associações",
     url: "/admin/associacoes",
     icon: Users,
+  },
+  {
+    title: "Auditoria",
+    url: "/admin/auditoria",
+    icon: ShieldCheck,
   },
 ];
 

@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
+import { requireRole } from "./middleware/rbac";
+import { validateClientAccess } from "./middleware/scope";
 import { registerOpenFinanceRoutes } from "./openfinance-routes";
 import { registerPJRoutes } from "./pj-routes";
 import multer from "multer";
@@ -24,6 +26,7 @@ import {
   type UserProfile,
 } from "@shared/schema";
 import { z } from "zod";
+import { recordAuditEvent, listAuditLogs } from "./security/audit";
 
 // Configure multer for file uploads
 const upload = multer({
@@ -43,20 +46,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const data = registerUserSchema.parse(req.body);
 
-      const allowedSelfRegistrationRoles: Array<User["role"]> = ["cliente", "consultor"];
-      if (!allowedSelfRegistrationRoles.includes(data.role)) {
-        return res.status(403).json({ error: "Tipo de usuário inválido para auto cadastro" });
-      }
-      
       // Check if email already exists
       const existingUser = await storage.getUserByEmail(data.email);
       if (existingUser) {
         return res.status(400).json({ error: "Email já cadastrado" });
       }
-      
+
+      const sessionUser = req.session.userId ? await storage.getUserById(req.session.userId) : undefined;
+
+      if (!sessionUser && data.role !== "master") {
+        return res.status(403).json({ error: "Apenas usuários master autenticados podem criar novos acessos" });
+      }
+
+      if (sessionUser && sessionUser.role !== "master") {
+        return res.status(403).json({ error: "Apenas usuários master podem criar novos acessos" });
+      }
+
+      let organizationId = data.organizationId;
+
+      if (sessionUser) {
+        organizationId = sessionUser.organizationId;
+      }
+
+      if (!organizationId) {
+        if (data.role === "master") {
+          organizationId = crypto.randomBytes(10).toString("hex");
+        } else {
+          return res.status(400).json({ error: "Organização obrigatória" });
+        }
+      }
+
+      if (data.managerId) {
+        const manager = await storage.getUserById(data.managerId);
+        if (!manager || manager.organizationId !== organizationId || manager.role !== "master") {
+          return res.status(400).json({ error: "Master responsável inválido" });
+        }
+      }
+
+      if (data.consultantId) {
+        const consultant = await storage.getUserById(data.consultantId);
+        if (!consultant || consultant.organizationId !== organizationId || consultant.role !== "consultor") {
+          return res.status(400).json({ error: "Consultor responsável inválido" });
+        }
+      }
+
       // Hash password
       const passwordHash = await bcrypt.hash(data.password, 10);
-      
+
       // Create user
       const userId = crypto.randomBytes(16).toString("hex");
       const user: User = {
@@ -65,29 +101,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         passwordHash,
         role: data.role,
         name: data.name,
+        organizationId,
         clientIds: data.clientIds ?? [],
         managedConsultantIds: data.managedConsultantIds ?? [],
         managedClientIds: data.managedClientIds ?? [],
         managerId: data.managerId,
         consultantId: data.consultantId,
       };
-      
+
       await storage.createUser(user);
-      
+
       // Regenerate session ID to prevent fixation attacks
       req.session.regenerate((err) => {
         if (err) {
           console.error("Erro ao regenerar sessão:", err);
           return res.status(500).json({ error: "Erro ao criar sessão" });
         }
-        
+
         // Set session
         req.session.userId = userId;
-        
+
         // Return user without passwordHash
         const { passwordHash: _, ...userResponse } = user;
         res.json({ user: userResponse });
       });
+
+      if (sessionUser) {
+        await recordAuditEvent({
+          user: sessionUser,
+          eventType: "user.create",
+          targetType: "user",
+          targetId: userId,
+          metadata: { role: data.role },
+          piiSnapshot: { email: data.email, name: data.name },
+        });
+      }
     } catch (error) {
       if (error instanceof z.ZodError) {
         const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
@@ -121,13 +169,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error("Erro ao regenerar sessão:", err);
           return res.status(500).json({ error: "Erro ao criar sessão" });
         }
-        
+
         // Set session
         req.session.userId = user.userId;
-        
+
         // Return user without passwordHash
         const { passwordHash: _, ...userResponse } = user;
         res.json({ user: userResponse });
+
+        recordAuditEvent({
+          user,
+          eventType: "auth.login",
+          targetType: "session",
+          metadata: { ip: req.ip },
+        }).catch(err => {
+          console.error("Falha ao registrar auditoria de login:", err);
+        });
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -141,6 +198,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // POST /api/auth/logout - Logout user
   app.post("/api/auth/logout", async (req, res) => {
+    const user = req.session.userId ? await storage.getUserById(req.session.userId) : undefined;
+
     req.session.destroy((err) => {
       if (err) {
         console.error("Erro ao fazer logout:", err);
@@ -148,6 +207,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       res.json({ message: "Logout realizado com sucesso" });
     });
+
+    if (user) {
+      recordAuditEvent({
+        user,
+        eventType: "auth.logout",
+        targetType: "session",
+        metadata: { ip: req.ip },
+      }).catch(err => {
+        console.error("Falha ao registrar auditoria de logout:", err);
+      });
+    }
   });
 
   // GET /api/auth/me - Get current user
@@ -175,49 +245,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api", authMiddleware);
 
   // 1. POST /api/client/upsert - Create/update client
-  app.post("/api/client/upsert", async (req, res) => {
+  app.post("/api/client/upsert", requireRole("master", "consultor"), async (req, res) => {
     try {
-      const data = clientSchema.parse(req.body);
+      const currentUser = req.authUser!;
+      const inputSchema = clientSchema.extend({ organizationId: z.string().optional() });
+      const data = inputSchema.parse(req.body);
       const consultantId = data.consultantId ?? undefined;
       const masterId = data.masterId ?? undefined;
-      const users = await storage.getUsers();
+      const organizationId = currentUser.organizationId;
+      const users = (await storage.getUsers()).filter(u => u.organizationId === organizationId);
 
-      const assignedConsultant = consultantId
-        ? users.find(u => u.userId === consultantId)
-        : undefined;
-      if (consultantId && (!assignedConsultant || assignedConsultant.role !== "consultor")) {
-        return res.status(400).json({ error: "Consultor responsável inválido" });
+      const existingClient = await storage.getClient(data.clientId);
+      if (existingClient && existingClient.organizationId !== organizationId) {
+        return res.status(403).json({ error: "Cliente pertence a outra organização" });
       }
 
-      const assignedMaster = masterId
-        ? users.find(u => u.userId === masterId)
-        : undefined;
-      if (masterId && (!assignedMaster || assignedMaster.role !== "master")) {
-        return res.status(400).json({ error: "Usuário master inválido" });
+      const consultant = consultantId ? await storage.getUserById(consultantId) : undefined;
+      if (consultantId) {
+        if (!consultant || consultant.role !== "consultor" || consultant.organizationId !== organizationId) {
+          return res.status(400).json({ error: "Consultor responsável inválido" });
+        }
       }
 
-      const client = await storage.upsertClient({
+      const master = masterId ? await storage.getUserById(masterId) : undefined;
+      if (masterId) {
+        if (!master || master.role !== "master" || master.organizationId !== organizationId) {
+          return res.status(400).json({ error: "Usuário master inválido" });
+        }
+      }
+
+      const clientPayload: Client = {
         ...data,
-        consultantId,
-        masterId,
-      });
+        organizationId,
+        consultantId: consultantId ?? null,
+        masterId: masterId ?? null,
+      };
 
-      if (assignedConsultant) {
-        const consultantClientIds = assignedConsultant.clientIds ?? [];
+      const client = await storage.upsertClient(clientPayload);
+      
+      if (consultant) {
+        const consultantClientIds = consultant.clientIds ?? [];
         if (!consultantClientIds.includes(client.clientId)) {
           const nextClientIds = Array.from(new Set([...consultantClientIds, client.clientId]));
-          await storage.updateUser(assignedConsultant.userId, { clientIds: nextClientIds });
+          await storage.updateUser(consultant.userId, { clientIds: nextClientIds });
         }
 
         const consultantsToClean = users.filter(u =>
           u.role === "consultor" &&
-          u.userId !== assignedConsultant.userId &&
+          u.userId !== consultant.userId &&
           (u.clientIds ?? []).includes(client.clientId)
         );
         await Promise.all(
-          consultantsToClean.map(consultant =>
-            storage.updateUser(consultant.userId, {
-              clientIds: (consultant.clientIds ?? []).filter(id => id !== client.clientId),
+          consultantsToClean.map(consultantUser =>
+            storage.updateUser(consultantUser.userId, {
+              clientIds: (consultantUser.clientIds ?? []).filter(id => id !== client.clientId),
             })
           )
         );
@@ -226,30 +307,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           u.role === "consultor" && (u.clientIds ?? []).includes(client.clientId)
         );
         await Promise.all(
-          consultantsToClean.map(consultant =>
-            storage.updateUser(consultant.userId, {
-              clientIds: (consultant.clientIds ?? []).filter(id => id !== client.clientId),
+          consultantsToClean.map(consultantUser =>
+            storage.updateUser(consultantUser.userId, {
+              clientIds: (consultantUser.clientIds ?? []).filter(id => id !== client.clientId),
             })
           )
         );
       }
 
-      if (assignedMaster) {
-        const managedIds = assignedMaster.managedClientIds ?? [];
+      if (master) {
+        const managedIds = master.managedClientIds ?? [];
         if (!managedIds.includes(client.clientId)) {
           const nextManaged = Array.from(new Set([...managedIds, client.clientId]));
-          await storage.updateUser(assignedMaster.userId, { managedClientIds: nextManaged });
+          await storage.updateUser(master.userId, { managedClientIds: nextManaged });
         }
 
         const mastersToClean = users.filter(u =>
           u.role === "master" &&
-          u.userId !== assignedMaster.userId &&
+          u.userId !== master.userId &&
           (u.managedClientIds ?? []).includes(client.clientId)
         );
         await Promise.all(
-          mastersToClean.map(master =>
-            storage.updateUser(master.userId, {
-              managedClientIds: (master.managedClientIds ?? []).filter(id => id !== client.clientId),
+          mastersToClean.map(masterUser =>
+            storage.updateUser(masterUser.userId, {
+              managedClientIds: (masterUser.managedClientIds ?? []).filter(id => id !== client.clientId),
             })
           )
         );
@@ -258,9 +339,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           u.role === "master" && (u.managedClientIds ?? []).includes(client.clientId)
         );
         await Promise.all(
-          mastersToClean.map(master =>
-            storage.updateUser(master.userId, {
-              managedClientIds: (master.managedClientIds ?? []).filter(id => id !== client.clientId),
+          mastersToClean.map(masterUser =>
+            storage.updateUser(masterUser.userId, {
+              managedClientIds: (masterUser.managedClientIds ?? []).filter(id => id !== client.clientId),
             })
           )
         );
@@ -287,18 +368,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       // Associate client with current user if applicable
-      const userId = req.session.userId;
-      if (userId) {
-        const currentUser = users.find(u => u.userId === userId) ?? (await storage.getUserById(userId));
-        if (
-          currentUser &&
-          currentUser.role !== "master" &&
-          !(currentUser.clientIds ?? []).includes(client.clientId)
-        ) {
-          const nextClientIds = Array.from(new Set([...(currentUser.clientIds ?? []), client.clientId]));
-          await storage.updateUser(userId, { clientIds: nextClientIds });
-        }
-      }
+      const creator = currentUser;
+      const eventType = existingClient ? "client.update" : "client.create";
+
+      await recordAuditEvent({
+        user: creator,
+        eventType,
+        targetType: "client",
+        targetId: client.clientId,
+        metadata: { consultantId, masterId },
+        piiSnapshot: { name: client.name, email: client.email },
+      });
 
       res.json(client);
     } catch (error) {
@@ -322,7 +402,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: "Usuário não encontrado" });
       }
 
-      let clients = await storage.getClients();
+      let clients = (await storage.getClients()).filter(client => client.organizationId === currentUser.organizationId);
 
       if (currentUser.role === "consultor") {
         const allowedIds = new Set(currentUser.clientIds ?? []);
@@ -343,23 +423,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/users/directory", async (req, res) => {
+  app.get("/api/users/directory", requireRole("master", "consultor"), async (req, res) => {
     try {
-      if (!req.session.userId) {
-        return res.status(401).json({ error: "Não autenticado" });
-      }
+      const currentUser = req.authUser!;
 
-      const currentUser = await storage.getUserById(req.session.userId);
-      if (!currentUser) {
-        return res.status(401).json({ error: "Usuário não encontrado" });
-      }
-
-      if (currentUser.role === "cliente") {
-        return res.status(403).json({ error: "Acesso restrito a consultores e usuários master" });
-      }
-
-      const users = await storage.getUsers();
-      const clients = await storage.getClients();
+      const users = (await storage.getUsers()).filter(user => user.organizationId === currentUser.organizationId);
+      const clients = (await storage.getClients()).filter(client => client.organizationId === currentUser.organizationId);
 
       const sanitizedUsers = users.map(sanitizeUser);
       const consultants = sanitizedUsers.filter(user => user.role === "consultor");
@@ -392,17 +461,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/clients/:clientId - Get single client
-  app.get("/api/clients/:clientId", async (req, res) => {
+  app.get("/api/audit/logs", requireRole("master"), async (req, res) => {
     try {
-      const { clientId } = req.params;
-      const client = await storage.getClient(clientId);
-      
-      if (!client) {
-        return res.status(404).json({ error: "Cliente não encontrado" });
+      const currentUser = req.authUser!;
+      const limit = req.query.limit ? Number(req.query.limit) : 100;
+      const logs = await listAuditLogs(currentUser, Number.isNaN(limit) ? 100 : limit);
+      res.json({ logs });
+    } catch (error) {
+      console.error("Erro ao buscar trilha de auditoria:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar auditoria" });
+    }
+  });
+
+  app.post("/api/lgpd/anonymize", requireRole("master"), async (req, res) => {
+    try {
+      const currentUser = req.authUser!;
+      const schema = z.object({
+        targetType: z.enum(["user", "client"]),
+        targetId: z.string().min(1),
+      });
+      const { targetType, targetId } = schema.parse(req.body);
+
+      let result: User | Client | undefined;
+      if (targetType === "user") {
+        const target = await storage.getUserById(targetId);
+        if (!target || target.organizationId !== currentUser.organizationId) {
+          return res.status(404).json({ error: "Usuário não encontrado na organização" });
+        }
+        result = await storage.anonymizeUser(targetId);
+      } else {
+        const target = await storage.getClient(targetId);
+        if (!target || target.organizationId !== currentUser.organizationId) {
+          return res.status(404).json({ error: "Cliente não encontrado na organização" });
+        }
+        result = await storage.anonymizeClient(targetId);
       }
-      
-      res.json(client);
+
+      if (!result) {
+        return res.status(404).json({ error: "Registro não encontrado" });
+      }
+
+      await recordAuditEvent({
+        user: currentUser,
+        eventType: "lgpd.anonymize",
+        targetType,
+        targetId,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
+        return res.status(400).json({ error: fieldErrors });
+      }
+      console.error("Erro ao anonimizar registro:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao anonimizar" });
+    }
+  });
+
+  // GET /api/clients/:clientId - Get single client
+  app.get("/api/clients/:clientId", validateClientAccess, async (req, res) => {
+    try {
+      res.json(req.clientContext);
     } catch (error) {
       console.error("Erro ao buscar cliente:", error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar cliente" });

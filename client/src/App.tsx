@@ -28,6 +28,7 @@ import RegrasPJ from "@/pages/pj/regras-pj";
 import RelatoriosPJ from "@/pages/pj/relatorios-pj";
 import type { Client } from "@shared/schema";
 import AdminAssociacoes from "@/pages/admin/associacoes";
+import AdminAuditoria from "@/pages/admin/auditoria";
 
 function Router() {
   return (
@@ -140,6 +141,9 @@ function AuthenticatedApp() {
               </Route>
               <Route path="/admin/associacoes">
                 <AdminAssociacoes />
+              </Route>
+              <Route path="/admin/auditoria">
+                <AdminAuditoria />
               </Route>
             </Switch>
           </div>
