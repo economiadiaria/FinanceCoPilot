@@ -421,6 +421,31 @@ export const bankTransactionSchema = z.object({
 
 export type BankTransaction = z.infer<typeof bankTransactionSchema>;
 
+// Bank Accounts
+export const bankAccountProviders = ["manual", "ofx", "pluggy"] as const;
+
+export const bankAccountSchema = z.object({
+  id: z.string().min(1, "ID da conta bancária é obrigatório"),
+  orgId: z.string().min(1, "ID da organização é obrigatório"),
+  clientId: z.string().min(1, "ID do cliente é obrigatório"),
+  provider: z.enum(bankAccountProviders),
+  bankOrg: z.string().optional().nullable(),
+  bankFid: z.string().optional().nullable(),
+  bankName: z.string().min(1, "Nome do banco é obrigatório"),
+  bankCode: z.string().optional().nullable(),
+  branch: z.string().optional().nullable(),
+  accountNumberMask: z.string().min(1, "Máscara da conta é obrigatória"),
+  accountType: z.string().min(1, "Tipo da conta é obrigatório"),
+  currency: z.string().min(1, "Moeda é obrigatória"),
+  accountFingerprint: z.string().min(1, "Fingerprint da conta é obrigatório"),
+  isActive: z.boolean(),
+  createdAt: z.string().min(1, "Data de criação é obrigatória"),
+  updatedAt: z.string().min(1, "Data de atualização é obrigatória"),
+});
+
+export type BankAccount = z.infer<typeof bankAccountSchema>;
+export type UpsertBankAccount = z.infer<typeof bankAccountSchema>;
+
 // Categorization Rule (aprendizado) - PJ
 export const matchTypes = ["exact", "contains", "startsWith"] as const;
 export const categorizationActionTypes = ["link_to_sale", "categorize_as_expense"] as const;
