@@ -477,6 +477,18 @@ export function registerPJRoutes(app: Express) {
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
       const existingImport = await storage.getOFXImport(fileHash);
 
+      if (existingImport) {
+        return res.json({
+          success: true,
+          imported: 0,
+          total: existingImport.transactionCount || 0,
+          deduped: existingImport.transactionCount || 0,
+          alreadyImported: true,
+          reconciliation: existingImport.reconciliation || { accounts: [], warnings: [] },
+          autoCategorized: 0,
+        });
+      }
+
       let fileContent = buffer.toString("utf8");
       if (fileContent.includes("�")) {
         fileContent = buffer.toString("latin1");
@@ -534,14 +546,50 @@ export function registerPJRoutes(app: Express) {
         if (!statement) continue;
         
         const accountId = statement.BANKACCTFROM?.ACCTID || "unknown";
+        const currency = statement.CURDEF || "BRL";
+        const startDate = parseDate(statement.BANKTRANLIST?.DTSTART);
+        const endDate = parseDate(statement.BANKTRANLIST?.DTEND);
+        
+        // Opening balance: use BALAMT from BANKTRANLIST if available, else 0
+        const openingBalance = statement.BANKTRANLIST?.BALAMT 
+          ? parseFloat(statement.BANKTRANLIST.BALAMT) 
+          : 0;
+        
+        // Closing balance from LEDGERBAL
+        const ledgerClosingBalance = statement.LEDGERBAL?.BALAMT 
+          ? parseFloat(statement.LEDGERBAL.BALAMT) 
+          : undefined;
+        
+        let net = 0;
+        let totalCredits = 0;
+        let totalDebits = 0;
+        
         const transactions = statement.BANKTRANLIST?.STMTTRN || [];
         const txArray = Array.isArray(transactions) ? transactions : [transactions];
+        totalTransactionsInFile += txArray.length;
         
         for (const tx of txArray) {
           const date = tx.DTPOSTED ? formatBR(tx.DTPOSTED.substring(0, 8)) : "";
-          const amount = parseFloat(tx.TRNAMT) || 0;
+          let amount = parseFloat(tx.TRNAMT) || 0;
           const desc = tx.MEMO || tx.NAME || "Sem descrição";
           const fitid = tx.FITID;
+          const trnType = tx.TRNTYPE;
+          
+          // Ajustar sinal se necessário
+          let adjusted = false;
+          if (trnType === "DEBIT" && amount > 0) {
+            amount = -amount;
+            adjusted = true;
+          } else if (trnType === "CREDIT" && amount < 0) {
+            amount = -amount;
+            adjusted = true;
+          }
+          
+          if (adjusted) {
+            warnings.push(
+              `Sinal ajustado automaticamente para ${trnType} em ${date} (${desc}).`
+            );
+          }
           
           // Dedup por fitid ou (date + amount + desc)
           const candidate = { date, amount, desc, fitid };
@@ -564,7 +612,37 @@ export function registerPJRoutes(app: Express) {
           } else {
             dedupedCount += 1;
           }
+          
           net = round2(net + amount);
+          if (amount > 0) totalCredits = round2(totalCredits + amount);
+          else totalDebits = round2(totalDebits + Math.abs(amount));
+        }
+        
+        const computedClosingBalance = round2(openingBalance + net);
+        const divergence = ledgerClosingBalance !== undefined
+          ? round2(ledgerClosingBalance - computedClosingBalance)
+          : undefined;
+        
+        accountSummaries.push({
+          accountId,
+          currency,
+          startDate,
+          endDate,
+          openingBalance,
+          ledgerClosingBalance,
+          computedClosingBalance,
+          totalCredits,
+          totalDebits,
+          net,
+          divergence,
+        });
+        
+        if (divergence !== undefined && Math.abs(divergence) > 0.01) {
+          warnings.push(
+            `Divergência de R$ ${divergence.toFixed(2)} detectada na conta ${accountId}. ` +
+            `Saldo de fechamento OFX: R$ ${ledgerClosingBalance?.toFixed(2)}, ` +
+            `Calculado: R$ ${computedClosingBalance.toFixed(2)}`
+          );
         }
       }
 
@@ -602,7 +680,13 @@ export function registerPJRoutes(app: Express) {
       res.json({
         success: true,
         imported: newTransactions.length,
-        total: newTransactions.length,
+        total: totalTransactionsInFile,
+        deduped: dedupedCount,
+        alreadyImported: false,
+        reconciliation: {
+          accounts: accountSummaries,
+          warnings,
+        },
         autoCategorized: categorizedCount,
       });
     } catch (error: any) {
