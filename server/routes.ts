@@ -582,6 +582,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const clientId = client.clientId;
+      const pfBankAccountId = `pf-${clientId}`;
 
       if (!req.file) {
         return res.status(400).json({ error: "Nenhum arquivo OFX enviado." });
@@ -593,7 +594,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fileHash = crypto.createHash("sha256").update(ofxContent).digest("hex");
       
       // Check if this file was already imported
-      const existingImport = await storage.getOFXImport(clientId, fileHash);
+      const existingImport = await storage.getOFXImport(clientId, pfBankAccountId, fileHash);
       if (existingImport) {
         return res.status(400).json({ 
           error: "Este arquivo OFX já foi importado anteriormente.",
@@ -732,6 +733,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.addOFXImport({
           fileHash,
           clientId,
+          orgId: client.organizationId,
+          bankAccountId: pfBankAccountId,
           importedAt: new Date().toISOString(),
           transactionCount: 0,
         });
@@ -750,6 +753,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.addOFXImport({
         fileHash,
         clientId,
+        orgId: client.organizationId,
+        bankAccountId: pfBankAccountId,
         importedAt: new Date().toISOString(),
         transactionCount: transactions.length,
       });

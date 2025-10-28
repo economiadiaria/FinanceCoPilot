@@ -71,6 +71,12 @@ async function seedStorage(storage: IStorage) {
   await storage.upsertClient(client);
 }
 
+async function getPrimaryBankAccountId(storage: IStorage, clientId: string): Promise<string> {
+  const accounts = await storage.getBankAccounts(ORGANIZATION_ID, clientId);
+  assert.ok(accounts.length > 0, "expected bank account to be registered for client");
+  return accounts[0].bankAccountId;
+}
+
 describe("OFX ingestion robustness", () => {
   let appServer: import("http").Server;
   let currentStorage: IStorage;
@@ -142,7 +148,12 @@ describe("OFX ingestion robustness", () => {
     assert.equal(storedTransactions.length, 2);
 
     const fileHash = crypto.createHash("sha256").update(sampleBuffer).digest("hex");
-    const importRecord = await currentStorage.getOFXImport(CLIENT_ID, fileHash);
+    const primaryBankAccountId = await getPrimaryBankAccountId(currentStorage, CLIENT_ID);
+    const importRecord = await currentStorage.getOFXImport(
+      CLIENT_ID,
+      primaryBankAccountId,
+      fileHash
+    );
     assert.ok(importRecord, "ofx import record should be stored");
     assert.equal(importRecord?.transactionCount, 2);
     assert.equal(importRecord?.reconciliation?.accounts[0]?.computedClosingBalance, 800);
@@ -201,6 +212,8 @@ describe("OFX ingestion robustness", () => {
     assert.equal(firstImport.status, 200);
     assert.equal(firstImport.body.alreadyImported, false);
 
+    const originalBankAccountId = await getPrimaryBankAccountId(currentStorage, CLIENT_ID);
+
     const secondClient: Client = {
       clientId: OTHER_CLIENT_ID,
       name: "Empresa Filial",
@@ -224,8 +237,17 @@ describe("OFX ingestion robustness", () => {
     assert.equal(secondImport.status, 200);
     assert.equal(secondImport.body.alreadyImported, false);
 
-    const originalClientImport = await currentStorage.getOFXImport(CLIENT_ID, fileHash);
-    const secondClientImport = await currentStorage.getOFXImport(OTHER_CLIENT_ID, fileHash);
+    const secondBankAccountId = await getPrimaryBankAccountId(currentStorage, OTHER_CLIENT_ID);
+    const originalClientImport = await currentStorage.getOFXImport(
+      CLIENT_ID,
+      originalBankAccountId,
+      fileHash
+    );
+    const secondClientImport = await currentStorage.getOFXImport(
+      OTHER_CLIENT_ID,
+      secondBankAccountId,
+      fileHash
+    );
 
     assert.ok(originalClientImport, "original client import should exist");
     assert.ok(secondClientImport, "second client import should exist");
@@ -244,11 +266,11 @@ describe("OFX ingestion robustness", () => {
 
     (currentStorage as any).ofxImports.set(legacyHash, legacyImport);
 
-    const migrated = await currentStorage.getOFXImport(CLIENT_ID, legacyHash);
+    const migrated = await currentStorage.getOFXImport(CLIENT_ID, "legacy", legacyHash);
     assert.ok(migrated, "legacy import should be retrievable after migration");
     assert.equal(migrated?.clientId, CLIENT_ID);
 
-    const normalizedKey = `ofxImport:${CLIENT_ID}:${legacyHash}`;
+    const normalizedKey = `ofxImport:${CLIENT_ID}:legacy:${legacyHash}`;
     assert.ok((currentStorage as any).ofxImports.has(normalizedKey), "legacy key should be normalized");
     assert.equal((currentStorage as any).ofxImports.has(legacyHash), false, "legacy key should be removed");
   });

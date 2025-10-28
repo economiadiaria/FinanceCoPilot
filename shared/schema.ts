@@ -232,6 +232,10 @@ export type AuthResponse = z.infer<typeof authResponseSchema>;
 export const ofxImportSchema = z.object({
   fileHash: z.string(), // SHA256 hash of OFX file content
   clientId: z.string(),
+  orgId: z.string().optional(),
+  bankAccountId: z.string().optional(),
+  statementStart: z.string().optional(),
+  statementEnd: z.string().optional(),
   importedAt: z.string(), // ISO 8601 timestamp
   transactionCount: z.number(),
   reconciliation: z
@@ -259,6 +263,37 @@ export const ofxImportSchema = z.object({
 });
 
 export type OFXImport = z.infer<typeof ofxImportSchema>;
+
+export const bankAccountSchema = z.object({
+  bankAccountId: z.string(),
+  orgId: z.string(),
+  clientId: z.string(),
+  provider: z.string(),
+  bankOrg: z.string().optional(),
+  bankFid: z.string().optional(),
+  bankName: z.string().optional(),
+  bankCode: z.string().optional(),
+  branch: z.string().optional(),
+  accountNumberMask: z.string(),
+  accountType: z.string().optional(),
+  currency: z.string().optional(),
+  accountFingerprint: z.string(),
+  isActive: z.boolean().default(true),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const upsertBankAccountSchema = bankAccountSchema
+  .omit({ bankAccountId: true, createdAt: true, updatedAt: true })
+  .extend({
+    bankAccountId: z.string().optional(),
+    isActive: z.boolean().optional(),
+    createdAt: z.string().optional(),
+    updatedAt: z.string().optional(),
+  });
+
+export type BankAccount = z.infer<typeof bankAccountSchema>;
+export type UpsertBankAccount = z.infer<typeof upsertBankAccountSchema>;
 
 // Open Finance (Pluggy) types
 export const ofItemSchema = z.object({
@@ -400,6 +435,7 @@ export const bankTransactionSchema = z.object({
   desc: z.string(),
   amount: z.number(), // positivo = entrada, negativo = saída
   accountId: z.string().optional(),
+  bankAccountId: z.string().optional(),
   fitid: z.string().optional(), // OFX unique ID
   sourceHash: z.string().optional(), // SHA256 do arquivo OFX
   linkedLegs: z.array(z.object({

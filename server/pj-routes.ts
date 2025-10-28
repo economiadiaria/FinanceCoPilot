@@ -10,6 +10,7 @@ import {
   type SaleLeg,
   type BankTransaction,
   type CategorizationRule,
+  type OFXImport,
 } from "@shared/schema";
 import { formatBR, toISOFromBR, isBetweenDates } from "@shared/utils";
 import {
@@ -51,6 +52,7 @@ const ofxStatementSchema = z.object({
         ACCTID: z.string().optional(),
         BANKID: z.string().optional(),
         BRANCHID: z.string().optional(),
+        ACCTTYPE: z.string().optional(),
       })
       .optional(),
     BANKTRANLIST: z
@@ -66,7 +68,7 @@ const ofxStatementSchema = z.object({
         DTASOF: z.string().optional(),
       })
       .optional(),
-  }),
+  }).passthrough(),
 });
 
 // Configure multer
@@ -546,15 +548,21 @@ export function registerPJRoutes(app: Express) {
 
       timer = startOfxIngestionTimer(clientId);
 
+      const clientRecord = await storage.getClient(clientId);
+      if (!clientRecord) {
+        throw new Error(`Cliente ${clientId} não encontrado`);
+      }
+
+      const orgId = clientRecord.organizationId;
+
       const buffer = req.file.buffer;
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
-      const existingImport = await storage.getOFXImport(clientId, fileHash);
 
       ingestionLogger.info("Arquivo OFX recebido", {
         event: "pj.ofx.import.file",
         context: {
           fileHash,
-          duplicateFile: Boolean(existingImport),
+          duplicateFile: false,
         },
       });
 
@@ -570,6 +578,10 @@ export function registerPJRoutes(app: Express) {
       } catch (parseError: any) {
         throw new Error(`OFX inválido ou corrompido: ${parseError?.message || parseError}`);
       }
+
+      const signonInfo = ofxData?.OFX?.SIGNONMSGSRSV1?.SONRS?.FI;
+      const fiOrg = signonInfo?.ORG;
+      const fiFid = signonInfo?.FID;
 
       const toArray = <T,>(value: T | T[] | undefined): T[] => {
         if (!value) return [];
@@ -617,6 +629,9 @@ export function registerPJRoutes(app: Express) {
       }[] = [];
       let totalTransactionsInFile = 0;
       let dedupedCount = 0;
+      const accountImports: OFXImport[] = [];
+      const accountsWithExistingImport = new Set<string>();
+      const importedAt = new Date().toISOString();
 
       errorStage = "processing";
 
@@ -624,31 +639,102 @@ export function registerPJRoutes(app: Express) {
         const parsedAccount = ofxStatementSchema.parse(account);
         const statement = parsedAccount.STMTRS;
 
-        const accountId =
-          statement.BANKACCTFROM?.ACCTID ||
-          statement.BANKACCTFROM?.BANKID ||
+        const rawAccountId =
+          statement.BANKACCTFROM?.ACCTID ??
+          (statement as any).CCACCTFROM?.ACCTID ??
+          statement.BANKACCTFROM?.BANKID ??
           `conta_${accountSummaries.length + 1}`;
+        const bankCode =
+          statement.BANKACCTFROM?.BANKID ?? (statement as any).CCACCTFROM?.BANKID;
+        const branch =
+          statement.BANKACCTFROM?.BRANCHID ?? (statement as any).CCACCTFROM?.BRANCHID;
+        const accountType =
+          (statement.BANKACCTFROM as any)?.ACCTTYPE ?? (statement as any).CCACCTFROM?.ACCTTYPE;
+        const normalizedAccountId =
+          typeof rawAccountId === "string" ? rawAccountId.trim() : undefined;
+        const digitsOnly = normalizedAccountId?.replace(/\D/g, "") ?? "";
+        const lastFour = digitsOnly.slice(-4);
+        const accountNumberMask = lastFour ? `****${lastFour}` : "****";
+        const currency = statement.CURDEF ?? ofxData?.OFX?.SIGNONMSGSRSV1?.SONRS?.CURDEF ?? "BRL";
+        const acctIdHash = crypto
+          .createHash("sha256")
+          .update(`${orgId}|${normalizedAccountId ?? bankCode ?? "unknown"}`)
+          .digest("hex");
+        const fingerprintSeed = `${bankCode ?? ""}|${fiFid ?? fiOrg ?? ""}|${acctIdHash}|${accountType ?? ""}|${currency ?? ""}`;
+        const accountFingerprint = crypto.createHash("sha256").update(fingerprintSeed).digest("hex");
+        const bankName = signonInfo?.ORG ?? signonInfo?.FID ?? bankCode ?? "Banco não identificado";
+
+        const bankAccount = await storage.upsertBankAccount({
+          orgId,
+          clientId,
+          provider: "ofx",
+          bankOrg: fiOrg,
+          bankFid: fiFid,
+          bankName,
+          bankCode,
+          branch,
+          accountNumberMask,
+          accountType,
+          currency,
+          accountFingerprint,
+        });
+
+        const existingImport = await storage.getOFXImport(
+          clientId,
+          bankAccount.bankAccountId,
+          fileHash
+        );
+        if (existingImport) {
+          accountsWithExistingImport.add(bankAccount.bankAccountId);
+        }
+
+        const safeAccountId = bankAccount.accountNumberMask;
+        const localWarnings: string[] = [];
 
         const txArray = toArray(statement.BANKTRANLIST?.STMTTRN);
+        const startDate = parseDate(statement.BANKTRANLIST?.DTSTART);
+        const endDate = parseDate(statement.BANKTRANLIST?.DTEND);
+
         if (txArray.length === 0) {
-          warnings.push(`Conta ${accountId} sem transações no período informado.`);
-          accountSummaries.push({
-            accountId,
-            currency: statement.CURDEF,
-            startDate: parseDate(statement.BANKTRANLIST?.DTSTART),
-            endDate: parseDate(statement.BANKTRANLIST?.DTEND),
+          localWarnings.push(`Conta ${safeAccountId} sem transações no período informado.`);
+          const summary = {
+            accountId: safeAccountId,
+            currency,
+            startDate,
+            endDate,
             openingBalance: undefined,
             ledgerClosingBalance: undefined,
             computedClosingBalance: undefined,
             totalCredits: 0,
             totalDebits: 0,
             net: 0,
+          };
+          accountSummaries.push(summary);
+          accountImports.push({
+            fileHash,
+            clientId,
+            orgId,
+            bankAccountId: bankAccount.bankAccountId,
+            statementStart: startDate,
+            statementEnd: endDate,
+            importedAt,
+            transactionCount: 0,
+            reconciliation: {
+              accounts: [summary],
+              warnings: localWarnings,
+            },
           });
+          warnings.push(...localWarnings);
           continue;
         }
 
-        const startDate = parseDate(statement.BANKTRANLIST?.DTSTART);
-        const endDate = parseDate(statement.BANKTRANLIST?.DTEND);
+        const existingForAccount = existingBankTxs.filter(tx => {
+          if (tx.bankAccountId) {
+            return tx.bankAccountId === bankAccount.bankAccountId;
+          }
+          return tx.accountId === safeAccountId;
+        });
+        const stagedTransactions: BankTransaction[] = [];
 
         let totalCredits = 0;
         let totalDebits = 0;
@@ -670,21 +756,17 @@ export function registerPJRoutes(app: Express) {
           net = round2(net + amount);
 
           if (adjusted && parsedTx.TRNTYPE) {
-            warnings.push(
+            localWarnings.push(
               `Sinal ajustado automaticamente: transação ${fitid || desc} reinterpretada como ${parsedTx.TRNTYPE}.`
             );
           }
 
-          const isDuplicate = isDuplicateTransaction(
-            existingBankTxs,
-            newTransactions,
-            {
-              amount,
-              desc,
-              date,
-              fitid,
-            }
-          );
+          const isDuplicate = isDuplicateTransaction(existingForAccount, stagedTransactions, {
+            amount,
+            desc,
+            date,
+            fitid,
+          });
 
           if (isDuplicate) {
             dedupedCount += 1;
@@ -696,13 +778,15 @@ export function registerPJRoutes(app: Express) {
             date,
             desc,
             amount,
-            accountId,
+            accountId: safeAccountId,
+            bankAccountId: bankAccount.bankAccountId,
             fitid,
             sourceHash: fileHash,
             linkedLegs: [],
             reconciled: false,
           };
 
+          stagedTransactions.push(bankTx);
           newTransactions.push(bankTx);
         }
 
@@ -711,12 +795,12 @@ export function registerPJRoutes(app: Express) {
         if (ledgerRaw !== undefined) {
           const parsedLedger = Number.parseFloat(String(ledgerRaw).replace(",", "."));
           if (Number.isNaN(parsedLedger)) {
-            warnings.push(`Saldo final inválido informado para a conta ${accountId}.`);
+            localWarnings.push(`Saldo final inválido informado para a conta ${safeAccountId}.`);
           } else {
             ledgerClosingBalance = round2(parsedLedger);
           }
         } else {
-          warnings.push(`Saldo final (LEDGERBAL) ausente na conta ${accountId}.`);
+          localWarnings.push(`Saldo final (LEDGERBAL) ausente na conta ${safeAccountId}.`);
         }
 
         let openingBalance: number | undefined;
@@ -739,15 +823,15 @@ export function registerPJRoutes(app: Express) {
         if (ledgerClosingBalance !== undefined && computedClosingBalance !== undefined) {
           divergence = round2(computedClosingBalance - ledgerClosingBalance);
           if (Math.abs(divergence) > 0.01) {
-            warnings.push(
-              `Divergência de R$ ${Math.abs(divergence).toFixed(2)} no saldo final da conta ${accountId}.`
+            localWarnings.push(
+              `Divergência de R$ ${Math.abs(divergence).toFixed(2)} no saldo final da conta ${safeAccountId}.`
             );
           }
         }
 
-        accountSummaries.push({
-          accountId,
-          currency: statement.CURDEF,
+        const summary = {
+          accountId: safeAccountId,
+          currency,
           startDate,
           endDate,
           openingBalance,
@@ -757,7 +841,24 @@ export function registerPJRoutes(app: Express) {
           totalDebits: round2(totalDebits),
           net,
           divergence,
+        };
+
+        accountSummaries.push(summary);
+        accountImports.push({
+          fileHash,
+          clientId,
+          orgId,
+          bankAccountId: bankAccount.bankAccountId,
+          statementStart: startDate,
+          statementEnd: endDate,
+          importedAt,
+          transactionCount: txArray.length,
+          reconciliation: {
+            accounts: [summary],
+            warnings: localWarnings,
+          },
         });
+        warnings.push(...localWarnings);
       }
 
       if (totalTransactionsInFile === 0) {
@@ -771,6 +872,7 @@ export function registerPJRoutes(app: Express) {
           newTransactions: newTransactions.length,
           deduped: dedupedCount,
           warnings: warnings.length,
+          duplicateFile: accountsWithExistingImport.size > 0,
         },
       });
 
@@ -782,17 +884,15 @@ export function registerPJRoutes(app: Express) {
         await storage.addBankTransactions(clientId, newTransactions);
       }
 
+      const alreadyImported =
+        accountImports.length > 0 &&
+        newTransactions.length === 0 &&
+        accountsWithExistingImport.size === accountImports.length;
+
       errorStage = "persist";
-      await storage.addOFXImport({
-        fileHash,
-        clientId,
-        importedAt: new Date().toISOString(),
-        transactionCount: totalTransactionsInFile,
-        reconciliation: {
-          accounts: accountSummaries,
-          warnings,
-        },
-      });
+      for (const importRecord of accountImports) {
+        await storage.addOFXImport(importRecord);
+      }
 
       ingestionLogger.info("Reconciliação OFX consolidada", {
         event: "pj.ofx.import.reconciliation",
@@ -812,7 +912,7 @@ export function registerPJRoutes(app: Express) {
           imported: newTransactions.length,
           categorized: categorizedCount,
           accounts: accountSummaries.length,
-          duplicateFile: Boolean(existingImport),
+          duplicateFile: alreadyImported,
           warnings: warnings.length,
           deduped: dedupedCount,
         },
@@ -835,7 +935,7 @@ export function registerPJRoutes(app: Express) {
           autoCategorized: categorizedCount,
           deduped: dedupedCount,
           warnings: warnings.length,
-          alreadyImported: Boolean(existingImport),
+          alreadyImported,
         },
       });
 
@@ -845,7 +945,7 @@ export function registerPJRoutes(app: Express) {
         total: totalTransactionsInFile,
         deduped: dedupedCount,
         autoCategorized: categorizedCount,
-        alreadyImported: Boolean(existingImport),
+        alreadyImported,
         reconciliation: {
           accounts: accountSummaries,
           warnings,

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Client,
   Transaction,
@@ -14,6 +15,8 @@ import type {
   SaleLeg,
   PaymentMethod,
   LedgerEntry,
+  BankAccount,
+  UpsertBankAccount,
   BankTransaction,
   CategorizationRule,
   AuditLogEntry,
@@ -56,7 +59,11 @@ export interface IStorage {
   setReportHtml(clientId: string, period: string, html: string): Promise<void>;
 
   // OFX Imports
-  getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null>;
+  getOFXImport(
+    clientId: string,
+    bankAccountId: string,
+    fileHash: string
+  ): Promise<OFXImport | null>;
   addOFXImport(ofxImport: OFXImport): Promise<void>;
 
   // Open Finance (Pluggy)
@@ -88,7 +95,12 @@ export interface IStorage {
   getLedgerEntries(clientId: string): Promise<LedgerEntry[]>;
   setLedgerEntries(clientId: string, entries: LedgerEntry[]): Promise<void>;
   addLedgerEntry(clientId: string, entry: LedgerEntry): Promise<void>;
-  
+
+  // PJ - Bank Accounts
+  getBankAccountById(bankAccountId: string): Promise<BankAccount | undefined>;
+  getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]>;
+  upsertBankAccount(account: UpsertBankAccount): Promise<BankAccount>;
+
   // PJ - Bank Transactions
   getBankTransactions(clientId: string): Promise<BankTransaction[]>;
   setBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void>;
@@ -118,8 +130,10 @@ export class MemStorage implements IStorage {
   private ofItems: Map<string, OFItem[]>;
   private ofAccounts: Map<string, OFAccount[]>;
   private ofSyncMeta: Map<string, OFSyncMeta>;
-  
+
   // PJ storage
+  private bankAccountsById: Map<string, BankAccount>;
+  private bankAccountsByOrgFingerprint: Map<string, Map<string, string>>;
   private pjSales: Map<string, Sale[]>;
   private pjSaleLegs: Map<string, SaleLeg[]>;
   private pjPaymentMethods: Map<string, PaymentMethod[]>;
@@ -140,11 +154,13 @@ export class MemStorage implements IStorage {
     this.ofItems = new Map();
     this.ofAccounts = new Map();
     this.ofSyncMeta = new Map();
-    
+
     this.pjSales = new Map();
     this.pjSaleLegs = new Map();
     this.pjPaymentMethods = new Map();
     this.pjLedgerEntries = new Map();
+    this.bankAccountsById = new Map();
+    this.bankAccountsByOrgFingerprint = new Map();
     this.pjBankTransactions = new Map();
     this.pjCategorizationRules = new Map();
     this.auditLogs = new Map();
@@ -286,12 +302,21 @@ export class MemStorage implements IStorage {
   }
 
   // OFX Imports
-  private getOfxImportKey(clientId: string, fileHash: string): string {
-    return `ofxImport:${clientId}:${fileHash}`;
+  private getOfxImportKey(
+    clientId: string,
+    bankAccountId: string | undefined,
+    fileHash: string
+  ): string {
+    const accountSegment = bankAccountId ?? "legacy";
+    return `ofxImport:${clientId}:${accountSegment}:${fileHash}`;
   }
 
-  async getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null> {
-    const normalizedKey = this.getOfxImportKey(clientId, fileHash);
+  async getOFXImport(
+    clientId: string,
+    bankAccountId: string,
+    fileHash: string
+  ): Promise<OFXImport | null> {
+    const normalizedKey = this.getOfxImportKey(clientId, bankAccountId, fileHash);
     const existing = this.ofxImports.get(normalizedKey);
     if (existing) {
       return existing;
@@ -302,9 +327,13 @@ export class MemStorage implements IStorage {
       const migrated: OFXImport = {
         ...legacyEntry,
         clientId: legacyEntry.clientId ?? clientId,
+        bankAccountId: legacyEntry.bankAccountId ?? bankAccountId,
       };
       this.ofxImports.delete(fileHash);
-      this.ofxImports.set(this.getOfxImportKey(migrated.clientId, fileHash), migrated);
+      this.ofxImports.set(
+        this.getOfxImportKey(migrated.clientId, migrated.bankAccountId, fileHash),
+        migrated
+      );
       return migrated;
     }
 
@@ -312,7 +341,10 @@ export class MemStorage implements IStorage {
   }
 
   async addOFXImport(ofxImport: OFXImport): Promise<void> {
-    this.ofxImports.set(this.getOfxImportKey(ofxImport.clientId, ofxImport.fileHash), ofxImport);
+    this.ofxImports.set(
+      this.getOfxImportKey(ofxImport.clientId, ofxImport.bankAccountId, ofxImport.fileHash),
+      ofxImport
+    );
   }
 
   // Open Finance (Pluggy)
@@ -400,6 +432,88 @@ export class MemStorage implements IStorage {
     this.pjLedgerEntries.set(clientId, [...existing, entry]);
   }
 
+  async getBankAccountById(bankAccountId: string): Promise<BankAccount | undefined> {
+    return this.bankAccountsById.get(bankAccountId);
+  }
+
+  async getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]> {
+    return Array.from(this.bankAccountsById.values()).filter(account => {
+      if (account.orgId !== orgId) {
+        return false;
+      }
+      if (clientId && account.clientId !== clientId) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  async upsertBankAccount(account: UpsertBankAccount): Promise<BankAccount> {
+    const now = new Date().toISOString();
+    const fingerprint = account.accountFingerprint;
+    if (!fingerprint) {
+      throw new Error("Account fingerprint is required to upsert bank account");
+    }
+
+    let fingerprintIndex = this.bankAccountsByOrgFingerprint.get(account.orgId);
+    if (!fingerprintIndex) {
+      fingerprintIndex = new Map<string, string>();
+      this.bankAccountsByOrgFingerprint.set(account.orgId, fingerprintIndex);
+    }
+
+    const existingId = fingerprintIndex.get(fingerprint) ?? account.bankAccountId;
+    if (existingId) {
+      const existing = this.bankAccountsById.get(existingId);
+      if (existing) {
+        const updated: BankAccount = {
+          ...existing,
+          clientId: account.clientId,
+          provider: account.provider,
+          bankOrg: account.bankOrg,
+          bankFid: account.bankFid,
+          bankName: account.bankName ?? existing.bankName,
+          bankCode: account.bankCode ?? existing.bankCode,
+          branch: account.branch ?? existing.branch,
+          accountNumberMask: account.accountNumberMask,
+          accountType: account.accountType ?? existing.accountType,
+          currency: account.currency ?? existing.currency,
+          accountFingerprint: fingerprint,
+          isActive: account.isActive ?? existing.isActive,
+          updatedAt: account.updatedAt ?? now,
+        };
+
+        this.bankAccountsById.set(existing.bankAccountId, updated);
+        fingerprintIndex.set(fingerprint, existing.bankAccountId);
+        return updated;
+      }
+    }
+
+    const bankAccountId = account.bankAccountId ?? randomUUID();
+    const createdAt = account.createdAt ?? now;
+    const newAccount: BankAccount = {
+      bankAccountId,
+      orgId: account.orgId,
+      clientId: account.clientId,
+      provider: account.provider,
+      bankOrg: account.bankOrg,
+      bankFid: account.bankFid,
+      bankName: account.bankName,
+      bankCode: account.bankCode,
+      branch: account.branch,
+      accountNumberMask: account.accountNumberMask,
+      accountType: account.accountType,
+      currency: account.currency,
+      accountFingerprint: fingerprint,
+      isActive: account.isActive ?? true,
+      createdAt,
+      updatedAt: account.updatedAt ?? now,
+    };
+
+    this.bankAccountsById.set(bankAccountId, newAccount);
+    fingerprintIndex.set(fingerprint, bankAccountId);
+    return newAccount;
+  }
+
   // PJ - Bank Transactions
   async getBankTransactions(clientId: string): Promise<BankTransaction[]> {
     return this.pjBankTransactions.get(clientId) || [];
@@ -474,6 +588,22 @@ export class ReplitDbStorage implements IStorage {
     return `ofxImport:${fileHash}`;
   }
 
+  private getBankAccountKey(bankAccountId: string): string {
+    return `bankAccount:${bankAccountId}`;
+  }
+
+  private getBankAccountsOrgIndexKey(orgId: string): string {
+    return `bankAccountsOrg:${orgId}`;
+  }
+
+  private getBankAccountsClientIndexKey(orgId: string, clientId: string): string {
+    return `bankAccountsOrg:${orgId}:client:${clientId}`;
+  }
+
+  private getBankAccountFingerprintKey(orgId: string, fingerprint: string): string {
+    return `bankAccountFingerprint:${orgId}:${fingerprint}`;
+  }
+
   private async normalizeLegacyOFXImports(): Promise<void> {
     try {
       const listResult = await this.db.list("ofxImport:");
@@ -509,7 +639,7 @@ export class ReplitDbStorage implements IStorage {
           continue;
         }
 
-        const normalizedKey = this.getOfxImportKey(clientId, fileHash);
+        const normalizedKey = this.getOfxImportKey(clientId, legacyImport?.bankAccountId, fileHash);
         const setResult = await this.db.set(normalizedKey, legacyImport);
         if (!setResult.ok) {
           throw new Error(`Error migrating OFX import ${legacyKey}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
@@ -783,10 +913,14 @@ export class ReplitDbStorage implements IStorage {
   }
 
   // OFX Imports
-  async getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null> {
+  async getOFXImport(
+    clientId: string,
+    bankAccountId: string,
+    fileHash: string
+  ): Promise<OFXImport | null> {
     await this.migrationsReady;
 
-    const key = this.getOfxImportKey(clientId, fileHash);
+    const key = this.getOfxImportKey(clientId, bankAccountId, fileHash);
     const result = await this.db.get(key);
     // 404 means key doesn't exist (file not imported before for this client)
     if (!result.ok && result.error?.statusCode !== 404) {
@@ -807,7 +941,11 @@ export class ReplitDbStorage implements IStorage {
     }
 
     const legacyImport = legacyResult.value as OFXImport | null;
-    if (!legacyImport || legacyImport.clientId !== clientId) {
+    if (
+      !legacyImport ||
+      legacyImport.clientId !== clientId ||
+      (legacyImport.bankAccountId && legacyImport.bankAccountId !== bankAccountId)
+    ) {
       return null;
     }
 
@@ -820,7 +958,10 @@ export class ReplitDbStorage implements IStorage {
   async addOFXImport(ofxImport: OFXImport): Promise<void> {
     await this.migrationsReady;
 
-    const result = await this.db.set(this.getOfxImportKey(ofxImport.clientId, ofxImport.fileHash), ofxImport);
+    const result = await this.db.set(
+      this.getOfxImportKey(ofxImport.clientId, ofxImport.bankAccountId, ofxImport.fileHash),
+      ofxImport
+    );
     if (!result.ok) {
       throw new Error(`Database error adding OFX import: ${result.error?.message || JSON.stringify(result.error)}`);
     }
@@ -958,6 +1099,147 @@ export class ReplitDbStorage implements IStorage {
   async addLedgerEntry(clientId: string, entry: LedgerEntry): Promise<void> {
     const existing = await this.getLedgerEntries(clientId);
     await this.setLedgerEntries(clientId, [...existing, entry]);
+  }
+
+  async getBankAccountById(bankAccountId: string): Promise<BankAccount | undefined> {
+    const result = await this.db.get(this.getBankAccountKey(bankAccountId));
+    if (!result.ok) {
+      if (result.error?.statusCode === 404) {
+        return undefined;
+      }
+      throw new Error(
+        `Database error getting bank account ${bankAccountId}: ${result.error?.message || JSON.stringify(result.error)}`
+      );
+    }
+    return result.value ?? undefined;
+  }
+
+  async getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]> {
+    const indexKey = clientId
+      ? this.getBankAccountsClientIndexKey(orgId, clientId)
+      : this.getBankAccountsOrgIndexKey(orgId);
+
+    const indexResult = await this.db.get(indexKey);
+    if (!indexResult.ok && indexResult.error?.statusCode !== 404) {
+      throw new Error(
+        `Database error getting bank account index ${indexKey}: ${indexResult.error?.message || JSON.stringify(indexResult.error)}`
+      );
+    }
+
+    const ids: string[] = indexResult.ok ? indexResult.value ?? [] : [];
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const accounts = await Promise.all(ids.map(id => this.getBankAccountById(id)));
+    return accounts
+      .filter((account): account is BankAccount => Boolean(account) && account!.orgId === orgId)
+      .filter(account => (clientId ? account.clientId === clientId : true));
+  }
+
+  async upsertBankAccount(account: UpsertBankAccount): Promise<BankAccount> {
+    const now = new Date().toISOString();
+    const fingerprintKey = this.getBankAccountFingerprintKey(account.orgId, account.accountFingerprint);
+
+    const fingerprintResult = await this.db.get(fingerprintKey);
+    if (!fingerprintResult.ok && fingerprintResult.error?.statusCode !== 404) {
+      throw new Error(
+        `Database error reading bank account fingerprint ${fingerprintKey}: ${fingerprintResult.error?.message || JSON.stringify(fingerprintResult.error)}`
+      );
+    }
+
+    let bankAccountId: string | undefined = account.bankAccountId;
+    if (fingerprintResult.ok) {
+      bankAccountId = fingerprintResult.value ?? bankAccountId;
+    }
+
+    let existing: BankAccount | undefined;
+    if (bankAccountId) {
+      existing = await this.getBankAccountById(bankAccountId);
+    }
+
+    if (!existing && !bankAccountId) {
+      bankAccountId = randomUUID();
+    }
+
+    const base: BankAccount = existing
+      ? {
+          ...existing,
+          updatedAt: now,
+        }
+      : {
+          bankAccountId: bankAccountId!,
+          orgId: account.orgId,
+          clientId: account.clientId,
+          provider: account.provider,
+          bankOrg: account.bankOrg,
+          bankFid: account.bankFid,
+          bankName: account.bankName,
+          bankCode: account.bankCode,
+          branch: account.branch,
+          accountNumberMask: account.accountNumberMask,
+          accountType: account.accountType,
+          currency: account.currency,
+          accountFingerprint: account.accountFingerprint,
+          isActive: account.isActive ?? true,
+          createdAt: account.createdAt ?? now,
+          updatedAt: account.updatedAt ?? now,
+        };
+
+    const updated: BankAccount = {
+      ...base,
+      clientId: account.clientId,
+      provider: account.provider,
+      bankOrg: account.bankOrg ?? base.bankOrg,
+      bankFid: account.bankFid ?? base.bankFid,
+      bankName: account.bankName ?? base.bankName,
+      bankCode: account.bankCode ?? base.bankCode,
+      branch: account.branch ?? base.branch,
+      accountNumberMask: account.accountNumberMask,
+      accountType: account.accountType ?? base.accountType,
+      currency: account.currency ?? base.currency,
+      accountFingerprint: account.accountFingerprint,
+      isActive: account.isActive ?? base.isActive,
+      updatedAt: account.updatedAt ?? now,
+    };
+
+    const setResult = await this.db.set(this.getBankAccountKey(updated.bankAccountId), updated);
+    if (!setResult.ok) {
+      throw new Error(
+        `Database error saving bank account ${updated.bankAccountId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`
+      );
+    }
+
+    const setFingerprint = await this.db.set(fingerprintKey, updated.bankAccountId);
+    if (!setFingerprint.ok) {
+      throw new Error(
+        `Database error indexing bank account fingerprint ${fingerprintKey}: ${setFingerprint.error?.message || JSON.stringify(setFingerprint.error)}`
+      );
+    }
+
+    const updateIndex = async (key: string) => {
+      const indexResult = await this.db.get(key);
+      if (!indexResult.ok && indexResult.error?.statusCode !== 404) {
+        throw new Error(
+          `Database error reading bank account index ${key}: ${indexResult.error?.message || JSON.stringify(indexResult.error)}`
+        );
+      }
+      const ids: string[] = indexResult.ok ? indexResult.value ?? [] : [];
+      if (!ids.includes(updated.bankAccountId)) {
+        ids.push(updated.bankAccountId);
+        const writeResult = await this.db.set(key, ids);
+        if (!writeResult.ok) {
+          throw new Error(
+            `Database error updating bank account index ${key}: ${writeResult.error?.message || JSON.stringify(writeResult.error)}`
+          );
+        }
+      }
+    };
+
+    await updateIndex(this.getBankAccountsOrgIndexKey(updated.orgId));
+    await updateIndex(this.getBankAccountsClientIndexKey(updated.orgId, updated.clientId));
+
+    return updated;
   }
 
   // PJ - Bank Transactions
