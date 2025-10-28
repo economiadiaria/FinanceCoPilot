@@ -234,6 +234,28 @@ export const ofxImportSchema = z.object({
   clientId: z.string(),
   importedAt: z.string(), // ISO 8601 timestamp
   transactionCount: z.number(),
+  reconciliation: z
+    .object({
+      accounts: z
+        .array(
+          z.object({
+            accountId: z.string(),
+            currency: z.string().optional(),
+            startDate: z.string().optional(),
+            endDate: z.string().optional(),
+            openingBalance: z.number().optional(),
+            ledgerClosingBalance: z.number().optional(),
+            computedClosingBalance: z.number().optional(),
+            totalCredits: z.number(),
+            totalDebits: z.number(),
+            net: z.number(),
+            divergence: z.number().optional(),
+          })
+        )
+        .default([]),
+      warnings: z.array(z.string()).default([]),
+    })
+    .optional(),
 });
 
 export type OFXImport = z.infer<typeof ofxImportSchema>;

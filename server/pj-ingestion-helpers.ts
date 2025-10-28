@@ -18,6 +18,64 @@ export interface OfxCandidateTransaction {
   fitid?: string;
 }
 
+function buildTransactionSignature(candidate: OfxCandidateTransaction): string {
+  const amount = Number(candidate.amount.toFixed(2));
+  if (candidate.fitid) {
+    return `fitid:${candidate.fitid}`;
+  }
+  return `date:${candidate.date}|amount:${amount}`;
+}
+
+function collectExistingSignatures(transactions: BankTransaction[]): Set<string> {
+  const signatures = new Set<string>();
+  for (const tx of transactions) {
+    signatures.add(
+      buildTransactionSignature({
+        date: tx.date,
+        amount: tx.amount,
+        desc: tx.desc,
+        fitid: tx.fitid,
+      })
+    );
+  }
+  return signatures;
+}
+
+export function normalizeOfxAmount(rawAmount: string, trnType?: string): {
+  amount: number;
+  adjusted: boolean;
+} {
+  if (typeof rawAmount !== "string") {
+    throw new Error("Valor TRNAMT inválido no OFX");
+  }
+
+  const normalizedRaw = rawAmount.replace(",", ".");
+  const parsed = Number.parseFloat(normalizedRaw);
+  if (Number.isNaN(parsed)) {
+    throw new Error(`Não foi possível interpretar o valor da transação: ${rawAmount}`);
+  }
+
+  let amount = Number(parsed.toFixed(2));
+  let adjusted = false;
+
+  if (trnType) {
+    const type = trnType.toUpperCase();
+    if (type.includes("DEBIT")) {
+      if (amount > 0) {
+        amount = Number((-amount).toFixed(2));
+        adjusted = true;
+      }
+    } else if (type.includes("CREDIT") || type.includes("DEP")) {
+      if (amount < 0) {
+        amount = Number(Math.abs(amount).toFixed(2));
+        adjusted = true;
+      }
+    }
+  }
+
+  return { amount, adjusted };
+}
+
 export function calculateSettlementPlan(
   saleDate: string,
   method: PaymentMethod | undefined,

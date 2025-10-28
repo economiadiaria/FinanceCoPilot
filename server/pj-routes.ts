@@ -257,8 +257,15 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "Arquivo CSV não enviado" });
       }
       
-      const clientId = req.body.clientId;
-      if (!clientId) {
+      const candidateClientId = (req.body?.clientId ?? req.query?.clientId) as
+        | string
+        | string[]
+        | undefined;
+      const clientId = Array.isArray(candidateClientId)
+        ? candidateClientId[0]
+        : candidateClientId;
+
+      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
       
@@ -453,36 +460,75 @@ export function registerPJRoutes(app: Express) {
       if (!req.file) {
         return res.status(400).json({ error: "Arquivo OFX não enviado" });
       }
-      
-      const clientId = req.body.clientId;
-      if (!clientId) {
+
+      const candidateClientId = (req.body?.clientId ?? req.query?.clientId) as
+        | string
+        | string[]
+        | undefined;
+      const clientId = Array.isArray(candidateClientId)
+        ? candidateClientId[0]
+        : candidateClientId;
+
+      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
-      
-      // Calcular hash do arquivo (deduplicação)
-      const fileContent = req.file.buffer.toString("utf-8");
-      const fileHash = crypto.createHash("sha256").update(fileContent).digest("hex");
-      
-      // Verificar se já foi importado
+
+      const buffer = req.file.buffer;
+      const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
       const existingImport = await storage.getOFXImport(fileHash);
-      if (existingImport) {
-        return res.status(409).json({ 
-          error: "OFX duplicado. Este arquivo já foi importado anteriormente.",
-          importedAt: existingImport.importedAt,
-        });
+
+      let fileContent = buffer.toString("utf8");
+      if (fileContent.includes("�")) {
+        fileContent = buffer.toString("latin1");
       }
-      
-      // Parse OFX
-      const ofxData = Ofx.parse(fileContent);
-      
-      // Extrair transações
+
+      let ofxData: any;
+      try {
+        ofxData = await Ofx.parse(fileContent);
+      } catch (parseError: any) {
+        throw new Error(`OFX inválido ou corrompido: ${parseError?.message || parseError}`);
+      }
+
+      const toArray = <T,>(value: T | T[] | undefined): T[] => {
+        if (!value) return [];
+        return Array.isArray(value) ? value : [value];
+      };
+
+      const accountsArray = toArray(ofxData?.OFX?.BANKMSGSRSV1?.STMTTRNRS);
+      if (accountsArray.length === 0) {
+        throw new Error("Arquivo OFX não contém contas bancárias para importação");
+      }
+
+      const parseDate = (value?: string): string | undefined => {
+        if (!value) return undefined;
+        const trimmed = value.trim();
+        if (trimmed.length < 8) {
+          throw new Error(`Data OFX inválida: ${value}`);
+        }
+        return formatBR(trimmed.substring(0, 8));
+      };
+
+      const round2 = (value: number) => Math.round(value * 100) / 100;
+
       const existingBankTxs = await storage.getBankTransactions(clientId);
       const newTransactions: BankTransaction[] = [];
-      
-      // OFX pode ter múltiplas contas
-      const accounts = ofxData.OFX?.BANKMSGSRSV1?.STMTTRNRS || [];
-      const accountsArray = Array.isArray(accounts) ? accounts : [accounts];
-      
+      const warnings: string[] = [];
+      const accountSummaries: {
+        accountId: string;
+        currency?: string;
+        startDate?: string;
+        endDate?: string;
+        openingBalance?: number;
+        ledgerClosingBalance?: number;
+        computedClosingBalance?: number;
+        totalCredits: number;
+        totalDebits: number;
+        net: number;
+        divergence?: number;
+      }[] = [];
+      let totalTransactionsInFile = 0;
+      let dedupedCount = 0;
+
       for (const account of accountsArray) {
         const statement = account.STMTRS;
         if (!statement) continue;
@@ -516,6 +562,33 @@ export function registerPJRoutes(app: Express) {
 
             newTransactions.push(bankTx);
           }
+          net = round2(net + amount);
+
+          if (adjusted && parsedTx.TRNTYPE) {
+            warnings.push(
+              `Sinal ajustado automaticamente para ${parsedTx.TRNTYPE} em ${date} (${desc}).`
+            );
+          }
+
+          const candidate = { date, amount, desc, fitid };
+          if (isDuplicateTransaction(existingBankTxs, newTransactions, candidate)) {
+            dedupedCount += 1;
+            continue;
+          }
+
+          const bankTx: BankTransaction = {
+            bankTxId: uuidv4(),
+            date,
+            desc,
+            amount,
+            accountId,
+            fitid,
+            sourceHash: fileHash,
+            linkedLegs: [],
+            reconciled: false,
+          };
+
+          newTransactions.push(bankTx);
         }
       }
 
@@ -531,7 +604,11 @@ export function registerPJRoutes(app: Express) {
         fileHash,
         clientId,
         importedAt: new Date().toISOString(),
-        transactionCount: newTransactions.length,
+        transactionCount: totalTransactionsInFile,
+        reconciliation: {
+          accounts: accountSummaries,
+          warnings,
+        },
       });
 
       await recordAuditEvent({
