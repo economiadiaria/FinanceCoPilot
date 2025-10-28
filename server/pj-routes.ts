@@ -518,7 +518,7 @@ export function registerPJRoutes(app: Express) {
    * POST /api/pj/import/ofx
    * Importar extrato bancário via OFX com deduplicação SHA256
    */
-  app.post("/api/pj/import/ofx", scopeRequired("PJ"), upload.single("ofx"), async (req, res) => {
+  app.post("/api/pj/import/ofx", upload.single("ofx"), scopeRequired("PJ"), async (req, res) => {
     const baseLogger = getLogger(req);
     const importId = crypto.randomUUID();
     let ingestionLogger = baseLogger.child({ importId });
