@@ -120,6 +120,27 @@ function maskAccountNumber(accountId: unknown): string {
   return "***";
 }
 
+function coerceClientIdValue(input: unknown): string | undefined {
+  if (Array.isArray(input)) {
+    for (const candidate of input) {
+      if (typeof candidate === "string") {
+        const trimmed = candidate.trim();
+        if (trimmed) {
+          return trimmed;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    return trimmed === "" ? undefined : trimmed;
+  }
+
+  return undefined;
+}
+
 function buildAccountAuditMetadata(
   accountIds: Iterable<string | undefined | null>
 ): Array<{ bankAccountId: string; accountNumberMask: string }> {
@@ -399,15 +420,8 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "Arquivo CSV não enviado" });
       }
       
-      const candidateClientId = (req.body?.clientId ?? req.query?.clientId) as
-        | string
-        | string[]
-        | undefined;
-      clientId = Array.isArray(candidateClientId)
-        ? candidateClientId[0]
-        : candidateClientId;
-
-      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
+      const clientId = coerceClientIdValue(req.body?.clientId ?? req.query?.clientId);
+      if (!clientId) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
@@ -793,17 +807,12 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "Arquivo OFX não enviado" });
       }
 
-      const candidateClientId = (req.body?.clientId ?? req.query?.clientId) as
-        | string
-        | string[]
-        | undefined;
-      clientId = Array.isArray(candidateClientId)
-        ? candidateClientId[0]
-        : candidateClientId;
-
-      if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
+      clientId = coerceClientIdValue(req.body?.clientId ?? req.query?.clientId);
+      if (!clientId) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
+
+      const resolvedClientId = clientId;
 
       ingestionStartedAt = process.hrtime.bigint();
 
@@ -915,16 +924,19 @@ export function registerPJRoutes(app: Express) {
         accountLogger.info("Iniciando processamento de extrato bancário", {
           event: "pj.ofx.import.account.start",
           context: {
-            clientId,
+            clientId: resolvedClientId,
             statementIndex: accountSummaries.length + 1,
           },
         });
 
         if (!activeTimers.has(accountId)) {
-          activeTimers.set(accountId, startOfxIngestionTimer(clientId, accountId, maskedBankName));
+          activeTimers.set(
+            accountId,
+            startOfxIngestionTimer(resolvedClientId, accountId, maskedBankName)
+          );
         }
 
-        const existingImport = await storage.getOFXImport(clientId, accountId, fileHash);
+        const existingImport = await storage.getOFXImport(resolvedClientId, accountId, fileHash);
         existingImports.set(accountId, existingImport);
 
         const txArray = toArray(statement.BANKTRANLIST?.STMTTRN);
@@ -963,7 +975,7 @@ export function registerPJRoutes(app: Express) {
         let net = 0;
 
         const existingBankTxs = existingTransactionsByAccount.get(accountId) ??
-          (await storage.getBankTransactions(clientId, accountId));
+          (await storage.getBankTransactions(resolvedClientId, accountId));
         existingTransactionsByAccount.set(accountId, existingBankTxs);
         const pendingForAccount = pendingTransactionsByAccount.get(accountId) ?? [];
 
@@ -1085,7 +1097,7 @@ export function registerPJRoutes(app: Express) {
         accountLogger.info("Extrato bancário processado", {
           event: "pj.ofx.import.account.summary",
           context: {
-            clientId,
+            clientId: resolvedClientId,
             bankAccountId: accountId,
             bankName: maskedBankName,
             transactionsInStatement: txArray.length,
@@ -1121,11 +1133,11 @@ export function registerPJRoutes(app: Express) {
       });
 
       errorStage = "categorize";
-      const rules = await storage.getCategorizationRules(clientId);
+      const rules = await storage.getCategorizationRules(resolvedClientId);
       const categorizedCount = applyCategorizationRules(newTransactions, rules);
 
       if (newTransactions.length > 0) {
-        await storage.addBankTransactions(clientId, newTransactions);
+        await storage.addBankTransactions(resolvedClientId, newTransactions);
       }
 
       errorStage = "persist";
@@ -1136,7 +1148,7 @@ export function registerPJRoutes(app: Express) {
           const accountTransactions = accountTransactionTotals.get(summary.accountId) ?? 0;
           await storage.addOFXImport({
             fileHash,
-            clientId,
+            clientId: resolvedClientId,
             bankAccountId: summary.accountId,
             importedAt,
             transactionCount: accountTransactions,
@@ -1169,7 +1181,7 @@ export function registerPJRoutes(app: Express) {
         eventType: "pj.ofx.import",
         targetType: "bank-transactions",
         metadata: {
-          clientId,
+          clientId: resolvedClientId,
           bankAccountId: singleAccount ? singleAccount.bankAccountId : null,
           accountNumberMask: singleAccount ? singleAccount.accountNumberMask : null,
           accountIdentifiers: accountAuditMetadata,
@@ -1196,7 +1208,7 @@ export function registerPJRoutes(app: Express) {
       accountSummaries.forEach(summary => {
         const perAccountWarnings = warningsByAccount.get(summary.accountId) ?? [];
         recordOfxImportOutcome({
-          clientId,
+          clientId: resolvedClientId,
           importId,
           bankAccountId: summary.accountId,
           bankName: bankNameByAccount.get(summary.accountId),
@@ -1231,6 +1243,7 @@ export function registerPJRoutes(app: Express) {
       });
     } catch (error: any) {
       if (clientId) {
+        const ensuredClientId = clientId;
         const hrNow = process.hrtime.bigint();
         const timersSnapshot = Array.from(activeTimers.values());
         if (activeTimers.size > 0) {
@@ -1240,14 +1253,14 @@ export function registerPJRoutes(app: Express) {
           });
           activeTimers.clear();
         } else {
-          incrementOfxError(clientId, UNKNOWN_BANK_LABEL, errorStage);
+          incrementOfxError(ensuredClientId, UNKNOWN_BANK_LABEL, errorStage);
           const elapsedSeconds =
             ingestionStartedAt !== null
               ? Number(hrNow - ingestionStartedAt) / 1_000_000_000
               : 0;
           ofxIngestionDuration.observe(
             {
-              clientId,
+              clientId: ensuredClientId,
               bankAccountId: UNKNOWN_BANK_LABEL,
               bankName: UNKNOWN_BANK_LABEL,
               status: "error",
@@ -1262,7 +1275,7 @@ export function registerPJRoutes(app: Express) {
         if (timersSnapshot.length > 0) {
           timersSnapshot.forEach(timer => {
             recordOfxImportOutcome({
-              clientId,
+              clientId: ensuredClientId,
               importId,
               bankAccountId: timer.bankAccountId,
               bankName: timer.bankName,
@@ -1274,7 +1287,7 @@ export function registerPJRoutes(app: Express) {
           });
         } else {
           recordOfxImportOutcome({
-            clientId,
+            clientId: ensuredClientId,
             importId,
             bankAccountId: UNKNOWN_BANK_LABEL,
             bankName: UNKNOWN_BANK_LABEL,
