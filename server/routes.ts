@@ -580,6 +580,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     let clientIdForLogging: string | null = null;
     try {
       const client = req.clientContext;
+      let clientId: string | undefined = client?.clientId;
+      try {
 
       if (!client || !req.authUser) {
         return res.status(500).json({ error: "Contexto do cliente não carregado" });
@@ -607,12 +609,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ofxData = await Ofx.parse(ofxContent);
         getLogger(req).info("OFX parseado com sucesso", {
           event: "pf.ofx.parse.success",
-          context: { clientId },
+          context: { clientId: ensuredClientId },
         });
       } catch (parseError) {
         getLogger(req).error("Erro ao fazer parse do OFX", {
           event: "pf.ofx.parse.failure",
-          context: { clientId },
+          context: { clientId: ensuredClientId },
         }, parseError);
         return res.status(400).json({
           error: "Erro ao processar arquivo OFX. Verifique se o arquivo está no formato correto."
@@ -622,7 +624,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!ofxData || !ofxData.OFX) {
         getLogger(req).error("OFX parseado mas sem estrutura válida", {
           event: "pf.ofx.structure.invalid",
-          context: { clientId },
+          context: { clientId: ensuredClientId },
         }, ofxData);
         return res.status(400).json({ error: "Arquivo OFX inválido ou sem dados." });
       }
@@ -637,12 +639,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (e) {
         getLogger(req).warn("Não foi possível extrair nome do banco do OFX", {
           event: "pf.ofx.bankname.missing",
-          context: { clientId },
+          context: { clientId: ensuredClientId },
         }, e);
       }
 
       const transactions: Transaction[] = [];
-      const existingTransactions = await storage.getTransactions(clientId);
+      const existingTransactions = await storage.getTransactions(ensuredClientId);
       const existingFitIds = new Set(existingTransactions.map(t => t.fitid).filter(Boolean));
 
       const parseStatementDate = (value?: string): string | undefined => {
@@ -691,7 +693,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const statementStart = parseStatementDate(statement.BANKTRANLIST.DTSTART);
         const statementEnd = parseStatementDate(statement.BANKTRANLIST.DTEND);
 
-        const existingImport = await storage.getOFXImport(clientId, accountId, fileHash);
+        const existingImport = await storage.getOFXImport(ensuredClientId, accountId, fileHash);
         if (existingImport) {
           duplicateAccounts.add(accountId);
         }
@@ -756,7 +758,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           accountSummaries.map(summary =>
             storage.addOFXImport({
               fileHash,
-              clientId,
+              clientId: ensuredClientId,
               bankAccountId: summary.accountId,
               importedAt,
               transactionCount: summary.transactionCount,
@@ -775,14 +777,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      await storage.addTransactions(clientId, transactions);
+      await storage.addTransactions(ensuredClientId, transactions);
 
       const importedAt = new Date().toISOString();
       await Promise.all(
         accountSummaries.map(summary =>
           storage.addOFXImport({
             fileHash,
-            clientId,
+            clientId: ensuredClientId,
             bankAccountId: summary.accountId,
             importedAt,
             transactionCount: summary.transactionCount,

@@ -477,8 +477,9 @@ export class MemStorage implements IStorage {
     }
 
     if (Array.isArray(existing)) {
+      const legacyList = existing as BankTransaction[];
       const bucket = new Map<string, BankTransaction[]>();
-      for (const tx of existing) {
+      for (const tx of legacyList) {
         const bankAccountId = tx.bankAccountId ?? tx.accountId ?? "unknown";
         const list = bucket.get(bankAccountId) ?? [];
         list.push({ ...tx, bankAccountId });
