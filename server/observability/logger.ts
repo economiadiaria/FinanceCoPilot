@@ -11,6 +11,8 @@ export interface LoggerContext {
   userId?: string;
   clientId?: string;
   importId?: string;
+  bankAccountId?: string;
+  bankName?: string;
   event?: string;
   context?: Record<string, unknown>;
 }
@@ -36,6 +38,8 @@ export class StructuredLogger {
       userId: merged.userId,
       clientId: merged.clientId,
       importId: merged.importId,
+      bankAccountId: merged.bankAccountId,
+      bankName: merged.bankName,
       event: merged.event,
       context: cleanedContext,
       errorMessage: null,
@@ -98,6 +102,7 @@ export function requestLoggingMiddleware(req: Request, res: Response, next: Next
 
   req.requestId = requestId;
   req.logger = requestLogger;
+  res.setHeader("X-Request-Id", requestId);
 
   const start = process.hrtime.bigint();
   let capturedJsonResponse: unknown;
