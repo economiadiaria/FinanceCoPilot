@@ -592,16 +592,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Generate SHA256 hash of file content to prevent duplicate imports
       const fileHash = crypto.createHash("sha256").update(ofxContent).digest("hex");
       
-      // Check if this file was already imported
-      const existingImport = await storage.getOFXImport(clientId, fileHash);
-      if (existingImport) {
-        return res.status(400).json({ 
-          error: "Este arquivo OFX já foi importado anteriormente.",
-          importedAt: existingImport.importedAt,
-          transactionCount: existingImport.transactionCount
-        });
-      }
-      
       // Parse OFX using ofx-js
       let ofxData;
       try {
@@ -641,10 +631,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           context: { clientId },
         }, e);
       }
-      
+
       const transactions: Transaction[] = [];
       const existingTransactions = await storage.getTransactions(clientId);
       const existingFitIds = new Set(existingTransactions.map(t => t.fitid).filter(Boolean));
+
+      const parseStatementDate = (value?: string): string | undefined => {
+        if (!value) {
+          return undefined;
+        }
+        const trimmed = value.toString().trim();
+        if (trimmed.length < 8) {
+          return undefined;
+        }
+        return `${trimmed.substring(0, 4)}-${trimmed.substring(4, 6)}-${trimmed.substring(6, 8)}`;
+      };
 
       // Extract transactions from OFX structure
       // Normalize to arrays (OFX parser returns object for single account, array for multiple)
@@ -658,52 +659,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? (Array.isArray(creditCardAccountsRaw) ? creditCardAccountsRaw : [creditCardAccountsRaw])
         : [];
 
-      const processAccount = (account: any) => {
+      const accountSummaries: {
+        accountId: string;
+        statementStart?: string;
+        statementEnd?: string;
+        transactionCount: number;
+      }[] = [];
+      const duplicateAccounts = new Set<string>();
+
+      for (const account of [...bankAccounts, ...creditCardAccounts]) {
         const statement = account.STMTRS || account.CCSTMTRS;
         if (!statement || !statement.BANKTRANLIST || !statement.BANKTRANLIST.STMTTRN) {
-          return;
+          continue;
         }
 
-        // Normalize transaction list to array (single transaction returns object)
         const transListRaw = statement.BANKTRANLIST.STMTTRN;
-        const transList = Array.isArray(transListRaw) 
-          ? transListRaw 
+        const transList = Array.isArray(transListRaw)
+          ? transListRaw
           : [transListRaw];
 
         const accountId = statement.BANKACCTFROM?.ACCTID || statement.CCACCTFROM?.ACCTID || "unknown";
+        const statementStart = parseStatementDate(statement.BANKTRANLIST.DTSTART);
+        const statementEnd = parseStatementDate(statement.BANKTRANLIST.DTEND);
+
+        const existingImport = await storage.getOFXImport(clientId, accountId, fileHash);
+        if (existingImport) {
+          duplicateAccounts.add(accountId);
+        }
 
         transList.forEach((trans: any) => {
           const fitid = trans.FITID || crypto.createHash("md5")
             .update(`${trans.DTPOSTED}-${trans.MEMO || trans.NAME}-${trans.TRNAMT}`)
             .digest("hex");
 
-          // Skip duplicates
           if (existingFitIds.has(fitid)) {
             return;
           }
 
-          // Parse date (OFX format: YYYYMMDD or YYYYMMDDHHMMSS)
           const dateStr = trans.DTPOSTED?.toString().substring(0, 8) || "";
-          const date = dateStr ? 
-            `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}` : 
-            new Date().toISOString().split("T")[0];
+          const date = dateStr
+            ? `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`
+            : new Date().toISOString().split("T")[0];
 
           const amount = parseFloat(trans.TRNAMT || "0");
           const desc = trans.MEMO || trans.NAME || "Transação sem descrição";
 
-          // Smart categorization: detect CDB transactions
           let category: Transaction['category'] = undefined;
           let subcategory: string | undefined;
           let status: "pendente" | "categorizada" = "pendente";
-          
+
           if (desc.toUpperCase().includes("CDB")) {
             category = "Investimento";
             status = "categorizada";
             if (amount >= 0) {
-              // ENTRADA = Resgate de investimento
               subcategory = "Resgate";
             } else {
-              // SAÍDA = Aplicação de investimento
               subcategory = "Aplicação";
             }
           }
@@ -722,45 +732,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           existingFitIds.add(fitid);
         });
-      };
 
-      // Process all accounts
-      [...bankAccounts, ...creditCardAccounts].forEach(processAccount);
+        accountSummaries.push({
+          accountId,
+          statementStart,
+          statementEnd,
+          transactionCount: transList.length,
+        });
+      }
 
       if (transactions.length === 0) {
-        // Save OFX import record even when no new transactions (prevents re-upload)
-        await storage.addOFXImport({
-          fileHash,
-          clientId,
-          importedAt: new Date().toISOString(),
-          transactionCount: 0,
-        });
-        
-        return res.json({ 
-          success: true, 
-          imported: 0, 
+        const importedAt = new Date().toISOString();
+        await Promise.all(
+          accountSummaries.map(summary =>
+            storage.addOFXImport({
+              fileHash,
+              clientId,
+              bankAccountId: summary.accountId,
+              importedAt,
+              transactionCount: summary.transactionCount,
+              statementStart: summary.statementStart,
+              statementEnd: summary.statementEnd,
+            })
+          )
+        );
+
+        return res.json({
+          success: true,
+          imported: 0,
           total: existingTransactions.length,
-          message: "Nenhuma transação nova encontrada no arquivo OFX."
+          message: "Nenhuma transação nova encontrada no arquivo OFX.",
+          duplicateAccounts: Array.from(duplicateAccounts),
         });
       }
 
       await storage.addTransactions(clientId, transactions);
-      
-      // Save OFX import record to prevent re-import of same file
-      await storage.addOFXImport({
-        fileHash,
-        clientId,
-        importedAt: new Date().toISOString(),
-        transactionCount: transactions.length,
-      });
+
+      const importedAt = new Date().toISOString();
+      await Promise.all(
+        accountSummaries.map(summary =>
+          storage.addOFXImport({
+            fileHash,
+            clientId,
+            bankAccountId: summary.accountId,
+            importedAt,
+            transactionCount: summary.transactionCount,
+            statementStart: summary.statementStart,
+            statementEnd: summary.statementEnd,
+          })
+        )
+      );
       
       const totalTransactions = existingTransactions.length + transactions.length;
 
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         imported: transactions.length,
         total: totalTransactions,
-        message: `${transactions.length} transações importadas com sucesso.`
+        message: `${transactions.length} transações importadas com sucesso.`,
+        duplicateAccounts: Array.from(duplicateAccounts),
       });
     } catch (error) {
       getLogger(req).error("Erro ao importar OFX", {

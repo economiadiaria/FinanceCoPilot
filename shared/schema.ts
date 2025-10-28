@@ -232,8 +232,11 @@ export type AuthResponse = z.infer<typeof authResponseSchema>;
 export const ofxImportSchema = z.object({
   fileHash: z.string(), // SHA256 hash of OFX file content
   clientId: z.string(),
+  bankAccountId: z.string(),
   importedAt: z.string(), // ISO 8601 timestamp
   transactionCount: z.number(),
+  statementStart: z.string().optional(),
+  statementEnd: z.string().optional(),
   reconciliation: z
     .object({
       accounts: z
@@ -399,6 +402,7 @@ export const bankTransactionSchema = z.object({
   date: z.string(), // DD/MM/YYYY
   desc: z.string(),
   amount: z.number(), // positivo = entrada, negativo = saída
+  bankAccountId: z.string(),
   accountId: z.string().optional(),
   fitid: z.string().optional(), // OFX unique ID
   sourceHash: z.string().optional(), // SHA256 do arquivo OFX

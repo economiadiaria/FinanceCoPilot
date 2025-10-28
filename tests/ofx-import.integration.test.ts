@@ -18,7 +18,13 @@ const CLIENT_ID = "client-1";
 const OTHER_CLIENT_ID = "client-2";
 const ORGANIZATION_ID = "org-1";
 
-const SAMPLE_OFX = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:UTF-8\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n  <SIGNONMSGSRSV1>\n    <SONRS>\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <DTSERVER>20240131120000\n      <LANGUAGE>POR\n    </SONRS>\n  </SIGNONMSGSRSV1>\n  <BANKMSGSRSV1>\n    <STMTTRNRS>\n      <TRNUID>1001\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>341\n          <ACCTID>123456\n          <ACCTTYPE>CHECKING\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240101000000\n          <DTEND>20240131235959\n          <STMTTRN>\n            <TRNTYPE>CREDIT\n            <DTPOSTED>20240105\n            <TRNAMT>1000.00\n            <FITID>ABC123\n            <NAME>Venda 1\n          </STMTTRN>\n          <STMTTRN>\n            <TRNTYPE>DEBIT\n            <DTPOSTED>20240110\n            <TRNAMT>200.00\n            <FITID>DEF456\n            <NAME>Pagamento Fornecedor\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>800.00\n          <DTASOF>20240131235959\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n  </BANKMSGSRSV1>\n</OFX>\n`;
+const SAMPLE_ACCOUNT_ID = "123456";
+const SECOND_ACCOUNT_ID = "789012";
+const SAMPLE_OFX = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:UTF-8\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n  <SIGNONMSGSRSV1>\n    <SONRS>\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <DTSERVER>20240131120000\n      <LANGUAGE>POR\n    </SONRS>\n  </SIGNONMSGSRSV1>\n  <BANKMSGSRSV1>\n    <STMTTRNRS>\n      <TRNUID>1001\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>341\n          <ACCTID>${SAMPLE_ACCOUNT_ID}\n          <ACCTTYPE>CHECKING\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240101000000\n          <DTEND>20240131235959\n          <STMTTRN>\n            <TRNTYPE>CREDIT\n            <DTPOSTED>20240105\n            <TRNAMT>1000.00\n            <FITID>ABC123\n            <NAME>Venda 1\n          </STMTTRN>\n          <STMTTRN>\n            <TRNTYPE>DEBIT\n            <DTPOSTED>20240110\n            <TRNAMT>200.00\n            <FITID>DEF456\n            <NAME>Pagamento Fornecedor\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>800.00\n          <DTASOF>20240131235959\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n  </BANKMSGSRSV1>\n</OFX>\n`;
+
+const SAMPLE_OFX_OTHER_ACCOUNT = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:UTF-8\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n  <BANKMSGSRSV1>\n    <STMTTRNRS>\n      <TRNUID>2001\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>341\n          <ACCTID>${SECOND_ACCOUNT_ID}\n          <ACCTTYPE>CHECKING\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240101000000\n          <DTEND>20240131235959\n          <STMTTRN>\n            <TRNTYPE>CREDIT\n            <DTPOSTED>20240106\n            <TRNAMT>900.00\n            <FITID>ABC123\n            <NAME>Venda Conta B\n          </STMTTRN>\n          <STMTTRN>\n            <TRNTYPE>DEBIT\n            <DTPOSTED>20240112\n            <TRNAMT>300.00\n            <FITID>DEF456\n            <NAME>Pagamento Conta B\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>600.00\n          <DTASOF>20240131235959\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n  </BANKMSGSRSV1>\n</OFX>\n`;
+
+const MULTI_ACCOUNT_OFX = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:UTF-8\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n  <BANKMSGSRSV1>\n    <STMTTRNRS>\n      <TRNUID>3001\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>001\n          <ACCTID>${SAMPLE_ACCOUNT_ID}\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240201000000\n          <DTEND>20240228235959\n          <STMTTRN>\n            <TRNTYPE>CREDIT\n            <DTPOSTED>20240205\n            <TRNAMT>500.00\n            <FITID>MULTI-A-1\n            <NAME>Recebimento Conta A\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>500.00\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n    <STMTTRNRS>\n      <TRNUID>3002\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>001\n          <ACCTID>${SECOND_ACCOUNT_ID}\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240201000000\n          <DTEND>20240228235959\n          <STMTTRN>\n            <TRNTYPE>DEBIT\n            <DTPOSTED>20240210\n            <TRNAMT>200.00\n            <FITID>MULTI-B-1\n            <NAME>Despesa Conta B\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>300.00\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n  </BANKMSGSRSV1>\n</OFX>\n`;
 
 function getDurationCount(snapshot: any[], status: "success" | "error") {
   const metric = snapshot.find(entry => entry.name === "ofx_ingestion_duration_seconds");
@@ -142,10 +148,12 @@ describe("OFX ingestion robustness", () => {
     assert.equal(storedTransactions.length, 2);
 
     const fileHash = crypto.createHash("sha256").update(sampleBuffer).digest("hex");
-    const importRecord = await currentStorage.getOFXImport(CLIENT_ID, fileHash);
+    const importRecord = await currentStorage.getOFXImport(CLIENT_ID, SAMPLE_ACCOUNT_ID, fileHash);
     assert.ok(importRecord, "ofx import record should be stored");
     assert.equal(importRecord?.transactionCount, 2);
     assert.equal(importRecord?.reconciliation?.accounts[0]?.computedClosingBalance, 800);
+    assert.equal(importRecord?.statementStart, "01/01/2024");
+    assert.equal(importRecord?.statementEnd, "31/01/2024");
 
     const secondImport = await agent
       .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
@@ -182,6 +190,42 @@ describe("OFX ingestion robustness", () => {
 
     const storedTransactions = await currentStorage.getBankTransactions(CLIENT_ID);
     assert.equal(storedTransactions.length, 2);
+  });
+
+  it("imports identical OFX files for different bank accounts without deduping", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    const firstBuffer = Buffer.from(SAMPLE_OFX, "utf8");
+    const secondBuffer = Buffer.from(SAMPLE_OFX_OTHER_ACCOUNT, "utf8");
+    const secondHash = crypto.createHash("sha256").update(secondBuffer).digest("hex");
+
+    const firstImport = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", firstBuffer, { filename: "acc-a.ofx", contentType: "application/ofx" });
+
+    assert.equal(firstImport.status, 200);
+    assert.equal(firstImport.body.imported, 2);
+
+    const secondImport = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", secondBuffer, { filename: "acc-b.ofx", contentType: "application/ofx" });
+
+    assert.equal(secondImport.status, 200);
+    assert.equal(secondImport.body.imported, 2);
+    assert.equal(secondImport.body.alreadyImported, false);
+
+    const accountATxs = await currentStorage.getBankTransactions(CLIENT_ID, SAMPLE_ACCOUNT_ID);
+    const accountBTxs = await currentStorage.getBankTransactions(CLIENT_ID, SECOND_ACCOUNT_ID);
+    assert.equal(accountATxs.length, 2);
+    assert.equal(accountBTxs.length, 2);
+
+    const accountBImport = await currentStorage.getOFXImport(CLIENT_ID, SECOND_ACCOUNT_ID, secondHash);
+    assert.ok(accountBImport);
+    assert.equal(accountBImport?.transactionCount, 2);
   });
 
   it("allows identical OFX files to be imported by different clients", async () => {
@@ -224,8 +268,8 @@ describe("OFX ingestion robustness", () => {
     assert.equal(secondImport.status, 200);
     assert.equal(secondImport.body.alreadyImported, false);
 
-    const originalClientImport = await currentStorage.getOFXImport(CLIENT_ID, fileHash);
-    const secondClientImport = await currentStorage.getOFXImport(OTHER_CLIENT_ID, fileHash);
+    const originalClientImport = await currentStorage.getOFXImport(CLIENT_ID, SAMPLE_ACCOUNT_ID, fileHash);
+    const secondClientImport = await currentStorage.getOFXImport(OTHER_CLIENT_ID, SAMPLE_ACCOUNT_ID, fileHash);
 
     assert.ok(originalClientImport, "original client import should exist");
     assert.ok(secondClientImport, "second client import should exist");
@@ -233,22 +277,69 @@ describe("OFX ingestion robustness", () => {
     assert.equal(secondClientImport?.clientId, OTHER_CLIENT_ID);
   });
 
+  it("stores multi-account OFX imports per bank account and remains idempotent", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    const multiBuffer = Buffer.from(MULTI_ACCOUNT_OFX, "utf8");
+    const multiHash = crypto.createHash("sha256").update(multiBuffer).digest("hex");
+
+    const firstImport = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", multiBuffer, { filename: "multi.ofx", contentType: "application/ofx" });
+
+    assert.equal(firstImport.status, 200);
+    assert.equal(firstImport.body.imported, 2);
+    assert.equal(firstImport.body.reconciliation.accounts.length, 2);
+
+    const accountATxs = await currentStorage.getBankTransactions(CLIENT_ID, SAMPLE_ACCOUNT_ID);
+    const accountBTxs = await currentStorage.getBankTransactions(CLIENT_ID, SECOND_ACCOUNT_ID);
+    assert.equal(accountATxs.length, 1);
+    assert.equal(accountBTxs.length, 1);
+
+    const accountAImport = await currentStorage.getOFXImport(CLIENT_ID, SAMPLE_ACCOUNT_ID, multiHash);
+    const accountBImport = await currentStorage.getOFXImport(CLIENT_ID, SECOND_ACCOUNT_ID, multiHash);
+    assert.ok(accountAImport);
+    assert.ok(accountBImport);
+    assert.equal(accountAImport?.transactionCount, 1);
+    assert.equal(accountBImport?.transactionCount, 1);
+
+    const secondImport = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", multiBuffer, { filename: "multi.ofx", contentType: "application/ofx" });
+
+    assert.equal(secondImport.status, 200);
+    assert.equal(secondImport.body.imported, 0);
+    assert.equal(secondImport.body.deduped, 2);
+    assert.equal(secondImport.body.alreadyImported, true);
+    assert.equal(secondImport.body.reconciliation.accounts.length, 2);
+
+    const accountATxsAfter = await currentStorage.getBankTransactions(CLIENT_ID, SAMPLE_ACCOUNT_ID);
+    const accountBTxsAfter = await currentStorage.getBankTransactions(CLIENT_ID, SECOND_ACCOUNT_ID);
+    assert.equal(accountATxsAfter.length, 1);
+    assert.equal(accountBTxsAfter.length, 1);
+  });
+
   it("migrates legacy OFX import entries keyed only by file hash", async () => {
     const legacyHash = crypto.createHash("sha256").update("legacy-ofx").digest("hex");
     const legacyImport: OFXImport = {
       fileHash: legacyHash,
       clientId: CLIENT_ID,
+      bankAccountId: SAMPLE_ACCOUNT_ID,
       importedAt: new Date().toISOString(),
       transactionCount: 3,
     };
 
     (currentStorage as any).ofxImports.set(legacyHash, legacyImport);
 
-    const migrated = await currentStorage.getOFXImport(CLIENT_ID, legacyHash);
+    const migrated = await currentStorage.getOFXImport(CLIENT_ID, SAMPLE_ACCOUNT_ID, legacyHash);
     assert.ok(migrated, "legacy import should be retrievable after migration");
     assert.equal(migrated?.clientId, CLIENT_ID);
 
-    const normalizedKey = `ofxImport:${CLIENT_ID}:${legacyHash}`;
+    const normalizedKey = `ofxImport:${CLIENT_ID}:${SAMPLE_ACCOUNT_ID}:${legacyHash}`;
     assert.ok((currentStorage as any).ofxImports.has(normalizedKey), "legacy key should be normalized");
     assert.equal((currentStorage as any).ofxImports.has(legacyHash), false, "legacy key should be removed");
   });
