@@ -38,6 +38,7 @@ import { z } from "zod";
 interface VendasPJProps {
   clientId: string | null;
   clientType: string | null;
+  bankAccountId: string | null;
 }
 
 interface Sale {
@@ -82,7 +83,7 @@ const addSaleSchema = z.object({
 
 type AddSaleForm = z.infer<typeof addSaleSchema>;
 
-export default function VendasPJ({ clientId, clientType }: VendasPJProps) {
+export default function VendasPJ({ clientId, clientType, bankAccountId }: VendasPJProps) {
   const { toast } = useToast();
   const [month, setMonth] = useState(() => {
     const now = new Date();
@@ -111,15 +112,18 @@ export default function VendasPJ({ clientId, clientType }: VendasPJProps) {
     },
   });
 
+  const isPJClient = clientType === "PJ" || clientType === "BOTH";
+
   const { data: salesData, isLoading, error } = useQuery<{ sales: Sale[] }>({
-    queryKey: ["/api/pj/sales/list", { clientId, month }],
-    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
+    queryKey: ["/api/pj/sales/list", { clientId, month, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const addSaleMutation = useMutation({
     mutationFn: async (data: AddSaleForm) => {
       return await apiRequest("POST", "/api/pj/sales/add", {
         clientId,
+        bankAccountId,
         date: data.date,
         invoiceNumber: data.invoiceNumber || undefined,
         customer: {
@@ -164,6 +168,7 @@ export default function VendasPJ({ clientId, clientType }: VendasPJProps) {
       const formData = new FormData();
       formData.append("csv", file);
       formData.append("clientId", clientId!);
+      formData.append("bankAccountId", bankAccountId!);
 
       const res = await fetch("/api/pj/sales/importCsv", {
         method: "POST",
@@ -219,7 +224,7 @@ export default function VendasPJ({ clientId, clientType }: VendasPJProps) {
     );
   }
 
-  if (clientType !== "PJ" && clientType !== "BOTH") {
+  if (!isPJClient) {
     return (
       <div className="flex flex-col items-center justify-center h-full space-y-4">
         <Plus className="h-12 w-12 text-muted-foreground" />
@@ -228,6 +233,17 @@ export default function VendasPJ({ clientId, clientType }: VendasPJProps) {
         </h1>
         <p className="text-muted-foreground">
           Selecione um cliente do tipo Pessoa Jurídica para gerenciar vendas
+        </p>
+      </div>
+    );
+  }
+
+  if (!bankAccountId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <h1 className="text-2xl font-bold text-muted-foreground">Selecione uma conta PJ</h1>
+        <p className="text-muted-foreground">
+          Use o seletor de contas bancárias para visualizar e registrar as vendas.
         </p>
       </div>
     );
