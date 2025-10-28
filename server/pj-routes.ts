@@ -534,7 +534,7 @@ export function registerPJRoutes(app: Express) {
         | string
         | string[]
         | undefined;
-      const clientId = Array.isArray(candidateClientId)
+      clientId = Array.isArray(candidateClientId)
         ? candidateClientId[0]
         : candidateClientId;
 
