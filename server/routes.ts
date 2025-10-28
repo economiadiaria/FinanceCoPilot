@@ -260,6 +260,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .map(clientUser => {
           const updates: Partial<User> = {};
           if (clientUser.consultantId !== client.consultantId) {
+            updates.consultantId = client.consultantId ?? undefined;
+          }
+          if (clientUser.managerId !== client.masterId) {
+            updates.managerId = client.masterId ?? undefined;
             updates.consultantId = client.consultantId;
           }
           if (clientUser.managerId !== client.masterId) {
