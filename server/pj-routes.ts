@@ -19,6 +19,7 @@ import {
   isDuplicateTransaction,
   matchesPattern,
 } from "./pj-ingestion-helpers";
+import { buildCostBreakdown, buildMonthlyInsights } from "./pj-dashboard-helpers";
 import { z } from "zod";
 
 // Configure multer
@@ -880,6 +881,60 @@ export function registerPJRoutes(app: Express) {
   
   // ===== DASHBOARD BACKEND PJ =====
   
+  /**
+   * GET /api/pj/dashboard/monthly-insights
+   * Retorna KPIs mensais consolidados com base nas vendas e transações importadas
+   */
+  app.get("/api/pj/dashboard/monthly-insights", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = (req.query.month as string) || undefined;
+
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+
+      const [bankTxs, sales] = await Promise.all([
+        storage.getBankTransactions(clientId),
+        storage.getSales(clientId),
+      ]);
+
+      const insights = buildMonthlyInsights(bankTxs, sales, month);
+
+      res.json(insights);
+    } catch (error: any) {
+      console.error("Erro ao buscar monthly-insights PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar monthly-insights" });
+    }
+  });
+
+  /**
+   * GET /api/pj/dashboard/costs-breakdown
+   * Retorna a visão consolidada do DFC e custos por categoria
+   */
+  app.get("/api/pj/dashboard/costs-breakdown", scopeRequired("PJ"), async (req, res) => {
+    try {
+      const clientId = req.query.clientId as string;
+      const month = (req.query.month as string) || undefined;
+
+      if (!clientId) {
+        return res.status(400).json({ error: "clientId é obrigatório" });
+      }
+
+      const [bankTxs, sales] = await Promise.all([
+        storage.getBankTransactions(clientId),
+        storage.getSales(clientId),
+      ]);
+
+      const breakdown = buildCostBreakdown(bankTxs, sales, month);
+
+      res.json(breakdown);
+    } catch (error: any) {
+      console.error("Erro ao buscar costs-breakdown PJ:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar costs-breakdown" });
+    }
+  });
+
   /**
    * GET /api/pj/dashboard/summary
    * KPIs do mês: receita, despesas, saldo, contas a receber
