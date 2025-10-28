@@ -56,7 +56,7 @@ export interface IStorage {
   setReportHtml(clientId: string, period: string, html: string): Promise<void>;
 
   // OFX Imports
-  getOFXImport(fileHash: string): Promise<OFXImport | null>;
+  getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null>;
   addOFXImport(ofxImport: OFXImport): Promise<void>;
 
   // Open Finance (Pluggy)
@@ -286,12 +286,33 @@ export class MemStorage implements IStorage {
   }
 
   // OFX Imports
-  async getOFXImport(fileHash: string): Promise<OFXImport | null> {
-    return this.ofxImports.get(fileHash) || null;
+  private getOfxImportKey(clientId: string, fileHash: string): string {
+    return `ofxImport:${clientId}:${fileHash}`;
+  }
+
+  async getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null> {
+    const normalizedKey = this.getOfxImportKey(clientId, fileHash);
+    const existing = this.ofxImports.get(normalizedKey);
+    if (existing) {
+      return existing;
+    }
+
+    const legacyEntry = this.ofxImports.get(fileHash);
+    if (legacyEntry && (!legacyEntry.clientId || legacyEntry.clientId === clientId)) {
+      const migrated: OFXImport = {
+        ...legacyEntry,
+        clientId: legacyEntry.clientId ?? clientId,
+      };
+      this.ofxImports.delete(fileHash);
+      this.ofxImports.set(this.getOfxImportKey(migrated.clientId, fileHash), migrated);
+      return migrated;
+    }
+
+    return null;
   }
 
   async addOFXImport(ofxImport: OFXImport): Promise<void> {
-    this.ofxImports.set(ofxImport.fileHash, ofxImport);
+    this.ofxImports.set(this.getOfxImportKey(ofxImport.clientId, ofxImport.fileHash), ofxImport);
   }
 
   // Open Finance (Pluggy)
@@ -438,9 +459,70 @@ export class MemStorage implements IStorage {
 
 export class ReplitDbStorage implements IStorage {
   private db: Database;
+  private migrationsReady: Promise<void>;
 
   constructor() {
     this.db = new Database();
+    this.migrationsReady = this.normalizeLegacyOFXImports();
+  }
+
+  private getOfxImportKey(clientId: string, fileHash: string): string {
+    return `ofxImport:${clientId}:${fileHash}`;
+  }
+
+  private getLegacyOfxImportKey(fileHash: string): string {
+    return `ofxImport:${fileHash}`;
+  }
+
+  private async normalizeLegacyOFXImports(): Promise<void> {
+    try {
+      const listResult = await this.db.list("ofxImport:");
+      if (!listResult.ok) {
+        throw new Error(listResult.error?.message || "Unknown error listing OFX imports");
+      }
+
+      const keys = listResult.value ?? [];
+      const legacyKeys = keys.filter(key => key.split(":").length === 2);
+      if (legacyKeys.length === 0) {
+        return;
+      }
+
+      for (const legacyKey of legacyKeys) {
+        const legacyResult = await this.db.get(legacyKey);
+        if (!legacyResult.ok) {
+          if (legacyResult.error?.statusCode !== 404) {
+            throw new Error(`Error loading legacy OFX import ${legacyKey}: ${legacyResult.error?.message || JSON.stringify(legacyResult.error)}`);
+          }
+          continue;
+        }
+
+        const legacyImport = legacyResult.value as OFXImport | null;
+        if (!legacyImport) {
+          await this.db.delete(legacyKey);
+          continue;
+        }
+
+        const clientId = legacyImport.clientId;
+        const fileHash = legacyImport.fileHash;
+        if (!clientId || !fileHash) {
+          await this.db.delete(legacyKey);
+          continue;
+        }
+
+        const normalizedKey = this.getOfxImportKey(clientId, fileHash);
+        const setResult = await this.db.set(normalizedKey, legacyImport);
+        if (!setResult.ok) {
+          throw new Error(`Error migrating OFX import ${legacyKey}: ${setResult.error?.message || JSON.stringify(setResult.error)}`);
+        }
+
+        const deleteResult = await this.db.delete(legacyKey);
+        if (!deleteResult.ok) {
+          throw new Error(`Error deleting legacy OFX import ${legacyKey}: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`);
+        }
+      }
+    } catch (error) {
+      throw new Error(`Failed to normalize legacy OFX imports: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // Users - Use individual keys to avoid concurrency issues
@@ -701,17 +783,44 @@ export class ReplitDbStorage implements IStorage {
   }
 
   // OFX Imports
-  async getOFXImport(fileHash: string): Promise<OFXImport | null> {
-    const result = await this.db.get(`ofxImport:${fileHash}`);
-    // 404 means key doesn't exist (file not imported before)
+  async getOFXImport(clientId: string, fileHash: string): Promise<OFXImport | null> {
+    await this.migrationsReady;
+
+    const key = this.getOfxImportKey(clientId, fileHash);
+    const result = await this.db.get(key);
+    // 404 means key doesn't exist (file not imported before for this client)
     if (!result.ok && result.error?.statusCode !== 404) {
-      throw new Error(`Database error getting OFX import ${fileHash}: ${result.error?.message || JSON.stringify(result.error)}`);
+      throw new Error(`Database error getting OFX import ${clientId}:${fileHash}: ${result.error?.message || JSON.stringify(result.error)}`);
     }
-    return result.ok ? (result.value ?? null) : null;
+
+    if (result.ok) {
+      return result.value ?? null;
+    }
+
+    const legacyKey = this.getLegacyOfxImportKey(fileHash);
+    const legacyResult = await this.db.get(legacyKey);
+    if (!legacyResult.ok) {
+      if (legacyResult.error?.statusCode !== 404) {
+        throw new Error(`Database error getting legacy OFX import ${fileHash}: ${legacyResult.error?.message || JSON.stringify(legacyResult.error)}`);
+      }
+      return null;
+    }
+
+    const legacyImport = legacyResult.value as OFXImport | null;
+    if (!legacyImport || legacyImport.clientId !== clientId) {
+      return null;
+    }
+
+    await this.addOFXImport(legacyImport);
+    await this.db.delete(legacyKey);
+
+    return legacyImport;
   }
 
   async addOFXImport(ofxImport: OFXImport): Promise<void> {
-    const result = await this.db.set(`ofxImport:${ofxImport.fileHash}`, ofxImport);
+    await this.migrationsReady;
+
+    const result = await this.db.set(this.getOfxImportKey(ofxImport.clientId, ofxImport.fileHash), ofxImport);
     if (!result.ok) {
       throw new Error(`Database error adding OFX import: ${result.error?.message || JSON.stringify(result.error)}`);
     }
