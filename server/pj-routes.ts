@@ -548,7 +548,7 @@ export function registerPJRoutes(app: Express) {
 
       const buffer = req.file.buffer;
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
-      const existingImport = await storage.getOFXImport(fileHash);
+      const existingImport = await storage.getOFXImport(clientId, fileHash);
 
       ingestionLogger.info("Arquivo OFX recebido", {
         event: "pj.ofx.import.file",

@@ -593,7 +593,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fileHash = crypto.createHash("sha256").update(ofxContent).digest("hex");
       
       // Check if this file was already imported
-      const existingImport = await storage.getOFXImport(fileHash);
+      const existingImport = await storage.getOFXImport(clientId, fileHash);
       if (existingImport) {
         return res.status(400).json({ 
           error: "Este arquivo OFX já foi importado anteriormente.",

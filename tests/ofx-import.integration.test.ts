@@ -8,13 +8,17 @@ import crypto from "crypto";
 
 import { registerRoutes } from "../server/routes";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
-import type { Client, User } from "@shared/schema";
+import type { Client, OFXImport, User } from "@shared/schema";
 import * as metrics from "../server/observability/metrics";
 
 const MASTER_EMAIL = "master@example.com";
 const MASTER_PASSWORD = "master-secret";
+const MASTER_USER_ID = "user-master-1";
 const CLIENT_ID = "client-1";
+const OTHER_CLIENT_ID = "client-2";
 const ORGANIZATION_ID = "org-1";
+
+const SAMPLE_OFX = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:UTF-8\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n  <SIGNONMSGSRSV1>\n    <SONRS>\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <DTSERVER>20240131120000\n      <LANGUAGE>POR\n    </SONRS>\n  </SIGNONMSGSRSV1>\n  <BANKMSGSRSV1>\n    <STMTTRNRS>\n      <TRNUID>1001\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>341\n          <ACCTID>123456\n          <ACCTTYPE>CHECKING\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240101000000\n          <DTEND>20240131235959\n          <STMTTRN>\n            <TRNTYPE>CREDIT\n            <DTPOSTED>20240105\n            <TRNAMT>1000.00\n            <FITID>ABC123\n            <NAME>Venda 1\n          </STMTTRN>\n          <STMTTRN>\n            <TRNTYPE>DEBIT\n            <DTPOSTED>20240110\n            <TRNAMT>200.00\n            <FITID>DEF456\n            <NAME>Pagamento Fornecedor\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>800.00\n          <DTASOF>20240131235959\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n  </BANKMSGSRSV1>\n</OFX>\n`;
 
 function getDurationCount(snapshot: any[], status: "success" | "error") {
   const metric = snapshot.find(entry => entry.name === "ofx_ingestion_duration_seconds");
@@ -42,7 +46,7 @@ function getErrorCount(snapshot: any[], stage: string) {
 async function seedStorage(storage: IStorage) {
   const passwordHash = await bcrypt.hash(MASTER_PASSWORD, 10);
   const masterUser: User = {
-    userId: "user-master-1",
+    userId: MASTER_USER_ID,
     email: MASTER_EMAIL,
     passwordHash,
     role: "master",
@@ -111,9 +115,7 @@ describe("OFX ingestion robustness", () => {
       .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
       .expect(200);
 
-    const sampleOfx = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:UTF-8\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n  <SIGNONMSGSRSV1>\n    <SONRS>\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <DTSERVER>20240131120000\n      <LANGUAGE>POR\n    </SONRS>\n  </SIGNONMSGSRSV1>\n  <BANKMSGSRSV1>\n    <STMTTRNRS>\n      <TRNUID>1001\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>341\n          <ACCTID>123456\n          <ACCTTYPE>CHECKING\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240101000000\n          <DTEND>20240131235959\n          <STMTTRN>\n            <TRNTYPE>CREDIT\n            <DTPOSTED>20240105\n            <TRNAMT>1000.00\n            <FITID>ABC123\n            <NAME>Venda 1\n          </STMTTRN>\n          <STMTTRN>\n            <TRNTYPE>DEBIT\n            <DTPOSTED>20240110\n            <TRNAMT>200.00\n            <FITID>DEF456\n            <NAME>Pagamento Fornecedor\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>800.00\n          <DTASOF>20240131235959\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n  </BANKMSGSRSV1>\n</OFX>\n`;
-
-    const sampleBuffer = Buffer.from(sampleOfx, "utf8");
+    const sampleBuffer = Buffer.from(SAMPLE_OFX, "utf8");
 
     const response = await agent
       .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
@@ -140,7 +142,7 @@ describe("OFX ingestion robustness", () => {
     assert.equal(storedTransactions.length, 2);
 
     const fileHash = crypto.createHash("sha256").update(sampleBuffer).digest("hex");
-    const importRecord = await currentStorage.getOFXImport(fileHash);
+    const importRecord = await currentStorage.getOFXImport(CLIENT_ID, fileHash);
     assert.ok(importRecord, "ofx import record should be stored");
     assert.equal(importRecord?.transactionCount, 2);
     assert.equal(importRecord?.reconciliation?.accounts[0]?.computedClosingBalance, 800);
@@ -157,6 +159,75 @@ describe("OFX ingestion robustness", () => {
 
     const storedAfterDedup = await currentStorage.getBankTransactions(CLIENT_ID);
     assert.equal(storedAfterDedup.length, 2, "re-import should not duplicate transactions");
+  });
+
+  it("allows identical OFX files to be imported by different clients", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    const sampleBuffer = Buffer.from(SAMPLE_OFX, "utf8");
+    const fileHash = crypto.createHash("sha256").update(sampleBuffer).digest("hex");
+
+    const firstImport = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", sampleBuffer, { filename: "extrato.ofx", contentType: "application/ofx" });
+
+    assert.equal(firstImport.status, 200);
+    assert.equal(firstImport.body.alreadyImported, false);
+
+    const secondClient: Client = {
+      clientId: OTHER_CLIENT_ID,
+      name: "Empresa Filial",
+      type: "PJ",
+      email: "filial@example.com",
+      organizationId: ORGANIZATION_ID,
+      consultantId: null,
+      masterId: MASTER_USER_ID,
+    };
+
+    await currentStorage.upsertClient(secondClient);
+    await currentStorage.updateUser(MASTER_USER_ID, {
+      clientIds: [CLIENT_ID, OTHER_CLIENT_ID],
+      managedClientIds: [CLIENT_ID, OTHER_CLIENT_ID],
+    });
+
+    const secondImport = await agent
+      .post(`/api/pj/import/ofx?clientId=${OTHER_CLIENT_ID}`)
+      .attach("ofx", sampleBuffer, { filename: "extrato.ofx", contentType: "application/ofx" });
+
+    assert.equal(secondImport.status, 200);
+    assert.equal(secondImport.body.alreadyImported, false);
+
+    const originalClientImport = await currentStorage.getOFXImport(CLIENT_ID, fileHash);
+    const secondClientImport = await currentStorage.getOFXImport(OTHER_CLIENT_ID, fileHash);
+
+    assert.ok(originalClientImport, "original client import should exist");
+    assert.ok(secondClientImport, "second client import should exist");
+    assert.equal(originalClientImport?.clientId, CLIENT_ID);
+    assert.equal(secondClientImport?.clientId, OTHER_CLIENT_ID);
+  });
+
+  it("migrates legacy OFX import entries keyed only by file hash", async () => {
+    const legacyHash = crypto.createHash("sha256").update("legacy-ofx").digest("hex");
+    const legacyImport: OFXImport = {
+      fileHash: legacyHash,
+      clientId: CLIENT_ID,
+      importedAt: new Date().toISOString(),
+      transactionCount: 3,
+    };
+
+    (currentStorage as any).ofxImports.set(legacyHash, legacyImport);
+
+    const migrated = await currentStorage.getOFXImport(CLIENT_ID, legacyHash);
+    assert.ok(migrated, "legacy import should be retrievable after migration");
+    assert.equal(migrated?.clientId, CLIENT_ID);
+
+    const normalizedKey = `ofxImport:${CLIENT_ID}:${legacyHash}`;
+    assert.ok((currentStorage as any).ofxImports.has(normalizedKey), "legacy key should be normalized");
+    assert.equal((currentStorage as any).ofxImports.has(legacyHash), false, "legacy key should be removed");
   });
 
   it("reports reconciliation divergences above one cent", async () => {
