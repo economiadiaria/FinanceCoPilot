@@ -160,7 +160,10 @@ export function registerPJRoutes(app: Express) {
         legs: saleLegs,
       });
     } catch (error: any) {
-      console.error("Erro ao adicionar venda PJ:", error);
+      getLogger(req).error("Erro ao adicionar venda PJ", {
+        event: "pj.sales.create",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao adicionar venda" });
     }
   });
@@ -222,7 +225,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ sales: salesWithLegs });
     } catch (error: any) {
-      console.error("Erro ao listar vendas PJ:", error);
+      getLogger(req).error("Erro ao listar vendas PJ", {
+        event: "pj.sales.list",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar vendas" });
     }
   });
@@ -241,7 +247,10 @@ export function registerPJRoutes(app: Express) {
       const legs = await storage.getSaleLegs(clientId);
       res.json({ legs });
     } catch (error: any) {
-      console.error("Erro ao listar sale legs:", error);
+      getLogger(req).error("Erro ao listar sale legs", {
+        event: "pj.sales.legs",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar sale legs" });
     }
   });
@@ -425,7 +434,10 @@ export function registerPJRoutes(app: Express) {
         total: salesMap.size,
       });
     } catch (error: any) {
-      console.error("Erro ao importar CSV de vendas:", error);
+      getLogger(req).error("Erro ao importar CSV de vendas", {
+        event: "pj.sales.importCsv",
+        context: { clientId: req.body?.clientId ?? req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao importar CSV" });
     }
   });
@@ -446,7 +458,10 @@ export function registerPJRoutes(app: Express) {
       const transactions = await storage.getBankTransactions(clientId);
       res.json({ transactions });
     } catch (error: any) {
-      console.error("Erro ao listar transações bancárias:", error);
+      getLogger(req).error("Erro ao listar transações bancárias", {
+        event: "pj.bank.list",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar transações" });
     }
   });
@@ -456,6 +471,14 @@ export function registerPJRoutes(app: Express) {
    * Importar extrato bancário via OFX com deduplicação SHA256
    */
   app.post("/api/pj/import/ofx", scopeRequired("PJ"), upload.single("ofx"), async (req, res) => {
+    const baseLogger = getLogger(req);
+    const importId = crypto.randomUUID();
+    let ingestionLogger = baseLogger.child({ importId });
+    let timer: ReturnType<typeof startOfxIngestionTimer> | null = null;
+    let warnings: string[] = [];
+    let errorStage = "initial";
+    let clientId: string | undefined;
+
     try {
       if (!req.file) {
         return res.status(400).json({ error: "Arquivo OFX não enviado" });
@@ -601,7 +624,8 @@ export function registerPJRoutes(app: Express) {
               date,
               desc,
               amount,
-              accountId,
+              desc,
+              date,
               fitid,
               sourceHash: fileHash,
               linkedLegs: [],
@@ -690,11 +714,26 @@ export function registerPJRoutes(app: Express) {
         autoCategorized: categorizedCount,
       });
     } catch (error: any) {
-      console.error("Erro ao importar OFX PJ:", error);
-      res.status(500).json({ error: error.message || "Erro ao importar OFX" });
+      if (clientId) {
+        incrementOfxError(clientId, errorStage);
+        const durationMs = timer ? recordOfxIngestionDuration(timer, "error") : 0;
+        recordOfxImportOutcome({
+          clientId,
+          importId,
+          success: false,
+          durationMs,
+          warnings: warnings.length,
+          error,
+        });
+      }
+
+      ingestionLogger.error("Erro ao importar OFX PJ", {
+        event: "pj.ofx.import.error",
+        context: { stage: errorStage },
+      }, error);
+      return res.status(500).json({ error: error.message || "Erro ao importar OFX" });
     }
   });
-  
   /**
    * POST /api/pj/reconciliation/suggest
    * Sugerir matches automáticos entre transações bancárias e parcelas de vendas
@@ -760,7 +799,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ suggestions });
     } catch (error: any) {
-      console.error("Erro ao sugerir conciliação PJ:", error);
+      getLogger(req).error("Erro ao sugerir conciliação PJ", {
+        event: "pj.reconciliation.suggest",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao sugerir conciliação" });
     }
   });
@@ -861,7 +903,10 @@ export function registerPJRoutes(app: Express) {
         totalParcels,
       });
     } catch (error: any) {
-      console.error("Erro ao confirmar conciliação PJ:", error);
+      getLogger(req).error("Erro ao confirmar conciliação PJ", {
+        event: "pj.reconciliation.confirm",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao confirmar conciliação" });
     }
   });
@@ -883,7 +928,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ rules });
     } catch (error: any) {
-      console.error("Erro ao listar regras PJ:", error);
+      getLogger(req).error("Erro ao listar regras PJ", {
+        event: "pj.rules.list",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao listar regras" });
     }
   });
@@ -969,7 +1017,10 @@ export function registerPJRoutes(app: Express) {
         retroactiveCount,
       });
     } catch (error: any) {
-      console.error("Erro ao salvar regra PJ:", error);
+      getLogger(req).error("Erro ao salvar regra PJ", {
+        event: "pj.rules.save",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao salvar regra" });
     }
   });
@@ -1083,7 +1134,10 @@ export function registerPJRoutes(app: Express) {
         prospectiveCount,
       });
     } catch (error: any) {
-      console.error("Erro ao aplicar categorização PJ:", error);
+      getLogger(req).error("Erro ao aplicar categorização PJ", {
+        event: "pj.rules.apply",
+        context: { clientId: req.body?.clientId },
+      }, error);
       res.status(400).json({ error: error.message || "Erro ao aplicar categorização" });
     }
   });
@@ -1198,7 +1252,10 @@ export function registerPJRoutes(app: Express) {
         margemLiquida,
       });
     } catch (error: any) {
-      console.error("Erro ao buscar summary PJ:", error);
+      getLogger(req).error("Erro ao buscar summary PJ", {
+        event: "pj.dashboard.summary",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar summary" });
     }
   });
@@ -1244,7 +1301,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ trends });
     } catch (error: any) {
-      console.error("Erro ao buscar trends PJ:", error);
+      getLogger(req).error("Erro ao buscar trends PJ", {
+        event: "pj.dashboard.trends",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar trends" });
     }
   });
@@ -1296,7 +1356,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ topCosts: sorted });
     } catch (error: any) {
-      console.error("Erro ao buscar top-costs PJ:", error);
+      getLogger(req).error("Erro ao buscar top-costs PJ", {
+        event: "pj.dashboard.top-costs",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar top-costs" });
     }
   });
@@ -1337,7 +1400,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ revenueSplit });
     } catch (error: any) {
-      console.error("Erro ao buscar revenue-split PJ:", error);
+      getLogger(req).error("Erro ao buscar revenue-split PJ", {
+        event: "pj.dashboard.revenue-split",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar revenue-split" });
     }
   });
@@ -1392,7 +1458,10 @@ export function registerPJRoutes(app: Express) {
         topClientes,
       });
     } catch (error: any) {
-      console.error("Erro ao buscar sales-kpis PJ:", error);
+      getLogger(req).error("Erro ao buscar sales-kpis PJ", {
+        event: "pj.dashboard.sales-kpis",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar sales-kpis" });
     }
   });
@@ -1449,7 +1518,10 @@ export function registerPJRoutes(app: Express) {
       
       res.json({ dfc });
     } catch (error: any) {
-      console.error("Erro ao buscar DFC PJ:", error);
+      getLogger(req).error("Erro ao buscar DFC PJ", {
+        event: "pj.dashboard.cashflow",
+        context: { clientId: req.query?.clientId },
+      }, error);
       res.status(500).json({ error: error.message || "Erro ao buscar DFC" });
     }
   });

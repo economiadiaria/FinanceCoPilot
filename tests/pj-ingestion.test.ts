@@ -91,7 +91,7 @@ test("isDuplicateTransaction detects duplicates by FITID and fallback signature"
 
   const candidateSameSignature = {
     date: "03/01/2024",
-    desc: "Transferência",
+    desc: "Transferência duplicada",
     amount: -50,
   };
 

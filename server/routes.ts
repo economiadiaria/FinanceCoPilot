@@ -114,7 +114,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Regenerate session ID to prevent fixation attacks
       req.session.regenerate((err) => {
         if (err) {
-          console.error("Erro ao regenerar sessão:", err);
+          getLogger(req).error("Erro ao regenerar sessão", {
+            event: "auth.session.regenerate",
+          }, err);
           return res.status(500).json({ error: "Erro ao criar sessão" });
         }
 
@@ -141,7 +143,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
         return res.status(400).json({ error: fieldErrors });
       }
-      console.error("Erro ao registrar usuário:", error);
+      getLogger(req).error("Erro ao registrar usuário", {
+        event: "auth.register",
+      }, error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao registrar usuário" });
     }
   });
@@ -156,17 +160,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(401).json({ error: "Credenciais inválidas" });
       }
-      
+
       // Verify password
       const passwordMatch = await bcrypt.compare(data.password, user.passwordHash);
       if (!passwordMatch) {
         return res.status(401).json({ error: "Credenciais inválidas" });
       }
-      
+
+      updateRequestLoggerContext(req, { userId: user.userId });
+
       // Regenerate session ID to prevent fixation attacks
       req.session.regenerate((err) => {
         if (err) {
-          console.error("Erro ao regenerar sessão:", err);
+          getLogger(req).error("Erro ao regenerar sessão", {
+            event: "auth.session.regenerate",
+          }, err);
           return res.status(500).json({ error: "Erro ao criar sessão" });
         }
 
@@ -191,7 +199,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
         return res.status(400).json({ error: fieldErrors });
       }
-      console.error("Erro ao fazer login:", error);
+      getLogger(req).error("Erro ao fazer login", {
+        event: "auth.login",
+      }, error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao fazer login" });
     }
   });
@@ -202,7 +212,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     req.session.destroy((err) => {
       if (err) {
-        console.error("Erro ao fazer logout:", err);
+        getLogger(req).error("Erro ao fazer logout", {
+          event: "auth.logout",
+        }, err);
         return res.status(500).json({ error: "Erro ao fazer logout" });
       }
       res.json({ message: "Logout realizado com sucesso" });
@@ -236,13 +248,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { passwordHash: _, ...userResponse } = user;
       res.json({ user: userResponse });
     } catch (error) {
-      console.error("Erro ao buscar usuário atual:", error);
+      getLogger(req).error("Erro ao buscar usuário atual", {
+        event: "auth.me",
+      }, error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar usuário" });
     }
   });
 
   // Apply auth middleware to all /api routes EXCEPT auth routes
   app.use("/api", authMiddleware);
+
+  app.get("/api/internal/metrics", requireRole("master"), async (_req, res) => {
+    res.set("Content-Type", metricsRegistry.contentType);
+    res.send(await metricsRegistry.metrics());
+  });
 
   // 1. POST /api/client/upsert - Create/update client
   app.post("/api/client/upsert", requireRole("master", "consultor"), async (req, res) => {
@@ -418,7 +437,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(clients);
     } catch (error) {
-      console.error("Erro ao buscar clientes:", error);
+      getLogger(req).error("Erro ao buscar clientes", {
+        event: "clients.list",
+      }, error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar clientes" });
     }
   });
@@ -524,7 +545,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       res.json(req.clientContext);
     } catch (error) {
-      console.error("Erro ao buscar cliente:", error);
+      getLogger(req).error("Erro ao buscar trilha de auditoria", {
+        event: "audit.list",
+      }, error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar auditoria" });
+    }
+  });
+
+  app.post("/api/lgpd/anonymize", requireRole("master"), async (req, res) => {
+    try {
+      const currentUser = req.authUser!;
+      const schema = z.object({
+        targetType: z.enum(["user", "client"]),
+        targetId: z.string().min(1),
+      });
+      const { targetType, targetId } = schema.parse(req.body);
+
+      let result: User | Client | undefined;
+      if (targetType === "user") {
+        const target = await storage.getUserById(targetId);
+        if (!target || target.organizationId !== currentUser.organizationId) {
+          return res.status(404).json({ error: "Usuário não encontrado na organização" });
+        }
+        result = await storage.anonymizeUser(targetId);
+      } else {
+        const target = await storage.getClient(targetId);
+        if (!target || target.organizationId !== currentUser.organizationId) {
+          return res.status(404).json({ error: "Cliente não encontrado na organização" });
+        }
+        result = await storage.anonymizeClient(targetId);
+      }
+
+      if (!result) {
+        return res.status(404).json({ error: "Registro não encontrado" });
+      }
+
+      await recordAuditEvent({
+        user: currentUser,
+        eventType: "lgpd.anonymize",
+        targetType,
+        targetId,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
+        return res.status(400).json({ error: fieldErrors });
+      }
+      getLogger(req).error("Erro ao anonimizar registro", {
+        event: "lgpd.anonymize",
+      }, error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao anonimizar" });
+    }
+  });
+
+  // GET /api/clients/:clientId - Get single client
+  app.get("/api/clients/:clientId", validateClientAccess, async (req, res) => {
+    try {
+      res.json(req.clientContext);
+    } catch (error) {
+      getLogger(req).error("Erro ao buscar cliente", {
+        event: "clients.detail",
+      }, error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar cliente" });
     }
   });
@@ -561,16 +644,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let ofxData;
       try {
         ofxData = await Ofx.parse(ofxContent);
-        console.log("✅ OFX parseado com sucesso");
+        getLogger(req).info("OFX parseado com sucesso", {
+          event: "pf.ofx.parse.success",
+          context: { clientId },
+        });
       } catch (parseError) {
-        console.error("❌ Erro ao fazer parse do OFX:", parseError);
-        return res.status(400).json({ 
-          error: "Erro ao processar arquivo OFX. Verifique se o arquivo está no formato correto." 
+        getLogger(req).error("Erro ao fazer parse do OFX", {
+          event: "pf.ofx.parse.failure",
+          context: { clientId },
+        }, parseError);
+        return res.status(400).json({
+          error: "Erro ao processar arquivo OFX. Verifique se o arquivo está no formato correto."
         });
       }
-      
+
       if (!ofxData || !ofxData.OFX) {
-        console.error("❌ OFX parseado mas sem estrutura válida:", ofxData);
+        getLogger(req).error("OFX parseado mas sem estrutura válida", {
+          event: "pf.ofx.structure.invalid",
+          context: { clientId },
+        }, ofxData);
         return res.status(400).json({ error: "Arquivo OFX inválido ou sem dados." });
       }
 
@@ -582,7 +674,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           bankName = signonInfo.ORG || signonInfo.FID || bankName;
         }
       } catch (e) {
-        console.log("⚠️ Não foi possível extrair nome do banco do OFX");
+        getLogger(req).warn("Não foi possível extrair nome do banco do OFX", {
+          event: "pf.ofx.bankname.missing",
+          context: { clientId },
+        }, e);
       }
       
       const transactions: Transaction[] = [];
@@ -706,9 +801,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `${transactions.length} transações importadas com sucesso.`
       });
     } catch (error) {
-      console.error("Erro ao importar OFX:", error);
-      res.status(400).json({ 
-        error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX" 
+      getLogger(req).error("Erro ao importar OFX", {
+        event: "pf.ofx.import",
+        context: { clientId: req.body?.clientId },
+      }, error);
+      res.status(400).json({
+        error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX"
       });
     }
   });

@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
+import { getLogger, updateRequestLoggerContext } from "../observability/logger";
 
 /**
  * Middleware de validação de scope (PF/PJ)
@@ -57,7 +58,10 @@ export function scopeRequired(requiredScope: "PF" | "PJ") {
 
       next();
     } catch (error) {
-      console.error("Erro no middleware de scope:", error);
+      getLogger(req).error("Erro no middleware de scope", {
+        event: "scope.validation",
+        context: { requiredScope },
+      }, error);
       res.status(500).json({ error: "Erro ao validar permissões" });
     }
   };
@@ -111,7 +115,9 @@ export async function validateClientAccess(req: Request, res: Response, next: Ne
 
     next();
   } catch (error) {
-    console.error("Erro ao validar acesso ao cliente:", error);
+    getLogger(req).error("Erro ao validar acesso ao cliente", {
+      event: "scope.access",
+    }, error);
     res.status(500).json({ error: "Erro ao validar permissões" });
   }
 }
