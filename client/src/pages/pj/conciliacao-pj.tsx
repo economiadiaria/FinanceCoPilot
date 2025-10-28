@@ -24,6 +24,7 @@ import {
 interface ConciliacaoPJProps {
   clientId: string | null;
   clientType: string | null;
+  bankAccountId: string | null;
 }
 
 interface SaleLeg {
@@ -74,21 +75,23 @@ interface Suggestion {
   matchReason: string;
 }
 
-export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJProps) {
+export default function ConciliacaoPJ({ clientId, clientType, bankAccountId }: ConciliacaoPJProps) {
   const { toast } = useToast();
   const ofxInputRef = useRef<HTMLInputElement>(null);
   const [selectedLeg, setSelectedLeg] = useState<SaleLeg | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
+  const isPJClient = clientType === "PJ" || clientType === "BOTH";
+
   const { data: legsData, isLoading: loadingLegs, error: errorLegs } = useQuery<{ legs: SaleLeg[] }>({
-    queryKey: ["/api/pj/sales/legs", { clientId }],
-    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
+    queryKey: ["/api/pj/sales/legs", { clientId, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const { data: bankTxsData, isLoading: loadingTxs, error: errorTxs } = useQuery<BankTransactionsResponse>({
-    queryKey: ["/api/pj/transactions", { clientId }],
-    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
+    queryKey: ["/api/pj/transactions", { clientId, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const uploadOfxMutation = useMutation({
@@ -96,6 +99,7 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
       const formData = new FormData();
       formData.append("ofx", file);
       formData.append("clientId", clientId!);
+      formData.append("bankAccountId", bankAccountId!);
 
       const res = await fetch("/api/pj/import/ofx", {
         method: "POST",
@@ -128,7 +132,11 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
 
   const suggestMutation = useMutation({
     mutationFn: async (saleLegId: string) => {
-      const res = await apiRequest("POST", "/api/pj/reconciliation/suggest", { clientId, saleLegId });
+      const res = await apiRequest("POST", "/api/pj/reconciliation/suggest", {
+        clientId,
+        bankAccountId,
+        saleLegId,
+      });
       return await res.json();
     },
     onSuccess: (data: any) => {
@@ -139,7 +147,12 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
 
   const confirmMutation = useMutation({
     mutationFn: async ({ saleLegId, matches }: any) => {
-      const res = await apiRequest("POST", "/api/pj/reconciliation/confirm", { clientId, saleLegId, matches });
+      const res = await apiRequest("POST", "/api/pj/reconciliation/confirm", {
+        clientId,
+        bankAccountId,
+        saleLegId,
+        matches,
+      });
       return await res.json();
     },
     onSuccess: () => {
@@ -196,7 +209,7 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
     );
   }
 
-  if (clientType !== "PJ" && clientType !== "BOTH") {
+  if (!isPJClient) {
     return (
       <div className="flex flex-col items-center justify-center h-full space-y-4">
         <AlertCircle className="h-12 w-12 text-muted-foreground" />
@@ -205,6 +218,18 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
         </h1>
         <p className="text-muted-foreground">
           Selecione um cliente do tipo Pessoa Jurídica para acessar a conciliação bancária
+        </p>
+      </div>
+    );
+  }
+
+  if (!bankAccountId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <AlertCircle className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">Selecione uma conta PJ</h1>
+        <p className="text-muted-foreground">
+          Use o seletor de contas bancárias para iniciar a conciliação.
         </p>
       </div>
     );
