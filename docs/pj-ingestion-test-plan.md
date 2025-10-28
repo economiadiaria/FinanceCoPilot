@@ -50,7 +50,7 @@ npm test
 ## 4. Testes Manuais - Importação de OFX (`POST /api/pj/import/ofx`)
 1. Upload de arquivo OFX válido contendo ao menos duas transações.
    - Confirmar resposta com `imported`, `total` e `autoCategorized` coerentes.
-   - Validar persistência via `GET /api/pj/bank/transactions`.
+   - Validar persistência via `GET /api/pj/transactions`.
 2. Reenviar o mesmo arquivo e verificar resposta 409 com mensagem de duplicidade.
 3. Upload de arquivo contendo transações com `FITID` ausente, mas descrições e valores duplicados:
    - Confirmar que somente uma transação é importada (deduplicação por assinatura).

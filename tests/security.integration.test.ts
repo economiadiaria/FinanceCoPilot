@@ -157,7 +157,7 @@ describe("RBAC and organization boundaries", () => {
       .expect(200);
 
     const forbidden = await agent
-      .get("/api/pj/bank/transactions")
+      .get("/api/pj/transactions")
       .query({ clientId: "client-org-2", bankAccountId: "bank-acc-org-2" })
       .expect(403);
 
