@@ -25,6 +25,7 @@ import DashboardPJ from "@/pages/pj/dashboard-pj";
 import VendasPJ from "@/pages/pj/vendas-pj";
 import ConciliacaoPJ from "@/pages/pj/conciliacao-pj";
 import RegrasPJ from "@/pages/pj/regras-pj";
+import RelatoriosPJ from "@/pages/pj/relatorios-pj";
 import type { Client } from "@shared/schema";
 
 function Router() {
@@ -107,6 +108,9 @@ function AuthenticatedApp() {
               </Route>
               <Route path="/pj/regras">
                 <RegrasPJ clientId={selectedClient} clientType={currentClient?.type || null} />
+              </Route>
+              <Route path="/pj/relatorios">
+                <RelatoriosPJ clientId={selectedClient} clientType={currentClient?.type || null} />
               </Route>
             </Switch>
           </div>

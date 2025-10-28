@@ -61,6 +61,11 @@ const pjMenuItems = [
     icon: CreditCard,
   },
   {
+    title: "Relatórios PJ",
+    url: "/pj/relatorios",
+    icon: FileBarChart,
+  },
+  {
     title: "Regras",
     url: "/pj/regras",
     icon: Brain,

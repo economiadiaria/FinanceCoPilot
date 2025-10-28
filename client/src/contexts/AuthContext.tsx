@@ -5,8 +5,12 @@ interface User {
   userId: string;
   email: string;
   name: string;
-  role: 'consultor' | 'cliente';
+  role: 'master' | 'consultor' | 'cliente';
   clientIds: string[];
+  managedConsultantIds?: string[];
+  managedClientIds?: string[];
+  managerId?: string;
+  consultantId?: string;
 }
 
 interface AuthContextType {
