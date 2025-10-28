@@ -65,6 +65,7 @@ Set the following environment secrets to enable real Open Finance sync:
 - `PLUGGY_CLIENT_ID`: Your Pluggy client ID
 - `PLUGGY_CLIENT_SECRET`: Your Pluggy client secret
 - `PLUGGY_API_URL`: Pluggy API endpoint (e.g., https://api.pluggy.ai)
+- `PLUGGY_WEBHOOK_SECRET`: Shared secret used to validate incoming Pluggy webhooks (sent in the `x-pluggy-signature` header)
 
 Without these credentials, the system operates in **simulated mode**, creating fake data for testing.
 

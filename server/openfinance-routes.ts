@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import crypto from "node:crypto";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
 import { validateClientAccess } from "./middleware/scope";
@@ -85,6 +86,38 @@ export function registerOpenFinanceRoutes(app: Express) {
   // POST /api/openfinance/webhook - Receive Pluggy webhooks
   app.post("/api/openfinance/webhook", async (req, res) => {
     try {
+      const logger = getLogger(req);
+      const webhookSecret = process.env.PLUGGY_WEBHOOK_SECRET?.trim();
+
+      if (!webhookSecret) {
+        logger.error("Pluggy webhook secret not configured", {
+          event: "openfinance.webhook.auth",
+        });
+        return res.status(500).json({ error: "Segredo do webhook não configurado" });
+      }
+
+      const providedSignature = req.get("x-pluggy-signature") ?? req.get("x-webhook-secret");
+
+      if (!providedSignature) {
+        logger.warn("Missing Pluggy webhook signature", {
+          event: "openfinance.webhook.auth",
+        });
+        return res.status(401).json({ error: "Assinatura obrigatória" });
+      }
+
+      const secretBuffer = Buffer.from(webhookSecret, "utf8");
+      const signatureBuffer = Buffer.from(providedSignature, "utf8");
+      const signaturesMatch =
+        secretBuffer.length === signatureBuffer.length &&
+        crypto.timingSafeEqual(secretBuffer, signatureBuffer);
+
+      if (!signaturesMatch) {
+        logger.warn("Invalid Pluggy webhook signature", {
+          event: "openfinance.webhook.auth",
+        });
+        return res.status(403).json({ error: "Assinatura inválida" });
+      }
+
       const event = req.body;
 
       if (!event || !event.data) {
@@ -95,7 +128,7 @@ export function registerOpenFinanceRoutes(app: Express) {
 
       // Get client ID from item (stored when item was created)
       // For now, we'll update the item status based on event type
-      getLogger(req).info("Webhook received", {
+      logger.info("Webhook received", {
         event: "openfinance.webhook",
         context: { eventType, itemId },
       });
@@ -104,13 +137,13 @@ export function registerOpenFinanceRoutes(app: Express) {
       if (eventType === "item/created" || eventType === "item/updated") {
         // Item was successfully created or updated
         // Mark for sync in next call
-        getLogger(req).info("Item ready for sync", {
+        logger.info("Item ready for sync", {
           event: "openfinance.webhook.ready",
           context: { itemId },
         });
       } else if (eventType === "item/error" || eventType === "item/login_error") {
         // Update item status to error
-        getLogger(req).warn("Item reported error", {
+        logger.warn("Item reported error", {
           event: "openfinance.webhook.error",
           context: {
             itemId,

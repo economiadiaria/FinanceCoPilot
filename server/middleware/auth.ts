@@ -3,7 +3,9 @@ import { storage } from "../storage";
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
   // Skip auth for public routes (already handled before this middleware)
-  if (req.path.startsWith("/api/auth")) {
+  const requestPath = `${req.baseUrl}${req.path}`;
+
+  if (requestPath.startsWith("/api/auth") || requestPath === "/api/openfinance/webhook") {
     return next();
   }
 
