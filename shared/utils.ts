@@ -64,6 +64,25 @@ export function inPeriod(dateBR: string, period: string): boolean {
 }
 
 /**
+ * Verifica se uma data DD/MM/YYYY está entre duas datas (inclusive)
+ */
+export function isBetweenDates(
+  dateBR: string,
+  startDateBR: string,
+  endDateBR: string
+): boolean {
+  if (!dateBR || !startDateBR || !endDateBR) {
+    return false;
+  }
+
+  const date = new Date(toISOFromBR(dateBR));
+  const start = new Date(toISOFromBR(startDateBR));
+  const end = new Date(toISOFromBR(endDateBR));
+
+  return date >= start && date <= end;
+}
+
+/**
  * Soma segura de array de números (ignora null/undefined)
  */
 export function sum(values: (number | null | undefined)[]): number {
@@ -106,13 +125,79 @@ export function addMonths(dateBR: string, months: number): string {
 export function getLastMonths(n: number): string[] {
   const months: string[] = [];
   const now = new Date();
-  
+
   for (let i = 0; i < n; i++) {
     const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
     months.push(`${year}-${month}`);
   }
-  
+
   return months.reverse();
+}
+
+const EMAIL_MASK = /(^.).+(@.+$)/;
+
+function maskEmail(email: string): string {
+  if (!EMAIL_MASK.test(email)) {
+    return "***";
+  }
+  return email.replace(EMAIL_MASK, (_match, firstChar: string, domain: string) => `${firstChar}***${domain}`);
+}
+
+function maskDocument(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length <= 4) {
+    return "***";
+  }
+  return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+}
+
+function maskName(name: string): string {
+  if (name.length <= 2) {
+    return "**";
+  }
+  return `${name[0]}${"*".repeat(Math.max(1, name.length - 2))}${name[name.length - 1]}`;
+}
+
+export function maskPIIValue(key: string, value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalizedKey = key.toLowerCase();
+  if (normalizedKey.includes("email")) {
+    return maskEmail(value);
+  }
+  if (normalizedKey.includes("cpf") || normalizedKey.includes("cnpj") || normalizedKey.includes("doc")) {
+    return maskDocument(value);
+  }
+  if (normalizedKey.includes("telefone") || normalizedKey.includes("phone")) {
+    return maskDocument(value);
+  }
+  if (normalizedKey.includes("nome") || normalizedKey.includes("name")) {
+    return maskName(value);
+  }
+  return value;
+}
+
+export function scrubPII<T extends Record<string, any>>(payload: T): Record<string, unknown> {
+  return Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      acc[key] = scrubPII(value as Record<string, unknown>);
+      return acc;
+    }
+
+    if (Array.isArray(value)) {
+      acc[key] = value.map((item, index) =>
+        typeof item === "object" && item !== null
+          ? scrubPII(item as Record<string, unknown>)
+          : maskPIIValue(`${key}[${index}]`, item)
+      );
+      return acc;
+    }
+
+    acc[key] = maskPIIValue(key, value);
+    return acc;
+  }, {});
 }
