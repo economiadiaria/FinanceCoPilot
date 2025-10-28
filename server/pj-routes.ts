@@ -534,7 +534,7 @@ export function registerPJRoutes(app: Express) {
         | string
         | string[]
         | undefined;
-      clientId = Array.isArray(candidateClientId)
+      const clientId = Array.isArray(candidateClientId)
         ? candidateClientId[0]
         : candidateClientId;
 
@@ -542,16 +542,6 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
-      ingestionLogger = ingestionLogger.child({ clientId });
-      timer = startOfxIngestionTimer(clientId);
-      ingestionLogger.info("Importação OFX iniciada", {
-        event: "pj.ofx.import.start",
-        context: {
-          sizeBytes: req.file.size,
-        },
-      });
-
-      errorStage = "hashing";
       const buffer = req.file.buffer;
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
       const existingImport = await storage.getOFXImport(fileHash);

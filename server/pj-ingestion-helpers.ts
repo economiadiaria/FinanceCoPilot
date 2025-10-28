@@ -122,15 +122,19 @@ export function isDuplicateTransaction(
   pending: BankTransaction[],
   candidate: OfxCandidateTransaction
 ): boolean {
-  const candidateSignature = buildTransactionSignature(candidate);
+  const matches = (tx: BankTransaction) => {
+    if (candidate.fitid && tx.fitid && tx.fitid === candidate.fitid) {
+      return true;
+    }
 
-  const existingSignatures = collectExistingSignatures(existing);
-  if (existingSignatures.has(candidateSignature)) {
-    return true;
-  }
+    return (
+      tx.date === candidate.date &&
+      tx.amount === candidate.amount &&
+      tx.desc === candidate.desc
+    );
+  };
 
-  const pendingSignatures = collectExistingSignatures(pending);
-  return pendingSignatures.has(candidateSignature);
+  return existing.some(matches) || pending.some(matches);
 }
 
 export function matchesPattern(desc: string, pattern: string, matchType: string): boolean {

@@ -4,7 +4,6 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic } from "./vite";
 import type { User } from "@shared/schema";
 import { scrubPII } from "@shared/utils";
-import { requestLoggingMiddleware, getLogger } from "./observability/logger";
 
 const app = express();
 
@@ -57,20 +56,17 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      const logger = getLogger(req);
-      const sanitized = capturedJsonResponse ? scrubPII(capturedJsonResponse) : undefined;
-      logger.info("Legacy HTTP request metric", {
-        event: "http.legacy",
-        userId: req.authUser?.userId,
-        clientId: req.clientContext?.clientId,
-        context: {
-          method: req.method,
-          path,
-          statusCode: res.statusCode,
-          durationMs: duration,
-          response: sanitized,
-        },
-      });
+      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+      if (capturedJsonResponse) {
+        const sanitized = scrubPII(capturedJsonResponse);
+        logLine += ` :: ${JSON.stringify(sanitized)}`;
+      }
+
+      if (logLine.length > 80) {
+        logLine = logLine.slice(0, 79) + "…";
+      }
+
+      log(logLine);
     }
   });
 
