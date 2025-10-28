@@ -161,6 +161,29 @@ describe("OFX ingestion robustness", () => {
     assert.equal(storedAfterDedup.length, 2, "re-import should not duplicate transactions");
   });
 
+  it("imports OFX files when clientId is provided in the multipart body", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    const sampleBuffer = Buffer.from(SAMPLE_OFX, "utf8");
+
+    const response = await agent
+      .post("/api/pj/import/ofx")
+      .field("clientId", CLIENT_ID)
+      .attach("ofx", sampleBuffer, { filename: "extrato.ofx", contentType: "application/ofx" });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.imported, 2);
+    assert.equal(response.body.total, 2);
+    assert.equal(response.body.alreadyImported, false);
+
+    const storedTransactions = await currentStorage.getBankTransactions(CLIENT_ID);
+    assert.equal(storedTransactions.length, 2);
+  });
+
   it("allows identical OFX files to be imported by different clients", async () => {
     const agent = request.agent(appServer);
     await agent
