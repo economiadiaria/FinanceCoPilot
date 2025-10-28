@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   addDays,
   addMonths,
@@ -18,12 +19,32 @@ export interface OfxCandidateTransaction {
   fitid?: string;
 }
 
+function normalizeDescription(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function hashDescription(value: string): string | undefined {
+  const normalized = normalizeDescription(value);
+  if (!normalized) {
+    return undefined;
+  }
+
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
 function buildTransactionSignature(candidate: OfxCandidateTransaction): string {
   const amount = Number(candidate.amount.toFixed(2));
   if (candidate.fitid) {
     return `fitid:${candidate.fitid}`;
   }
-  return `date:${candidate.date}|amount:${amount}`;
+  const descHash = hashDescription(candidate.desc) ?? "no-desc";
+  return `date:${candidate.date}|amount:${amount}|desc:${descHash}`;
 }
 
 function collectExistingSignatures(transactions: BankTransaction[]): Set<string> {
