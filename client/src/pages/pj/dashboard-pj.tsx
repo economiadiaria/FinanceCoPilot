@@ -10,6 +10,7 @@ import { Link } from "wouter";
 interface DashboardPJProps {
   clientId: string | null;
   clientType: string | null;
+  bankAccountId: string | null;
 }
 
 interface Summary {
@@ -47,7 +48,7 @@ interface SalesKPIs {
   topClientes: { customer: string; amount: number }[];
 }
 
-export default function DashboardPJ({ clientId, clientType }: DashboardPJProps) {
+export default function DashboardPJ({ clientId, clientType, bankAccountId }: DashboardPJProps) {
   const [month, setMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -62,28 +63,28 @@ export default function DashboardPJ({ clientId, clientType }: DashboardPJProps) 
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
   const { data: summary, isLoading: loadingSummary, error: errorSummary } = useQuery<Summary>({
-    queryKey: ["/api/pj/dashboard/summary", { clientId, month }],
-    enabled: !!clientId && isPJClient,
+    queryKey: ["/api/pj/dashboard/summary", { clientId, month, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const { data: trendsData, error: errorTrends } = useQuery<{ trends: Trend[] }>({
-    queryKey: ["/api/pj/dashboard/trends", { clientId, year }],
-    enabled: !!clientId && isPJClient,
+    queryKey: ["/api/pj/dashboard/trends", { clientId, year, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const { data: revenueSplitData, error: errorRevenue } = useQuery<{ revenueSplit: RevenueSplit[] }>({
-    queryKey: ["/api/pj/dashboard/revenue-split", { clientId, month }],
-    enabled: !!clientId && isPJClient,
+    queryKey: ["/api/pj/dashboard/revenue-split", { clientId, month, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const { data: topCostsData, error: errorCosts } = useQuery<{ topCosts: TopCost[] }>({
-    queryKey: ["/api/pj/dashboard/top-costs", { clientId, month }],
-    enabled: !!clientId && isPJClient,
+    queryKey: ["/api/pj/dashboard/top-costs", { clientId, month, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const { data: salesKPIs, error: errorKPIs } = useQuery<SalesKPIs>({
-    queryKey: ["/api/pj/dashboard/sales-kpis", { clientId, month }],
-    enabled: !!clientId && isPJClient,
+    queryKey: ["/api/pj/dashboard/sales-kpis", { clientId, month, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   // Chart.js rendering
@@ -223,6 +224,18 @@ export default function DashboardPJ({ clientId, clientType }: DashboardPJProps) 
         </h1>
         <p className="text-muted-foreground">
           Selecione um cliente do tipo Pessoa Jurídica para acessar o dashboard empresarial
+        </p>
+      </div>
+    );
+  }
+
+  if (!bankAccountId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <CreditCard className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">Selecione uma conta PJ</h1>
+        <p className="text-muted-foreground">
+          Use o seletor de contas bancárias para visualizar os dados do dashboard.
         </p>
       </div>
     );

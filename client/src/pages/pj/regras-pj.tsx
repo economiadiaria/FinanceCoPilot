@@ -34,6 +34,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 interface RegrasPJProps {
   clientId: string | null;
   clientType: string | null;
+  bankAccountId: string | null;
 }
 
 interface CategorizationRule {
@@ -45,7 +46,7 @@ interface CategorizationRule {
   createdAt: string;
 }
 
-export default function RegrasPJ({ clientId, clientType }: RegrasPJProps) {
+export default function RegrasPJ({ clientId, clientType, bankAccountId }: RegrasPJProps) {
   const { toast } = useToast();
   const [openDialog, setOpenDialog] = useState(false);
   const [pattern, setPattern] = useState("");
@@ -53,14 +54,20 @@ export default function RegrasPJ({ clientId, clientType }: RegrasPJProps) {
   const [dfcCategory, setDfcCategory] = useState("Operacional");
   const [dfcItem, setDfcItem] = useState("");
 
+  const isPJClient = clientType === "PJ" || clientType === "BOTH";
+
   const { data: rulesData, isLoading, error } = useQuery<{ rules: CategorizationRule[] }>({
-    queryKey: ["/api/pj/categorization/rules", { clientId }],
-    enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
+    queryKey: ["/api/pj/categorization/rules", { clientId, bankAccountId }],
+    enabled: !!clientId && !!bankAccountId && isPJClient,
   });
 
   const createRuleMutation = useMutation({
     mutationFn: async (data: any) => {
-      const res = await apiRequest("POST", "/api/pj/categorization/rules", { clientId, ...data });
+      const res = await apiRequest("POST", "/api/pj/categorization/rules", {
+        clientId,
+        bankAccountId,
+        ...data,
+      });
       return await res.json();
     },
     onSuccess: (data: any) => {
@@ -113,7 +120,7 @@ export default function RegrasPJ({ clientId, clientType }: RegrasPJProps) {
     );
   }
 
-  if (clientType !== "PJ" && clientType !== "BOTH") {
+  if (!isPJClient) {
     return (
       <div className="flex flex-col items-center justify-center h-full space-y-4">
         <Brain className="h-12 w-12 text-muted-foreground" />
@@ -122,6 +129,18 @@ export default function RegrasPJ({ clientId, clientType }: RegrasPJProps) {
         </h1>
         <p className="text-muted-foreground">
           Selecione um cliente do tipo Pessoa Jurídica para configurar regras de categorização
+        </p>
+      </div>
+    );
+  }
+
+  if (!bankAccountId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full space-y-4">
+        <Brain className="h-12 w-12 text-muted-foreground" />
+        <h1 className="text-2xl font-bold text-muted-foreground">Selecione uma conta PJ</h1>
+        <p className="text-muted-foreground">
+          Use o seletor de contas bancárias para criar e aplicar regras de categorização.
         </p>
       </div>
     );
