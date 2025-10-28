@@ -159,7 +159,7 @@ function extractMaskedBankNameFromStatement(statement: any, fallbackBankName?: u
 
 export function registerPJRoutes(app: Express) {
   // ===== VENDAS PJ =====
-  
+
   /**
    * POST /api/pj/sales/add
    * Inclusão manual de venda com multi-pagamento
@@ -569,9 +569,63 @@ export function registerPJRoutes(app: Express) {
       res.status(500).json({ error: error.message || "Erro ao importar CSV" });
     }
   });
-  
+
+  app.get(
+    "/api/pj/accounts",
+    scopeRequired("PJ"),
+    async (req, res) => {
+      try {
+        const client = req.clientContext;
+        if (!client) {
+          return res.status(500).json({ error: "Contexto do cliente não carregado" });
+        }
+
+        const accounts = await storage.getBankAccounts(
+          client.organizationId,
+          client.clientId
+        );
+
+        const mappedAccounts = accounts.map(account => ({
+          id: account.id,
+          bankName: account.bankName,
+          accountNumberMask: account.accountNumberMask,
+          accountType: account.accountType,
+          currency: account.currency,
+          isActive: account.isActive,
+        }));
+
+        const responseBody = { accounts: mappedAccounts };
+        const serializedPayload = JSON.stringify(responseBody);
+        const etagHash = crypto.createHash("sha256").update(serializedPayload).digest("hex");
+
+        const requestIdHeader =
+          res.getHeader("X-Request-Id") ?? req.headers["x-request-id"] ?? req.requestId;
+        if (requestIdHeader) {
+          const normalizedRequestId = Array.isArray(requestIdHeader)
+            ? requestIdHeader[0]
+            : typeof requestIdHeader === "string"
+              ? requestIdHeader
+              : String(requestIdHeader);
+          res.setHeader("X-Request-Id", normalizedRequestId);
+        }
+
+        res.setHeader("Cache-Control", "private, max-age=60");
+        res.setHeader("ETag", `"${etagHash}"`);
+
+        res.json(responseBody);
+      } catch (error: any) {
+        getLogger(req).error(
+          "Erro ao listar contas bancárias",
+          { event: "pj.accounts.list" },
+          error
+        );
+        res.status(500).json({ error: error.message ?? "Erro ao listar contas bancárias" });
+      }
+    }
+  );
+
   // ===== BANCO PJ =====
-  
+
   /**
    * GET /api/pj/bank/transactions
    * Lista todas as transações bancárias de um cliente
