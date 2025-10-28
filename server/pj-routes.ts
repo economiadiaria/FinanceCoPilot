@@ -18,49 +18,10 @@ import {
   extractPattern,
   isDuplicateTransaction,
   matchesPattern,
-  normalizeOfxAmount,
 } from "./pj-ingestion-helpers";
 import { buildCostBreakdown, buildMonthlyInsights } from "./pj-dashboard-helpers";
 import { z } from "zod";
 import { recordAuditEvent } from "./security/audit";
-
-const ofxTransactionSchema = z.object({
-  DTPOSTED: z.string().min(1, "Transação OFX sem DTPOSTED"),
-  TRNAMT: z.string().min(1, "Transação OFX sem TRNAMT"),
-  TRNTYPE: z.string().optional(),
-  FITID: z.string().optional(),
-  UNIQUEID: z.string().optional(),
-  REFNUM: z.string().optional(),
-  CHECKNUM: z.string().optional(),
-  NAME: z.string().optional(),
-  MEMO: z.string().optional(),
-});
-
-const ofxStatementSchema = z.object({
-  STMTRS: z.object({
-    CURDEF: z.string().optional(),
-    BANKACCTFROM: z
-      .object({
-        ACCTID: z.string().optional(),
-        BANKID: z.string().optional(),
-        BRANCHID: z.string().optional(),
-      })
-      .optional(),
-    BANKTRANLIST: z
-      .object({
-        DTSTART: z.string().optional(),
-        DTEND: z.string().optional(),
-        STMTTRN: z.union([ofxTransactionSchema, z.array(ofxTransactionSchema)]),
-      })
-      .passthrough(),
-    LEDGERBAL: z
-      .object({
-        BALAMT: z.string(),
-        DTASOF: z.string().optional(),
-      })
-      .optional(),
-  }),
-});
 
 // Configure multer
 const upload = multer({
@@ -569,51 +530,37 @@ export function registerPJRoutes(app: Express) {
       let dedupedCount = 0;
 
       for (const account of accountsArray) {
-        const parsedAccount = ofxStatementSchema.parse(account);
-        const statement = parsedAccount.STMTRS;
+        const statement = account.STMTRS;
+        if (!statement) continue;
+        
+        const accountId = statement.BANKACCTFROM?.ACCTID || "unknown";
+        const transactions = statement.BANKTRANLIST?.STMTTRN || [];
+        const txArray = Array.isArray(transactions) ? transactions : [transactions];
+        
+        for (const tx of txArray) {
+          const date = tx.DTPOSTED ? formatBR(tx.DTPOSTED.substring(0, 8)) : "";
+          const amount = parseFloat(tx.TRNAMT) || 0;
+          const desc = tx.MEMO || tx.NAME || "Sem descrição";
+          const fitid = tx.FITID;
+          
+          // Dedup por fitid ou (date + amount + desc)
+          const candidate = { date, amount, desc, fitid };
+          const isDup = isDuplicateTransaction(existingBankTxs, newTransactions, candidate);
 
-        const accountId =
-          statement.BANKACCTFROM?.ACCTID ||
-          statement.BANKACCTFROM?.BANKID ||
-          `conta_${accountSummaries.length + 1}`;
+          if (!isDup) {
+            const bankTx: BankTransaction = {
+              bankTxId: uuidv4(),
+              date,
+              desc,
+              amount,
+              accountId,
+              fitid,
+              sourceHash: fileHash,
+              linkedLegs: [],
+              reconciled: false,
+            };
 
-        const txArray = toArray(statement.BANKTRANLIST?.STMTTRN);
-        if (txArray.length === 0) {
-          warnings.push(`Conta ${accountId} sem transações no período informado.`);
-          accountSummaries.push({
-            accountId,
-            currency: statement.CURDEF,
-            startDate: parseDate(statement.BANKTRANLIST?.DTSTART),
-            endDate: parseDate(statement.BANKTRANLIST?.DTEND),
-            openingBalance: undefined,
-            ledgerClosingBalance: undefined,
-            computedClosingBalance: undefined,
-            totalCredits: 0,
-            totalDebits: 0,
-            net: 0,
-          });
-          continue;
-        }
-
-        const startDate = parseDate(statement.BANKTRANLIST?.DTSTART);
-        const endDate = parseDate(statement.BANKTRANLIST?.DTEND);
-
-        let totalCredits = 0;
-        let totalDebits = 0;
-        let net = 0;
-
-        for (const rawTx of txArray) {
-          const parsedTx = ofxTransactionSchema.parse(rawTx);
-          const date = parseDate(parsedTx.DTPOSTED)!;
-          const { amount, adjusted } = normalizeOfxAmount(parsedTx.TRNAMT, parsedTx.TRNTYPE);
-          const desc = parsedTx.MEMO || parsedTx.NAME || "Sem descrição";
-          const fitid = parsedTx.FITID || parsedTx.UNIQUEID || parsedTx.REFNUM || parsedTx.CHECKNUM;
-
-          totalTransactionsInFile += 1;
-          if (amount > 0) {
-            totalCredits = round2(totalCredits + amount);
-          } else if (amount < 0) {
-            totalDebits = round2(totalDebits + Math.abs(amount));
+            newTransactions.push(bankTx);
           }
           net = round2(net + amount);
 
@@ -643,72 +590,16 @@ export function registerPJRoutes(app: Express) {
 
           newTransactions.push(bankTx);
         }
-
-        const ledgerRaw = statement.LEDGERBAL?.BALAMT;
-        let ledgerClosingBalance: number | undefined;
-        if (ledgerRaw !== undefined) {
-          const parsedLedger = Number.parseFloat(String(ledgerRaw).replace(",", "."));
-          if (Number.isNaN(parsedLedger)) {
-            warnings.push(`Saldo final inválido informado para a conta ${accountId}.`);
-          } else {
-            ledgerClosingBalance = round2(parsedLedger);
-          }
-        } else {
-          warnings.push(`Saldo final (LEDGERBAL) ausente na conta ${accountId}.`);
-        }
-
-        let openingBalance: number | undefined;
-        const openingRaw = (statement.BANKTRANLIST as any)?.BALAMT;
-        if (openingRaw !== undefined) {
-          const parsedOpening = Number.parseFloat(String(openingRaw).replace(",", "."));
-          if (!Number.isNaN(parsedOpening)) {
-            openingBalance = round2(parsedOpening);
-          }
-        }
-
-        if (openingBalance === undefined && ledgerClosingBalance !== undefined) {
-          openingBalance = round2(ledgerClosingBalance - net);
-        }
-
-        const computedClosingBalance =
-          openingBalance !== undefined ? round2(openingBalance + net) : undefined;
-
-        let divergence: number | undefined;
-        if (ledgerClosingBalance !== undefined && computedClosingBalance !== undefined) {
-          divergence = round2(computedClosingBalance - ledgerClosingBalance);
-          if (Math.abs(divergence) > 0.01) {
-            warnings.push(
-              `Divergência de R$ ${Math.abs(divergence).toFixed(2)} no saldo final da conta ${accountId}.`
-            );
-          }
-        }
-
-        accountSummaries.push({
-          accountId,
-          currency: statement.CURDEF,
-          startDate,
-          endDate,
-          openingBalance,
-          ledgerClosingBalance,
-          computedClosingBalance,
-          totalCredits: round2(totalCredits),
-          totalDebits: round2(totalDebits),
-          net,
-          divergence,
-        });
       }
 
-      if (totalTransactionsInFile === 0) {
-        throw new Error("Nenhuma transação encontrada no arquivo OFX enviado.");
-      }
-
+      // Aplicar categorização prospectiva (auto-categorizar com regras existentes)
       const rules = await storage.getCategorizationRules(clientId);
       const categorizedCount = applyCategorizationRules(newTransactions, rules);
 
-      if (newTransactions.length > 0) {
-        await storage.addBankTransactions(clientId, newTransactions);
-      }
+      // Salvar transações (já com categorização aplicada)
+      await storage.addBankTransactions(clientId, newTransactions);
 
+      // Registrar importação
       await storage.addOFXImport({
         fileHash,
         clientId,
@@ -728,24 +619,15 @@ export function registerPJRoutes(app: Express) {
           clientId,
           imported: newTransactions.length,
           categorized: categorizedCount,
-          accounts: accountSummaries.length,
-          duplicateFile: Boolean(existingImport),
-          warnings: warnings.length,
-          deduped: dedupedCount,
+          accounts: accountsArray.length,
         },
       });
 
       res.json({
         success: true,
         imported: newTransactions.length,
-        total: totalTransactionsInFile,
-        deduped: dedupedCount,
+        total: newTransactions.length,
         autoCategorized: categorizedCount,
-        alreadyImported: Boolean(existingImport),
-        reconciliation: {
-          accounts: accountSummaries,
-          warnings,
-        },
       });
     } catch (error: any) {
       console.error("Erro ao importar OFX PJ:", error);
