@@ -52,6 +52,18 @@ interface BankTransaction {
   reconciled: boolean;
 }
 
+interface BankTransactionsResponse {
+  items: BankTransaction[];
+  pagination: {
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+  };
+}
+
 interface Suggestion {
   parcelN: number;
   bankTxId: string;
@@ -74,8 +86,8 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
     enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
   });
 
-  const { data: bankTxsData, isLoading: loadingTxs, error: errorTxs } = useQuery<{ transactions: BankTransaction[] }>({
-    queryKey: ["/api/pj/bank/transactions", { clientId }],
+  const { data: bankTxsData, isLoading: loadingTxs, error: errorTxs } = useQuery<BankTransactionsResponse>({
+    queryKey: ["/api/pj/transactions", { clientId }],
     enabled: !!clientId && (clientType === "PJ" || clientType === "BOTH"),
   });
 
@@ -103,7 +115,7 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
         title: "OFX importado com sucesso",
         description: `${data.imported} transações bancárias importadas`,
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/pj/bank/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/pj/transactions"] });
     },
     onError: (error: any) => {
       toast({
@@ -136,7 +148,7 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
         description: "Parcelas conciliadas com sucesso",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/pj/sales/legs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/pj/bank/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/pj/transactions"] });
       setShowSuggestions(false);
       setSelectedLeg(null);
     },
@@ -217,7 +229,7 @@ export default function ConciliacaoPJ({ clientId, clientType }: ConciliacaoPJPro
   }
 
   const legs = legsData?.legs || [];
-  const bankTxs = bankTxsData?.transactions || [];
+  const bankTxs = bankTxsData?.items || [];
 
   return (
     <div className="space-y-6">

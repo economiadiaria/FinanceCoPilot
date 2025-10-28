@@ -627,11 +627,11 @@ export function registerPJRoutes(app: Express) {
   // ===== BANCO PJ =====
 
   /**
-   * GET /api/pj/bank/transactions
-   * Lista todas as transações bancárias de um cliente
+   * GET /api/pj/transactions
+   * Lista transações bancárias paginadas de um cliente
    */
   app.get(
-    "/api/pj/bank/transactions",
+    "/api/pj/transactions",
     scopeRequired("PJ"),
     ensureBankAccountAccess,
     async (req, res) => {
@@ -646,8 +646,119 @@ export function registerPJRoutes(app: Express) {
           return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
         }
 
+        const pickSingle = (value: unknown): string | undefined => {
+          if (Array.isArray(value)) {
+            return value[0];
+          }
+          return typeof value === "string" ? value : undefined;
+        };
+
+        const sortParam = pickSingle(req.query.sort)?.toLowerCase();
+        const sortDirection: "asc" | "desc" = sortParam === "asc" ? "asc" : "desc";
+
+        const parsePositiveInt = (value: string | undefined, fallback: number, max?: number): number => {
+          if (!value) {
+            return fallback;
+          }
+          const parsed = Number.parseInt(value, 10);
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            return fallback;
+          }
+          if (max && parsed > max) {
+            return max;
+          }
+          return parsed;
+        };
+
+        const page = parsePositiveInt(pickSingle(req.query.page), 1);
+        const limit = parsePositiveInt(pickSingle(req.query.limit), 50, 200);
+
+        let fromISO: string | undefined;
+        let toISO: string | undefined;
+
+        try {
+          const fromParam = pickSingle(req.query.from)?.trim();
+          if (fromParam) {
+            fromISO = toISOFromBR(fromParam);
+          }
+        } catch (error) {
+          return res.status(400).json({ error: "Data inicial inválida" });
+        }
+
+        try {
+          const toParam = pickSingle(req.query.to)?.trim();
+          if (toParam) {
+            toISO = toISOFromBR(toParam);
+          }
+        } catch (error) {
+          return res.status(400).json({ error: "Data final inválida" });
+        }
+
+        if (fromISO && toISO && fromISO > toISO) {
+          return res.status(400).json({ error: "Período inválido" });
+        }
+
         const transactions = await storage.getBankTransactions(clientId, bankAccount.id);
-        res.json({ transactions });
+
+        const normalized = transactions.map(tx => ({
+          tx,
+          isoDate: toISOFromBR(tx.date),
+        }));
+
+        const filtered = normalized.filter(({ isoDate }) => {
+          if (fromISO && isoDate < fromISO) {
+            return false;
+          }
+          if (toISO && isoDate > toISO) {
+            return false;
+          }
+          return true;
+        });
+
+        const sorted = filtered.sort((a, b) => {
+          if (a.isoDate === b.isoDate) {
+            if (sortDirection === "asc") {
+              return a.tx.bankTxId.localeCompare(b.tx.bankTxId);
+            }
+            return b.tx.bankTxId.localeCompare(a.tx.bankTxId);
+          }
+          if (sortDirection === "asc") {
+            return a.isoDate.localeCompare(b.isoDate);
+          }
+          return b.isoDate.localeCompare(a.isoDate);
+        });
+
+        const totalItems = sorted.length;
+        const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / limit);
+        const start = (page - 1) * limit;
+        const pageItems = start >= 0 ? sorted.slice(start, start + limit) : sorted.slice(0, limit);
+        const items = pageItems.map(item => item.tx);
+
+        const pagination = {
+          page,
+          limit,
+          totalItems,
+          totalPages,
+          hasNextPage: start + limit < totalItems,
+          hasPreviousPage: page > 1 && totalItems > 0,
+        };
+
+        const responseBody = { items, pagination };
+        const etagHash = crypto.createHash("sha256").update(JSON.stringify(responseBody)).digest("hex");
+        const etagValue = `"${etagHash}"`;
+
+        res.setHeader("ETag", etagValue);
+        res.setHeader("Cache-Control", "private, max-age=30");
+
+        const ifNoneMatch = pickSingle(req.headers["if-none-match"]);
+        if (ifNoneMatch) {
+          const candidates = ifNoneMatch.split(/\s*,\s*/);
+          if (candidates.includes(etagValue) || candidates.includes("*")) {
+            return res.status(304).end();
+          }
+        }
+
+        res.json(responseBody);
       } catch (error: any) {
         getLogger(req).error("Erro ao listar transações bancárias", {
           event: "pj.bank.list",
