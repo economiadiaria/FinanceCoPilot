@@ -18,6 +18,8 @@ const MASTER_TWO_EMAIL = "master2@pf.example.com";
 const MASTER_TWO_PASSWORD = "master-two";
 const CONSULTANT_EMAIL = "consultant@pf.example.com";
 const CONSULTANT_PASSWORD = "consultant-secret";
+const CLIENT_EMAIL = "cliente@pf.example.com";
+const CLIENT_PASSWORD = "cliente-secret";
 
 async function seedStorage(storage: IStorage) {
   const masterOne: User = {
@@ -57,6 +59,20 @@ async function seedStorage(storage: IStorage) {
     managerId: masterOne.userId,
   };
 
+  const clientUser: User = {
+    userId: "user-client-1",
+    email: CLIENT_EMAIL,
+    passwordHash: await bcrypt.hash(CLIENT_PASSWORD, 10),
+    role: "cliente",
+    name: "Cliente Final",
+    organizationId: ORG_ONE,
+    clientIds: [CLIENT_ID],
+    managedConsultantIds: [],
+    managedClientIds: [],
+    consultantId: undefined,
+    managerId: masterOne.userId,
+  };
+
   const pfClient: Client = {
     clientId: CLIENT_ID,
     name: "Cliente PF",
@@ -80,6 +96,7 @@ async function seedStorage(storage: IStorage) {
   await storage.createUser(masterOne);
   await storage.createUser(masterTwo);
   await storage.createUser(consultantNoLink);
+  await storage.createUser(clientUser);
   await storage.upsertClient(pfClient);
   await storage.setTransactions(CLIENT_ID, sampleTransactions);
 }
@@ -163,5 +180,106 @@ describe("PF validateClientAccess guard", () => {
       .expect(403);
 
     assert.match(categorizeAttempt.body.error, /acesso negado/i);
+  });
+
+  it("denies PF summary for users from another organization", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_TWO_EMAIL, password: MASTER_TWO_PASSWORD })
+      .expect(200);
+
+    const forbidden = await agent
+      .get("/api/summary")
+      .query({ clientId: CLIENT_ID })
+      .expect(403);
+
+    assert.match(forbidden.body.error, /outra organização/i);
+  });
+
+  it("denies investment data access for users from another organization", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_TWO_EMAIL, password: MASTER_TWO_PASSWORD })
+      .expect(200);
+
+    const positionsForbidden = await agent
+      .get("/api/investments/positions")
+      .query({ clientId: CLIENT_ID })
+      .expect(403);
+
+    assert.match(positionsForbidden.body.error, /outra organização/i);
+
+    const rebalanceForbidden = await agent
+      .post("/api/investments/rebalance/suggest")
+      .send({ clientId: CLIENT_ID })
+      .expect(403);
+
+    assert.match(rebalanceForbidden.body.error, /outra organização/i);
+  });
+
+  it("denies report and policy access across organizations", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_TWO_EMAIL, password: MASTER_TWO_PASSWORD })
+      .expect(200);
+
+    const reportView = await agent
+      .get("/api/reports/view")
+      .query({ clientId: CLIENT_ID, period: "2024-01" })
+      .expect(403);
+    assert.match(reportView.body.error, /outra organização/i);
+
+    const reportGenerate = await agent
+      .post("/api/reports/generate")
+      .send({ clientId: CLIENT_ID, period: "2024-01" })
+      .expect(403);
+    assert.match(reportGenerate.body.error, /outra organização/i);
+
+    const policyView = await agent
+      .get("/api/policies")
+      .query({ clientId: CLIENT_ID })
+      .expect(403);
+    assert.match(policyView.body.error, /outra organização/i);
+
+    const policyUpdate = await agent
+      .post("/api/policies/upsert")
+      .send({ clientId: CLIENT_ID, data: { targets: { RF: 50, RV: 30, Fundos: 10, Outros: 10 } } })
+      .expect(403);
+    assert.match(policyUpdate.body.error, /outra organização/i);
+  });
+
+  it("blocks client users from mutating investment and report data", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: CLIENT_EMAIL, password: CLIENT_PASSWORD })
+      .expect(200);
+
+    const positionAttempt = await agent
+      .post("/api/investments/positions")
+      .send({ clientId: CLIENT_ID, position: { asset: "Teste", class: "RV", value: 100 } })
+      .expect(403);
+    assert.match(positionAttempt.body.error, /acesso negado/i);
+
+    const rebalanceAttempt = await agent
+      .post("/api/investments/rebalance/suggest")
+      .send({ clientId: CLIENT_ID })
+      .expect(403);
+    assert.match(rebalanceAttempt.body.error, /acesso negado/i);
+
+    const reportAttempt = await agent
+      .post("/api/reports/generate")
+      .send({ clientId: CLIENT_ID, period: "2024-01" })
+      .expect(403);
+    assert.match(reportAttempt.body.error, /acesso negado/i);
+
+    const policyAttempt = await agent
+      .post("/api/policies/upsert")
+      .send({ clientId: CLIENT_ID, data: { targets: { RF: 60, RV: 20, Fundos: 10, Outros: 10 } } })
+      .expect(403);
+    assert.match(policyAttempt.body.error, /acesso negado/i);
   });
 });
