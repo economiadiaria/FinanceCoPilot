@@ -9,7 +9,8 @@
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "test": "tsx --test tests/**/*.test.ts",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "openapi:validate": "openapi validate docs/openapi/pj-banking.yaml"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -89,6 +90,7 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@redocly/openapi-cli": "^0.12.16",
     "@replit/vite-plugin-cartographer": "^0.3.1",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
