@@ -87,14 +87,36 @@ function AuthenticatedApp() {
 
   const currentClient = filteredClients.find((c) => c.clientId === selectedClient) ?? null;
   const isPJClient = currentClient?.type === "PJ" || currentClient?.type === "BOTH";
-  const availableBankAccounts = useMemo(
-    () => mockBankAccounts.filter((account) => account.isActive),
-    [],
-  );
+  const availableBankAccounts = useMemo(() => {
+    if (!selectedClient) {
+      return [] as typeof mockBankAccounts;
+    }
+
+    return mockBankAccounts.filter((account) => {
+      if (!account.isActive) {
+        return false;
+      }
+
+      if (!account.clientIds?.length) {
+        return true;
+      }
+
+      return account.clientIds.includes(selectedClient);
+    });
+  }, [selectedClient]);
 
   useEffect(() => {
     setSelectedBankAccountId(null);
   }, [selectedClient]);
+
+  useEffect(() => {
+    if (
+      selectedBankAccountId &&
+      !availableBankAccounts.some((account) => account.id === selectedBankAccountId)
+    ) {
+      setSelectedBankAccountId(null);
+    }
+  }, [availableBankAccounts, selectedBankAccountId]);
 
   useEffect(() => {
     if (!isPJClient) {
@@ -124,21 +146,28 @@ function AuthenticatedApp() {
               <Select
                 value={selectedBankAccountId ?? undefined}
                 onValueChange={setSelectedBankAccountId}
+                disabled={!availableBankAccounts.length}
               >
                 <SelectTrigger className="w-[240px]" data-testid="select-bank-account">
                   <SelectValue placeholder="Selecione uma conta PJ" />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableBankAccounts.map((account) => (
-                    <SelectItem key={account.id} value={account.id}>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{account.bankName}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {account.accountType} • {account.accountNumberMask}
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
+                  {availableBankAccounts.length ? (
+                    availableBankAccounts.map((account) => (
+                      <SelectItem key={account.id} value={account.id}>
+                        <div className="flex flex-col">
+                          <span className="font-medium">{account.bankName}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {account.accountType} • {account.accountNumberMask}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">
+                      Nenhuma conta disponível
+                    </div>
+                  )}
                 </SelectContent>
               </Select>
             )}

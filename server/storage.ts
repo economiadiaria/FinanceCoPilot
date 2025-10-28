@@ -134,7 +134,7 @@ export class MemStorage implements IStorage {
   private pjSaleLegs: Map<string, SaleLeg[]>;
   private pjPaymentMethods: Map<string, PaymentMethod[]>;
   private pjLedgerEntries: Map<string, LedgerEntry[]>;
-  private pjBankTransactions: Map<string, Map<string, BankTransaction[]>>;
+  private pjBankTransactions: Map<string, Map<string, BankTransaction[]> | BankTransaction[]>;
   private pjCategorizationRules: Map<string, CategorizationRule[]>;
   private auditLogs: Map<string, AuditLogEntry[]>;
 
@@ -544,8 +544,8 @@ export class MemStorage implements IStorage {
 
   async updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void> {
     const bucket = this.ensureBankTransactionBucket(clientId);
-    for (const [accountId, list] of bucket.entries()) {
-      const index = list.findIndex(t => t.bankTxId === bankTxId);
+    for (const [accountId, list] of Array.from(bucket.entries())) {
+      const index = list.findIndex((t: BankTransaction) => t.bankTxId === bankTxId);
       if (index === -1) {
         continue;
       }
@@ -668,7 +668,7 @@ export class ReplitDbStorage implements IStorage {
     }
 
     const accountIds: string[] = [];
-    for (const [accountId, transactions] of grouped.entries()) {
+    for (const [accountId, transactions] of Array.from(grouped.entries())) {
       const key = this.getBankTransactionsKey(clientId, accountId);
       const setResult = await this.db.set(key, transactions);
       if (!setResult.ok) {
@@ -1385,7 +1385,7 @@ export class ReplitDbStorage implements IStorage {
     const toRemove = new Set(existingIndex);
     const newIndex: string[] = [];
 
-    for (const [accountId, accountTxs] of grouped.entries()) {
+    for (const [accountId, accountTxs] of Array.from(grouped.entries())) {
       const result = await this.db.set(this.getBankTransactionsKey(clientId, accountId), accountTxs);
       if (!result.ok) {
         throw new Error(`Database error setting PJ bank transactions for ${clientId}:${accountId}: ${result.error?.message || JSON.stringify(result.error)}`);
@@ -1394,7 +1394,7 @@ export class ReplitDbStorage implements IStorage {
       newIndex.push(accountId);
     }
 
-    for (const accountId of toRemove) {
+    for (const accountId of Array.from(toRemove)) {
       await this.db.delete(this.getBankTransactionsKey(clientId, accountId));
     }
 
@@ -1414,7 +1414,7 @@ export class ReplitDbStorage implements IStorage {
 
     const index = await this.loadBankTransactionIndex(clientId);
 
-    for (const [accountId, accountTxs] of grouped.entries()) {
+    for (const [accountId, accountTxs] of Array.from(grouped.entries())) {
       const key = this.getBankTransactionsKey(clientId, accountId);
       const existingResult = await this.db.get(key);
       if (!existingResult.ok && existingResult.error?.statusCode !== 404) {

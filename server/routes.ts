@@ -577,6 +577,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     upload.single("ofx"),
     validateClientAccess,
     async (req, res) => {
+    let clientIdForLogging: string | null = null;
+    try {
       const client = req.clientContext;
       let clientId: string | undefined = client?.clientId;
       try {
@@ -589,8 +591,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
       }
 
-      const ensuredClientId = client.clientId;
-      clientId = ensuredClientId;
+      const clientId = client.clientId;
+      clientIdForLogging = clientId;
 
       if (!req.file) {
         return res.status(400).json({ error: "Nenhum arquivo OFX enviado." });
@@ -801,15 +803,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `${transactions.length} transações importadas com sucesso.`,
         duplicateAccounts: Array.from(duplicateAccounts),
       });
-      } catch (error) {
-        getLogger(req).error("Erro ao importar OFX", {
+    } catch (error) {
+      getLogger(req).error(
+        "Erro ao importar OFX",
+        {
           event: "pf.ofx.import",
-          context: { clientId },
-        }, error);
-        res.status(400).json({
-          error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX"
-        });
-      }
+          context: { clientId: clientIdForLogging },
+        },
+        error
+      );
+      res.status(400).json({
+        error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX"
+      });
+    }
     }
   );
 
