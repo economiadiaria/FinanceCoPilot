@@ -36,6 +36,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/auth/register", async (req, res) => {
     try {
       const data = registerUserSchema.parse(req.body);
+
+      const allowedSelfRegistrationRoles: Array<User["role"]> = ["cliente", "consultor"];
+      if (!allowedSelfRegistrationRoles.includes(data.role)) {
+        return res.status(403).json({ error: "Tipo de usuário inválido para auto cadastro" });
+      }
       
       // Check if email already exists
       const existingUser = await storage.getUserByEmail(data.email);
