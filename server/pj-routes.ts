@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { storage } from "./storage";
-import { scopeRequired } from "./middleware/scope";
+import { scopeRequired, ensureBankAccountAccess } from "./middleware/scope";
 import multer from "multer";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
@@ -576,23 +576,33 @@ export function registerPJRoutes(app: Express) {
    * GET /api/pj/bank/transactions
    * Lista todas as transações bancárias de um cliente
    */
-  app.get("/api/pj/bank/transactions", scopeRequired("PJ"), async (req, res) => {
-    try {
-      const clientId = req.query.clientId as string;
-      if (!clientId) {
-        return res.status(400).json({ error: "clientId é obrigatório" });
+  app.get(
+    "/api/pj/bank/transactions",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        if (!clientId) {
+          return res.status(400).json({ error: "clientId é obrigatório" });
+        }
+
+        const bankAccount = req.bankAccountContext;
+        if (!bankAccount) {
+          return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const transactions = await storage.getBankTransactions(clientId, bankAccount.id);
+        res.json({ transactions });
+      } catch (error: any) {
+        getLogger(req).error("Erro ao listar transações bancárias", {
+          event: "pj.bank.list",
+          context: { clientId: req.query?.clientId },
+        }, error);
+        res.status(500).json({ error: error.message || "Erro ao listar transações" });
       }
-      
-      const transactions = await storage.getBankTransactions(clientId);
-      res.json({ transactions });
-    } catch (error: any) {
-      getLogger(req).error("Erro ao listar transações bancárias", {
-        event: "pj.bank.list",
-        context: { clientId: req.query?.clientId },
-      }, error);
-      res.status(500).json({ error: error.message || "Erro ao listar transações" });
     }
-  });
+  );
   
   /**
    * POST /api/pj/import/ofx
@@ -1564,227 +1574,280 @@ export function registerPJRoutes(app: Express) {
    * GET /api/pj/dashboard/monthly-insights
    * Retorna KPIs mensais consolidados com base nas vendas e transações importadas
    */
-  app.get("/api/pj/dashboard/monthly-insights", scopeRequired("PJ"), async (req, res) => {
-    try {
-      const clientId = req.query.clientId as string;
-      const month = (req.query.month as string) || undefined;
+  app.get(
+    "/api/pj/dashboard/monthly-insights",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        const month = (req.query.month as string) || undefined;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "clientId é obrigatório" });
+        if (!clientId) {
+          return res.status(400).json({ error: "clientId é obrigatório" });
+        }
+
+        const bankAccount = req.bankAccountContext;
+        if (!bankAccount) {
+          return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const [bankTxs, sales] = await Promise.all([
+          storage.getBankTransactions(clientId, bankAccount.id),
+          storage.getSales(clientId),
+        ]);
+
+        const insights = buildMonthlyInsights(bankTxs, sales, month);
+
+        res.json(insights);
+      } catch (error: any) {
+        getLogger(req).error("Erro ao buscar monthly-insights PJ", {
+          event: "pj.dashboard.monthly-insights",
+          context: { clientId: req.query?.clientId },
+        }, error);
+        res.status(500).json({ error: error.message || "Erro ao buscar monthly-insights" });
       }
-
-      const [bankTxs, sales] = await Promise.all([
-        storage.getBankTransactions(clientId),
-        storage.getSales(clientId),
-      ]);
-
-      const insights = buildMonthlyInsights(bankTxs, sales, month);
-
-      res.json(insights);
-    } catch (error: any) {
-      getLogger(req).error("Erro ao buscar monthly-insights PJ", {
-        event: "pj.dashboard.monthly-insights",
-        context: { clientId: req.query?.clientId },
-      }, error);
-      res.status(500).json({ error: error.message || "Erro ao buscar monthly-insights" });
     }
-  });
+  );
 
   /**
    * GET /api/pj/dashboard/costs-breakdown
    * Retorna a visão consolidada do DFC e custos por categoria
    */
-  app.get("/api/pj/dashboard/costs-breakdown", scopeRequired("PJ"), async (req, res) => {
-    try {
-      const clientId = req.query.clientId as string;
-      const month = (req.query.month as string) || undefined;
+  app.get(
+    "/api/pj/dashboard/costs-breakdown",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        const month = (req.query.month as string) || undefined;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "clientId é obrigatório" });
+        if (!clientId) {
+          return res.status(400).json({ error: "clientId é obrigatório" });
+        }
+
+        const bankAccount = req.bankAccountContext;
+        if (!bankAccount) {
+          return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const [bankTxs, sales] = await Promise.all([
+          storage.getBankTransactions(clientId, bankAccount.id),
+          storage.getSales(clientId),
+        ]);
+
+        const breakdown = buildCostBreakdown(bankTxs, sales, month);
+
+        res.json(breakdown);
+      } catch (error: any) {
+        getLogger(req).error("Erro ao buscar costs-breakdown PJ", {
+          event: "pj.dashboard.costs-breakdown",
+          context: { clientId: req.query?.clientId },
+        }, error);
+        res.status(500).json({ error: error.message || "Erro ao buscar costs-breakdown" });
       }
-
-      const [bankTxs, sales] = await Promise.all([
-        storage.getBankTransactions(clientId),
-        storage.getSales(clientId),
-      ]);
-
-      const breakdown = buildCostBreakdown(bankTxs, sales, month);
-
-      res.json(breakdown);
-    } catch (error: any) {
-      getLogger(req).error("Erro ao buscar costs-breakdown PJ", {
-        event: "pj.dashboard.costs-breakdown",
-        context: { clientId: req.query?.clientId },
-      }, error);
-      res.status(500).json({ error: error.message || "Erro ao buscar costs-breakdown" });
     }
-  });
+  );
 
   /**
    * GET /api/pj/dashboard/summary
    * KPIs do mês: receita, despesas, saldo, contas a receber
    */
-  app.get("/api/pj/dashboard/summary", scopeRequired("PJ"), async (req, res) => {
-    try {
-      const clientId = req.query.clientId as string;
-      const month = req.query.month as string; // YYYY-MM
-      
-      if (!clientId || !month) {
-        return res.status(400).json({ error: "clientId e month são obrigatórios" });
-      }
-      
-      const [year, monthNum] = month.split("-");
-      const startDate = `01/${monthNum}/${year}`;
-      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
-      const endDate = `${lastDay}/${monthNum}/${year}`;
-      
-      // Buscar transações bancárias do mês
-      const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
-      
-      const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
-      const despesas = Math.abs(txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0));
-      const saldo = receitas - despesas;
-      
-      // Contas a receber (parcelas pendentes)
-      const legs = await storage.getSaleLegs(clientId);
-      let contasReceber = 0;
-      
-      for (const leg of legs) {
-        for (const parcel of leg.settlementPlan) {
-          if (!parcel.receivedTxId && isBetweenDates(parcel.due, startDate, endDate)) {
-            contasReceber += parcel.expected;
+  app.get(
+    "/api/pj/dashboard/summary",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        const month = req.query.month as string; // YYYY-MM
+
+        if (!clientId || !month) {
+          return res.status(400).json({ error: "clientId e month são obrigatórios" });
+        }
+
+        const bankAccount = req.bankAccountContext;
+        if (!bankAccount) {
+          return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const [year, monthNum] = month.split("-");
+        const startDate = `01/${monthNum}/${year}`;
+        const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+        const endDate = `${lastDay}/${monthNum}/${year}`;
+
+        // Buscar transações bancárias do mês
+        const bankTxs = await storage.getBankTransactions(clientId, bankAccount.id);
+        const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
+
+        const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
+        const despesas = Math.abs(
+          txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0)
+        );
+        const saldo = receitas - despesas;
+
+        // Contas a receber (parcelas pendentes)
+        const legs = await storage.getSaleLegs(clientId);
+        let contasReceber = 0;
+
+        for (const leg of legs) {
+          for (const parcel of leg.settlementPlan) {
+            if (!parcel.receivedTxId && isBetweenDates(parcel.due, startDate, endDate)) {
+              contasReceber += parcel.expected;
+            }
           }
         }
+
+        // Calcular lucros e margem
+        const lucroBruto = receitas; // Simplificado: assumindo que não temos CMV separado
+        const lucroLiquido = saldo; // receitas - despesas
+        const margemLiquida = receitas > 0 ? (lucroLiquido / receitas) * 100 : 0;
+
+        res.json({
+          month,
+          receitas,
+          despesas,
+          saldo,
+          contasReceber,
+          lucroBruto,
+          lucroLiquido,
+          margemLiquida,
+        });
+      } catch (error: any) {
+        getLogger(req).error("Erro ao buscar summary PJ", {
+          event: "pj.dashboard.summary",
+          context: { clientId: req.query?.clientId },
+        }, error);
+        res.status(500).json({ error: error.message || "Erro ao buscar summary" });
       }
-      
-      // Calcular lucros e margem
-      const lucroBruto = receitas; // Simplificado: assumindo que não temos CMV separado
-      const lucroLiquido = saldo; // receitas - despesas
-      const margemLiquida = receitas > 0 ? (lucroLiquido / receitas) * 100 : 0;
-      
-      res.json({
-        month,
-        receitas,
-        despesas,
-        saldo,
-        contasReceber,
-        lucroBruto,
-        lucroLiquido,
-        margemLiquida,
-      });
-    } catch (error: any) {
-      getLogger(req).error("Erro ao buscar summary PJ", {
-        event: "pj.dashboard.summary",
-        context: { clientId: req.query?.clientId },
-      }, error);
-      res.status(500).json({ error: error.message || "Erro ao buscar summary" });
     }
-  });
+  );
   
   /**
    * GET /api/pj/dashboard/trends
    * Tendências de receita/despesa do ano vigente
    */
-  app.get("/api/pj/dashboard/trends", scopeRequired("PJ"), async (req, res) => {
-    try {
-      const clientId = req.query.clientId as string;
-      const year = req.query.year as string; // Opcional, se não fornecido usa ano atual
-      
-      if (!clientId) {
-        return res.status(400).json({ error: "clientId é obrigatório" });
+  app.get(
+    "/api/pj/dashboard/trends",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        const year = req.query.year as string; // Opcional, se não fornecido usa ano atual
+
+        if (!clientId) {
+          return res.status(400).json({ error: "clientId é obrigatório" });
+        }
+
+        const bankAccount = req.bankAccountContext;
+        if (!bankAccount) {
+          return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const bankTxs = await storage.getBankTransactions(clientId, bankAccount.id);
+
+        // Usar ano fornecido ou ano atual
+        const targetYear = year ? parseInt(year) : new Date().getFullYear();
+        const trends: any[] = [];
+
+        // Iterar pelos 12 meses do ano
+        for (let month = 1; month <= 12; month++) {
+          const monthKey = `${targetYear}-${month.toString().padStart(2, "0")}`;
+
+          const txsInMonth = bankTxs.filter(tx => {
+            const [day, m, y] = tx.date.split("/");
+            const txMonth = `${y}-${m}`;
+            return txMonth === monthKey;
+          });
+
+          const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
+          const despesas = Math.abs(
+            txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0)
+          );
+
+          trends.push({
+            month: monthKey,
+            receitas,
+            despesas,
+          });
+        }
+
+        res.json({ trends });
+      } catch (error: any) {
+        getLogger(req).error("Erro ao buscar trends PJ", {
+          event: "pj.dashboard.trends",
+          context: { clientId: req.query?.clientId },
+        }, error);
+        res.status(500).json({ error: error.message || "Erro ao buscar trends" });
       }
-      
-      const bankTxs = await storage.getBankTransactions(clientId);
-      
-      // Usar ano fornecido ou ano atual
-      const targetYear = year ? parseInt(year) : new Date().getFullYear();
-      const trends: any[] = [];
-      
-      // Iterar pelos 12 meses do ano
-      for (let month = 1; month <= 12; month++) {
-        const monthKey = `${targetYear}-${month.toString().padStart(2, "0")}`;
-        
-        const txsInMonth = bankTxs.filter(tx => {
-          const [day, m, y] = tx.date.split("/");
-          const txMonth = `${y}-${m}`;
-          return txMonth === monthKey;
-        });
-        
-        const receitas = txsInMonth.filter(tx => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
-        const despesas = Math.abs(txsInMonth.filter(tx => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0));
-        
-        trends.push({
-          month: monthKey,
-          receitas,
-          despesas,
-        });
-      }
-      
-      res.json({ trends });
-    } catch (error: any) {
-      getLogger(req).error("Erro ao buscar trends PJ", {
-        event: "pj.dashboard.trends",
-        context: { clientId: req.query?.clientId },
-      }, error);
-      res.status(500).json({ error: error.message || "Erro ao buscar trends" });
     }
-  });
+  );
   
   /**
    * GET /api/pj/dashboard/top-costs
    * Top 10 custos por categoria DFC
    */
-  app.get("/api/pj/dashboard/top-costs", scopeRequired("PJ"), async (req, res) => {
-    try {
-      const clientId = req.query.clientId as string;
-      const month = req.query.month as string; // YYYY-MM
-      
-      if (!clientId || !month) {
-        return res.status(400).json({ error: "clientId e month são obrigatórios" });
-      }
-      
-      const [year, monthNum] = month.split("-");
-      const startDate = `01/${monthNum}/${year}`;
-      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
-      const endDate = `${lastDay}/${monthNum}/${year}`;
-      
-      const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx =>
-        tx.amount < 0 &&
-        isBetweenDates(tx.date, startDate, endDate)
-      );
-      
-      // Agrupar por dfcItem
-      const grouped = new Map<string, { category: string; item: string; total: number }>();
-      
-      for (const tx of txsInMonth) {
-        const key = tx.dfcItem || "Sem categoria";
-        const existing = grouped.get(key);
-        
-        if (existing) {
-          existing.total += Math.abs(tx.amount);
-        } else {
-          grouped.set(key, {
-            category: tx.dfcCategory || "Despesas",
-            item: tx.dfcItem || "Sem categoria",
-            total: Math.abs(tx.amount),
-          });
+  app.get(
+    "/api/pj/dashboard/top-costs",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        const month = req.query.month as string; // YYYY-MM
+
+        if (!clientId || !month) {
+          return res.status(400).json({ error: "clientId e month são obrigatórios" });
         }
+
+        const bankAccount = req.bankAccountContext;
+        if (!bankAccount) {
+          return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const [year, monthNum] = month.split("-");
+        const startDate = `01/${monthNum}/${year}`;
+        const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+        const endDate = `${lastDay}/${monthNum}/${year}`;
+
+        const bankTxs = await storage.getBankTransactions(clientId, bankAccount.id);
+        const txsInMonth = bankTxs.filter(
+          tx => tx.amount < 0 && isBetweenDates(tx.date, startDate, endDate)
+        );
+
+        // Agrupar por dfcItem
+        const grouped = new Map<string, { category: string; item: string; total: number }>();
+
+        for (const tx of txsInMonth) {
+          const key = tx.dfcItem || "Sem categoria";
+          const existing = grouped.get(key);
+
+          if (existing) {
+            existing.total += Math.abs(tx.amount);
+          } else {
+            grouped.set(key, {
+              category: tx.dfcCategory || "Despesas",
+              item: tx.dfcItem || "Sem categoria",
+              total: Math.abs(tx.amount),
+            });
+          }
+        }
+
+        // Ordenar e pegar top 10
+        const sorted = Array.from(grouped.values()).sort((a, b) => b.total - a.total).slice(0, 10);
+      
+        res.json({ topCosts: sorted });
+      } catch (error: any) {
+        getLogger(req).error("Erro ao buscar top-costs PJ", {
+          event: "pj.dashboard.top-costs",
+          context: { clientId: req.query?.clientId },
+        }, error);
+        res.status(500).json({ error: error.message || "Erro ao buscar top-costs" });
       }
-      
-      // Ordenar e pegar top 10
-      const sorted = Array.from(grouped.values()).sort((a, b) => b.total - a.total).slice(0, 10);
-      
-      res.json({ topCosts: sorted });
-    } catch (error: any) {
-      getLogger(req).error("Erro ao buscar top-costs PJ", {
-        event: "pj.dashboard.top-costs",
-        context: { clientId: req.query?.clientId },
-      }, error);
-      res.status(500).json({ error: error.message || "Erro ao buscar top-costs" });
     }
-  });
+  );
   
   /**
    * GET /api/pj/dashboard/revenue-split
@@ -1892,60 +1955,70 @@ export function registerPJRoutes(app: Express) {
    * GET /api/pj/dashboard/dfc
    * Demonstração de Fluxo de Caixa (DFC) por categoria
    */
-  app.get("/api/pj/dashboard/dfc", scopeRequired("PJ"), async (req, res) => {
-    try {
-      const clientId = req.query.clientId as string;
-      const month = req.query.month as string; // YYYY-MM
-      
-      if (!clientId || !month) {
-        return res.status(400).json({ error: "clientId e month são obrigatórios" });
-      }
-      
-      const [year, monthNum] = month.split("-");
-      const startDate = `01/${monthNum}/${year}`;
-      const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
-      const endDate = `${lastDay}/${monthNum}/${year}`;
-      
-      const bankTxs = await storage.getBankTransactions(clientId);
-      const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
-      
-      // Agrupar por categoria DFC
-      const categories = new Map<string, { inflows: number; outflows: number }>();
-      
-      for (const tx of txsInMonth) {
-        const category = tx.dfcCategory || "Operacional";
-        const existing = categories.get(category);
-        
-        if (tx.amount > 0) {
-          if (existing) {
-            existing.inflows += tx.amount;
+  app.get(
+    "/api/pj/dashboard/dfc",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        const month = req.query.month as string; // YYYY-MM
+
+        if (!clientId || !month) {
+          return res.status(400).json({ error: "clientId e month são obrigatórios" });
+        }
+
+        const bankAccount = req.bankAccountContext;
+        if (!bankAccount) {
+          return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const [year, monthNum] = month.split("-");
+        const startDate = `01/${monthNum}/${year}`;
+        const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+        const endDate = `${lastDay}/${monthNum}/${year}`;
+
+        const bankTxs = await storage.getBankTransactions(clientId, bankAccount.id);
+        const txsInMonth = bankTxs.filter(tx => isBetweenDates(tx.date, startDate, endDate));
+
+        // Agrupar por categoria DFC
+        const categories = new Map<string, { inflows: number; outflows: number }>();
+
+        for (const tx of txsInMonth) {
+          const category = tx.dfcCategory || "Operacional";
+          const existing = categories.get(category);
+
+          if (tx.amount > 0) {
+            if (existing) {
+              existing.inflows += tx.amount;
+            } else {
+              categories.set(category, { inflows: tx.amount, outflows: 0 });
+            }
           } else {
-            categories.set(category, { inflows: tx.amount, outflows: 0 });
-          }
-        } else {
-          if (existing) {
-            existing.outflows += Math.abs(tx.amount);
-          } else {
-            categories.set(category, { inflows: 0, outflows: Math.abs(tx.amount) });
+            if (existing) {
+              existing.outflows += Math.abs(tx.amount);
+            } else {
+              categories.set(category, { inflows: 0, outflows: Math.abs(tx.amount) });
+            }
           }
         }
+
+        const dfc = Array.from(categories.entries()).map(([category, data]) => ({
+          category,
+          inflows: data.inflows,
+          outflows: data.outflows,
+          net: data.inflows - data.outflows,
+        }));
+      
+        res.json({ dfc });
+      } catch (error: any) {
+        getLogger(req).error("Erro ao buscar DFC PJ", {
+          event: "pj.dashboard.cashflow",
+          context: { clientId: req.query?.clientId },
+        }, error);
+        res.status(500).json({ error: error.message || "Erro ao buscar DFC" });
       }
-      
-      const dfc = Array.from(categories.entries()).map(([category, data]) => ({
-        category,
-        inflows: data.inflows,
-        outflows: data.outflows,
-        net: data.inflows - data.outflows,
-      }));
-      
-      res.json({ dfc });
-    } catch (error: any) {
-      getLogger(req).error("Erro ao buscar DFC PJ", {
-        event: "pj.dashboard.cashflow",
-        context: { clientId: req.query?.clientId },
-      }, error);
-      res.status(500).json({ error: error.message || "Erro ao buscar DFC" });
     }
-  });
+  );
 }
 
