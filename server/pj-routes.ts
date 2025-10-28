@@ -685,8 +685,21 @@ export function registerPJRoutes(app: Express) {
           statement.BANKACCTFROM?.BANKID ||
           `conta_${accountSummaries.length + 1}`;
 
+        const maskedBankName = extractMaskedBankNameFromStatement(statement, fallbackBankNameRaw);
+        const accountLogger = ingestionLogger.child({
+          bankAccountId: accountId,
+          bankName: maskedBankName,
+        });
+
+        accountLogger.info("Iniciando processamento de extrato bancário", {
+          event: "pj.ofx.import.account.start",
+          context: {
+            clientId,
+            statementIndex: accountSummaries.length + 1,
+          },
+        });
+
         if (!activeTimers.has(accountId)) {
-          const maskedBankName = extractMaskedBankNameFromStatement(statement, fallbackBankNameRaw);
           activeTimers.set(accountId, startOfxIngestionTimer(clientId, accountId, maskedBankName));
         }
 
@@ -697,6 +710,14 @@ export function registerPJRoutes(app: Express) {
         if (txArray.length === 0) {
           accountTransactionTotals.set(accountId, 0);
           addWarning(accountId, `Conta ${accountId} sem transações no período informado.`);
+          accountLogger.warn("Conta sem transações no extrato OFX", {
+            event: "pj.ofx.import.account.empty",
+            context: {
+              clientId,
+              bankAccountId: accountId,
+              bankName: maskedBankName,
+            },
+          });
           accountSummaries.push({
             accountId,
             currency: statement.CURDEF,
@@ -836,6 +857,27 @@ export function registerPJRoutes(app: Express) {
           totalDebits: round2(totalDebits),
           net,
           divergence,
+        });
+
+        const perAccountNew = newTransactionsByAccount.get(accountId) ?? [];
+        const perAccountWarnings = warningsByAccount.get(accountId) ?? [];
+        accountLogger.info("Extrato bancário processado", {
+          event: "pj.ofx.import.account.summary",
+          context: {
+            clientId,
+            bankAccountId: accountId,
+            bankName: maskedBankName,
+            transactionsInStatement: txArray.length,
+            newTransactions: perAccountNew.length,
+            deduped: txArray.length - perAccountNew.length,
+            warnings: perAccountWarnings.length,
+            startDate,
+            endDate,
+            openingBalance,
+            ledgerClosingBalance,
+            computedClosingBalance,
+            divergence,
+          },
         });
       }
 
