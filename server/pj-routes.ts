@@ -12,7 +12,7 @@ import {
   type CategorizationRule,
   type OFXImport,
 } from "@shared/schema";
-import { formatBR, toISOFromBR, isBetweenDates } from "@shared/utils";
+import { formatBR, toISOFromBR, isBetweenDates, maskPIIValue } from "@shared/utils";
 import {
   applyCategorizationRules,
   calculateSettlementPlan,
@@ -26,6 +26,7 @@ import { z } from "zod";
 import { recordAuditEvent } from "./security/audit";
 import { getLogger } from "./observability/logger";
 import {
+  ofxIngestionDuration,
   startOfxIngestionTimer,
   recordOfxIngestionDuration,
   incrementOfxError,
@@ -75,6 +76,48 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
+
+const UNKNOWN_BANK_LABEL = "unknown";
+
+function coerceBankLabel(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+function maskBankLabel(value: unknown): string {
+  const normalized = coerceBankLabel(value);
+  if (!normalized || normalized.toLowerCase() === UNKNOWN_BANK_LABEL) {
+    return UNKNOWN_BANK_LABEL;
+  }
+
+  const masked = maskPIIValue("bankName", normalized);
+  return typeof masked === "string" ? masked : String(masked);
+}
+
+function extractMaskedBankNameFromStatement(statement: any, fallbackBankName?: unknown): string {
+  const candidates = [
+    statement?.BANKACCTFROM?.BANKNAME,
+    statement?.BANKACCTFROM?.BANKID,
+    statement?.BANKACCTFROM?.BRANCHID,
+    statement?.CCACCTFROM?.BANKNAME,
+    statement?.CCACCTFROM?.BANKID,
+    statement?.CCACCTFROM?.BRANCHID,
+    fallbackBankName,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = coerceBankLabel(candidate);
+    if (!normalized) {
+      continue;
+    }
+    return maskBankLabel(normalized);
+  }
+
+  return UNKNOWN_BANK_LABEL;
+}
 
 export function registerPJRoutes(app: Express) {
   // ===== VENDAS PJ =====
@@ -325,8 +368,6 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
-      timer = startOfxIngestionTimer(clientId);
-      
       // Parse CSV
       const csvContent = req.file.buffer.toString("utf-8");
       const lines = csvContent.split("\n").filter(l => l.trim());
@@ -523,10 +564,11 @@ export function registerPJRoutes(app: Express) {
     const baseLogger = getLogger(req);
     const importId = crypto.randomUUID();
     let ingestionLogger = baseLogger.child({ importId });
-    let timer: ReturnType<typeof startOfxIngestionTimer> | null = null;
+    const activeTimers = new Map<string, ReturnType<typeof startOfxIngestionTimer>>();
     let warnings: string[] = [];
     let errorStage = "initial";
     let clientId: string | undefined;
+    let ingestionStartedAt: bigint | null = null;
 
     try {
       if (!req.file) {
@@ -545,7 +587,7 @@ export function registerPJRoutes(app: Express) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
-      timer = startOfxIngestionTimer(clientId);
+      ingestionStartedAt = process.hrtime.bigint();
 
       const buffer = req.file.buffer;
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
@@ -631,6 +673,9 @@ export function registerPJRoutes(app: Express) {
 
       errorStage = "processing";
 
+      const signonFi = ofxData?.OFX?.SIGNONMSGSRSV1?.SONRS?.FI;
+      const fallbackBankNameRaw = signonFi?.ORG || signonFi?.FID;
+
       for (const account of accountsArray) {
         const parsedAccount = ofxStatementSchema.parse(account);
         const statement = parsedAccount.STMTRS;
@@ -639,6 +684,11 @@ export function registerPJRoutes(app: Express) {
           statement.BANKACCTFROM?.ACCTID ||
           statement.BANKACCTFROM?.BANKID ||
           `conta_${accountSummaries.length + 1}`;
+
+        if (!activeTimers.has(accountId)) {
+          const maskedBankName = extractMaskedBankNameFromStatement(statement, fallbackBankNameRaw);
+          activeTimers.set(accountId, startOfxIngestionTimer(clientId, accountId, maskedBankName));
+        }
 
         const existingImport = await storage.getOFXImport(clientId, accountId, fileHash);
         existingImports.set(accountId, existingImport);
@@ -863,7 +913,15 @@ export function registerPJRoutes(app: Express) {
       });
 
       errorStage = "response";
-      const durationMs = timer ? recordOfxIngestionDuration(timer, "success") : 0;
+      activeTimers.forEach(timer => {
+        recordOfxIngestionDuration(timer, "success");
+      });
+      activeTimers.clear();
+
+      const durationMs =
+        ingestionStartedAt !== null
+          ? Number(process.hrtime.bigint() - ingestionStartedAt) / 1_000_000
+          : 0;
       recordOfxImportOutcome({
         clientId,
         importId,
@@ -897,8 +955,33 @@ export function registerPJRoutes(app: Express) {
       });
     } catch (error: any) {
       if (clientId) {
-        incrementOfxError(clientId, errorStage);
-        const durationMs = timer ? recordOfxIngestionDuration(timer, "error") : 0;
+        const hrNow = process.hrtime.bigint();
+        if (activeTimers.size > 0) {
+          activeTimers.forEach(timer => {
+            incrementOfxError(timer.clientId, timer.bankAccountId, errorStage, timer.bankName);
+            recordOfxIngestionDuration(timer, "error");
+          });
+          activeTimers.clear();
+        } else {
+          incrementOfxError(clientId, UNKNOWN_BANK_LABEL, errorStage);
+          const elapsedSeconds =
+            ingestionStartedAt !== null
+              ? Number(hrNow - ingestionStartedAt) / 1_000_000_000
+              : 0;
+          ofxIngestionDuration.observe(
+            {
+              clientId,
+              bankAccountId: UNKNOWN_BANK_LABEL,
+              bankName: UNKNOWN_BANK_LABEL,
+              status: "error",
+            },
+            elapsedSeconds
+          );
+        }
+
+        const durationMs =
+          ingestionStartedAt !== null ? Number(hrNow - ingestionStartedAt) / 1_000_000 : 0;
+
         recordOfxImportOutcome({
           clientId,
           importId,

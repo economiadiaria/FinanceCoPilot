@@ -9,6 +9,7 @@ import crypto from "crypto";
 import { registerRoutes } from "../server/routes";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
 import type { Client, OFXImport, User } from "@shared/schema";
+import { maskPIIValue } from "@shared/utils";
 import * as metrics from "../server/observability/metrics";
 
 const MASTER_EMAIL = "master@example.com";
@@ -26,12 +27,33 @@ const SAMPLE_OFX_OTHER_ACCOUNT = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECU
 
 const MULTI_ACCOUNT_OFX = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:UTF-8\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n  <BANKMSGSRSV1>\n    <STMTTRNRS>\n      <TRNUID>3001\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>001\n          <ACCTID>${SAMPLE_ACCOUNT_ID}\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240201000000\n          <DTEND>20240228235959\n          <STMTTRN>\n            <TRNTYPE>CREDIT\n            <DTPOSTED>20240205\n            <TRNAMT>500.00\n            <FITID>MULTI-A-1\n            <NAME>Recebimento Conta A\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>500.00\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n    <STMTTRNRS>\n      <TRNUID>3002\n      <STATUS>\n        <CODE>0\n        <SEVERITY>INFO\n      </STATUS>\n      <STMTRS>\n        <CURDEF>BRL\n        <BANKACCTFROM>\n          <BANKID>001\n          <ACCTID>${SECOND_ACCOUNT_ID}\n        </BANKACCTFROM>\n        <BANKTRANLIST>\n          <DTSTART>20240201000000\n          <DTEND>20240228235959\n          <STMTTRN>\n            <TRNTYPE>DEBIT\n            <DTPOSTED>20240210\n            <TRNAMT>200.00\n            <FITID>MULTI-B-1\n            <NAME>Despesa Conta B\n          </STMTTRN>\n        </BANKTRANLIST>\n        <LEDGERBAL>\n          <BALAMT>300.00\n        </LEDGERBAL>\n      </STMTRS>\n    </STMTTRNRS>\n  </BANKMSGSRSV1>\n</OFX>\n`;
 
-function getDurationCount(snapshot: any[], status: "success" | "error") {
+const UNKNOWN_LABEL = "unknown";
+
+function maskBankNameLabel(raw: string) {
+  if (!raw || raw.toLowerCase() === UNKNOWN_LABEL) {
+    return UNKNOWN_LABEL;
+  }
+  const masked = maskPIIValue("bankName", raw);
+  return typeof masked === "string" ? masked : String(masked);
+}
+
+const METRICS_SAMPLE_ACCOUNT_ID = "7890";
+const METRICS_SAMPLE_BANK_ID = "001";
+const METRICS_MASKED_BANK_NAME = maskBankNameLabel(METRICS_SAMPLE_BANK_ID);
+
+function getDurationCount(
+  snapshot: any[],
+  status: "success" | "error",
+  bankAccountId: string,
+  bankName: string
+) {
   const metric = snapshot.find(entry => entry.name === "ofx_ingestion_duration_seconds");
   const countEntry = metric?.values?.find((value: any) => {
     const labels = value.labels ?? {};
     return (
       labels.clientId === CLIENT_ID &&
+      labels.bankAccountId === bankAccountId &&
+      labels.bankName === bankName &&
       labels.status === status &&
       labels.le === "+Inf"
     );
@@ -39,11 +61,13 @@ function getDurationCount(snapshot: any[], status: "success" | "error") {
   return countEntry?.value ?? 0;
 }
 
-function getErrorCount(snapshot: any[], stage: string) {
+function getErrorCount(snapshot: any[], stage: string, bankAccountId: string, bankName: string) {
   const metric = snapshot.find(entry => entry.name === "ofx_ingestion_errors_total");
   const entry = metric?.values?.find(
     (value: any) =>
       value.labels?.clientId === CLIENT_ID &&
+      value.labels?.bankAccountId === bankAccountId &&
+      value.labels?.bankName === bankName &&
       value.labels?.stage === stage
   );
   return entry?.value ?? 0;
@@ -381,9 +405,19 @@ describe("OFX ingestion robustness", () => {
 
     await metrics.metricsRegistry.metrics();
     const beforeSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
-    const beforeSuccessCount = getDurationCount(beforeSnapshot, "success");
-    const beforeErrorCount = getDurationCount(beforeSnapshot, "error");
-    const beforeErrorCounter = getErrorCount(beforeSnapshot, "parse");
+    const beforeSuccessCount = getDurationCount(
+      beforeSnapshot,
+      "success",
+      METRICS_SAMPLE_ACCOUNT_ID,
+      METRICS_MASKED_BANK_NAME
+    );
+    const beforeErrorCount = getDurationCount(
+      beforeSnapshot,
+      "error",
+      METRICS_SAMPLE_ACCOUNT_ID,
+      METRICS_MASKED_BANK_NAME
+    );
+    const beforeErrorCounter = getErrorCount(beforeSnapshot, "parse", UNKNOWN_LABEL, UNKNOWN_LABEL);
 
     const sampleOfx = `OFXHEADER:100
 DATA:OFXSGML
@@ -439,9 +473,19 @@ NEWFILEUID:NONE
     await metrics.metricsRegistry.metrics();
     const afterSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
 
-    const afterSuccessCount = getDurationCount(afterSnapshot, "success");
-    const afterErrorCount = getDurationCount(afterSnapshot, "error");
-    const afterErrorCounter = getErrorCount(afterSnapshot, "parse");
+    const afterSuccessCount = getDurationCount(
+      afterSnapshot,
+      "success",
+      METRICS_SAMPLE_ACCOUNT_ID,
+      METRICS_MASKED_BANK_NAME
+    );
+    const afterErrorCount = getDurationCount(
+      afterSnapshot,
+      "error",
+      METRICS_SAMPLE_ACCOUNT_ID,
+      METRICS_MASKED_BANK_NAME
+    );
+    const afterErrorCounter = getErrorCount(afterSnapshot, "parse", UNKNOWN_LABEL, UNKNOWN_LABEL);
 
     assert.equal(afterSuccessCount, beforeSuccessCount + 1);
     assert.equal(afterErrorCount, beforeErrorCount);
@@ -459,9 +503,19 @@ NEWFILEUID:NONE
 
     await metrics.metricsRegistry.metrics();
     const beforeSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
-    const beforeSuccessCount = getDurationCount(beforeSnapshot, "success");
-    const beforeErrorCount = getDurationCount(beforeSnapshot, "error");
-    const beforeParseErrors = getErrorCount(beforeSnapshot, "parse");
+    const beforeSuccessCount = getDurationCount(
+      beforeSnapshot,
+      "success",
+      UNKNOWN_LABEL,
+      UNKNOWN_LABEL
+    );
+    const beforeErrorCount = getDurationCount(
+      beforeSnapshot,
+      "error",
+      UNKNOWN_LABEL,
+      UNKNOWN_LABEL
+    );
+    const beforeParseErrors = getErrorCount(beforeSnapshot, "parse", UNKNOWN_LABEL, UNKNOWN_LABEL);
 
     const response = await agent
       .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
@@ -475,9 +529,19 @@ NEWFILEUID:NONE
     await metrics.metricsRegistry.metrics();
     const afterSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
 
-    const afterSuccessCount = getDurationCount(afterSnapshot, "success");
-    const afterErrorCount = getDurationCount(afterSnapshot, "error");
-    const afterParseErrors = getErrorCount(afterSnapshot, "parse");
+    const afterSuccessCount = getDurationCount(
+      afterSnapshot,
+      "success",
+      UNKNOWN_LABEL,
+      UNKNOWN_LABEL
+    );
+    const afterErrorCount = getDurationCount(
+      afterSnapshot,
+      "error",
+      UNKNOWN_LABEL,
+      UNKNOWN_LABEL
+    );
+    const afterParseErrors = getErrorCount(afterSnapshot, "parse", UNKNOWN_LABEL, UNKNOWN_LABEL);
 
     assert.equal(afterErrorCount, beforeErrorCount + 1);
     assert.equal(afterSuccessCount, beforeSuccessCount);
