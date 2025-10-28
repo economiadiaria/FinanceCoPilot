@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from "axios";
+import { logger } from "./observability/logger";
 
 // Pluggy configuration from environment
 const PLUGGY_API_URL = process.env.PLUGGY_API_URL || "";
@@ -50,7 +51,10 @@ class PluggyClient {
       // Token typically expires in 1 hour, refresh 5 mins before
       this.tokenExpiresAt = Date.now() + (55 * 60 * 1000);
     } catch (error: any) {
-      console.error("Pluggy authentication failed:", error.response?.data || error.message);
+      logger.error("Pluggy authentication failed", {
+        event: "pluggy.auth",
+        context: { status: error.response?.status },
+      }, error);
       throw new Error("Failed to authenticate with Pluggy");
     }
   }
@@ -79,7 +83,10 @@ class PluggyClient {
 
       return response.data.accessToken;
     } catch (error: any) {
-      console.error("Failed to create connect token:", error.response?.data || error.message);
+      logger.error("Failed to create connect token", {
+        event: "pluggy.connect-token",
+        context: { clientUserId, status: error.response?.status },
+      }, error);
       throw new Error("Failed to create connect token");
     }
   }
@@ -99,7 +106,10 @@ class PluggyClient {
 
       return response.data;
     } catch (error: any) {
-      console.error(`Failed to get item ${itemId}:`, error.response?.data || error.message);
+      logger.error("Failed to get pluggy item", {
+        event: "pluggy.item",
+        context: { itemId, status: error.response?.status },
+      }, error);
       throw new Error(`Failed to get item ${itemId}`);
     }
   }
@@ -119,7 +129,10 @@ class PluggyClient {
 
       return response.data.results || [];
     } catch (error: any) {
-      console.error(`Failed to get accounts for item ${itemId}:`, error.response?.data || error.message);
+      logger.error("Failed to get pluggy accounts", {
+        event: "pluggy.accounts",
+        context: { itemId, status: error.response?.status },
+      }, error);
       throw new Error(`Failed to get accounts for item ${itemId}`);
     }
   }
@@ -148,7 +161,10 @@ class PluggyClient {
 
       return response.data.results || [];
     } catch (error: any) {
-      console.error(`Failed to get transactions for account ${accountId}:`, error.response?.data || error.message);
+      logger.error("Failed to get pluggy transactions", {
+        event: "pluggy.transactions",
+        context: { accountId, status: error.response?.status },
+      }, error);
       throw new Error(`Failed to get transactions for account ${accountId}`);
     }
   }
@@ -168,7 +184,10 @@ class PluggyClient {
 
       return response.data.results || [];
     } catch (error: any) {
-      console.error(`Failed to get investments for account ${accountId}:`, error.response?.data || error.message);
+      logger.error("Failed to get pluggy investments", {
+        event: "pluggy.investments",
+        context: { accountId, status: error.response?.status },
+      }, error);
       // Not all accounts have investments, return empty array
       return [];
     }
