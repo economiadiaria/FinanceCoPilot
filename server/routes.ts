@@ -565,13 +565,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 2. POST /api/import/ofx - Import OFX file
-  app.post("/api/import/ofx", upload.single("ofx"), async (req, res) => {
+  app.post(
+    "/api/import/ofx",
+    upload.single("ofx"),
+    validateClientAccess,
+    async (req, res) => {
     try {
-      const { clientId } = req.body;
+      const client = req.clientContext;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
       }
+
+      if (req.body?.clientId && req.body.clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+      }
+
+      const clientId = client.clientId;
 
       if (!req.file) {
         return res.status(400).json({ error: "Nenhum arquivo OFX enviado." });
@@ -755,24 +765,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       getLogger(req).error("Erro ao importar OFX", {
         event: "pf.ofx.import",
-        context: { clientId: req.body?.clientId },
+          context: { clientId },
       }, error);
       res.status(400).json({
         error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX"
       });
     }
-  });
+    }
+  );
 
   // 3. GET /api/transactions/list - List transactions with filters
-  app.get("/api/transactions/list", async (req, res) => {
+  app.get("/api/transactions/list", validateClientAccess, async (req, res) => {
     try {
-      const { clientId, status, from, to, category } = req.query;
+      const client = req.clientContext;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
       }
 
-      let transactions = await storage.getTransactions(clientId as string);
+      const { status, from, to, category, clientId } = req.query;
+
+      if (clientId && clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+      }
+
+      let transactions = await storage.getTransactions(client.clientId);
 
       // Apply filters
       if (status && status !== "all") {
@@ -806,11 +823,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 4. POST /api/transactions/categorize - Categorize transactions in bulk
-  app.post("/api/transactions/categorize", async (req, res) => {
+  app.post("/api/transactions/categorize", validateClientAccess, async (req, res) => {
     try {
-      const { clientId, indices, category, subcategory } = categorizeSchema.parse(req.body);
+      const parsedBody = categorizeSchema.parse(req.body);
+      const client = req.clientContext;
 
-      const transactions = await storage.getTransactions(clientId);
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
+      }
+
+      const { indices, category, subcategory, clientId } = parsedBody;
+
+      if (clientId && clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+      }
+
+      const transactions = await storage.getTransactions(client.clientId);
 
       for (const index of indices) {
         if (index >= 0 && index < transactions.length) {
@@ -852,7 +880,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      await storage.setTransactions(clientId, transactions);
+      await storage.setTransactions(client.clientId, transactions);
       res.json({ success: true, updated: indices.length });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : "Erro ao categorizar" });
