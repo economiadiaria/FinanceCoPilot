@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
+import { validateClientAccess } from "./middleware/scope";
 import { pluggyClient, hasPluggyCredentials } from "./pluggy";
 import { getLogger } from "./observability/logger";
 import type { OFItem, OFAccount, Transaction, Position } from "@shared/schema";
@@ -28,7 +29,7 @@ function normalizeAccountType(pluggyType: string): string {
 
 export function registerOpenFinanceRoutes(app: Express) {
   // POST /api/openfinance/consent/start - Create connect token
-  app.post("/api/openfinance/consent/start", authMiddleware, async (req, res) => {
+  app.post("/api/openfinance/consent/start", authMiddleware, validateClientAccess, async (req, res) => {
     try {
       const { clientId } = req.body;
 
@@ -36,14 +37,15 @@ export function registerOpenFinanceRoutes(app: Express) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
-      // Check if user has access to this client
-      const user = await storage.getUserById(req.session.userId!);
+      const user = req.authUser;
+      const client = req.clientContext;
+
       if (!user) {
         return res.status(401).json({ error: "Usuário não encontrado" });
       }
 
-      if (user.role === "cliente" && !user.clientIds.includes(clientId)) {
-        return res.status(403).json({ error: "Acesso negado a este cliente" });
+      if (!client || client.clientId !== clientId) {
+        return res.status(400).json({ error: "Contexto do cliente não carregado" });
       }
 
       // Check if Pluggy credentials are configured
@@ -128,7 +130,7 @@ export function registerOpenFinanceRoutes(app: Express) {
   });
 
   // POST /api/openfinance/sync - Sync accounts, transactions, and positions
-  app.post("/api/openfinance/sync", authMiddleware, async (req, res) => {
+  app.post("/api/openfinance/sync", authMiddleware, validateClientAccess, async (req, res) => {
     try {
       const { clientId, full = false } = req.body;
 
@@ -136,14 +138,10 @@ export function registerOpenFinanceRoutes(app: Express) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
-      // Check if user has access to this client
-      const user = await storage.getUserById(req.session.userId!);
-      if (!user) {
-        return res.status(401).json({ error: "Usuário não encontrado" });
-      }
+      const client = req.clientContext;
 
-      if (user.role === "cliente" && !user.clientIds.includes(clientId)) {
-        return res.status(403).json({ error: "Acesso negado a este cliente" });
+      if (!client || client.clientId !== clientId) {
+        return res.status(400).json({ error: "Contexto do cliente não carregado" });
       }
 
       // Check if in simulated mode
@@ -373,7 +371,7 @@ export function registerOpenFinanceRoutes(app: Express) {
   });
 
   // GET /api/openfinance/items - List client connections
-  app.get("/api/openfinance/items", authMiddleware, async (req, res) => {
+  app.get("/api/openfinance/items", authMiddleware, validateClientAccess, async (req, res) => {
     try {
       const { clientId } = req.query;
 
@@ -381,14 +379,10 @@ export function registerOpenFinanceRoutes(app: Express) {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
 
-      // Check if user has access to this client
-      const user = await storage.getUserById(req.session.userId!);
-      if (!user) {
-        return res.status(401).json({ error: "Usuário não encontrado" });
-      }
+      const client = req.clientContext;
 
-      if (user.role === "cliente" && !user.clientIds.includes(clientId)) {
-        return res.status(403).json({ error: "Acesso negado a este cliente" });
+      if (!client || client.clientId !== clientId) {
+        return res.status(400).json({ error: "Contexto do cliente não carregado" });
       }
 
       const items = await storage.getOFItems(clientId);
