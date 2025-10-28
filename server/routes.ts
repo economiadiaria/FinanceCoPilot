@@ -112,8 +112,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createUser(user);
 
       const respondWithUser = () => {
-        const { passwordHash: _, ...userResponse } = user;
-        res.json({ user: userResponse });
+        res.json({ user: sanitizeUser(user) });
       };
 
       if (!sessionUser) {
@@ -136,13 +135,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (sessionUser) {
-        await recordAuditEvent({
+        recordAuditEvent({
           user: sessionUser,
           eventType: "user.create",
           targetType: "user",
           targetId: userId,
           metadata: { role: data.role },
           piiSnapshot: { email: data.email, name: data.name },
+        }).catch(err => {
+          console.error("Falha ao registrar auditoria de criação de usuário:", err);
         });
       }
     } catch (error) {
