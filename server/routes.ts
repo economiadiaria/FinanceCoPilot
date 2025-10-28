@@ -1,15 +1,19 @@
-import type { Express } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import { createServer, type Server } from "http";
+import fs from "node:fs";
+import path from "node:path";
+import multer from "multer";
+import Ofx from "ofx-js";
+import crypto from "crypto";
+import bcrypt from "bcrypt";
+import swaggerUi from "swagger-ui-express";
+import yaml from "yaml";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
 import { requireRole } from "./middleware/rbac";
 import { validateClientAccess } from "./middleware/scope";
 import { registerOpenFinanceRoutes } from "./openfinance-routes";
 import { registerPJRoutes } from "./pj-routes";
-import multer from "multer";
-import Ofx from "ofx-js";
-import crypto from "crypto";
-import bcrypt from "bcrypt";
 import {
   clientSchema,
   categorizeSchema,
@@ -29,6 +33,9 @@ import { z } from "zod";
 import { recordAuditEvent, listAuditLogs } from "./security/audit";
 import { getLogger, updateRequestLoggerContext } from "./observability/logger";
 import { metricsRegistry } from "./observability/metrics";
+
+const openApiSpecPath = path.resolve(process.cwd(), "docs/openapi/pj-banking.yaml");
+const openApiSpec = yaml.parse(fs.readFileSync(openApiSpecPath, "utf8")) as Record<string, unknown>;
 
 // Configure multer for file uploads
 const upload = multer({
@@ -1397,411 +1404,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // API Documentation endpoint
-  app.get("/api/docs", (req, res) => {
-    const docsHtml = `
-      <!DOCTYPE html>
-      <html lang="pt-BR">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>API Documentation - Copiloto Financeiro</title>
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { 
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; 
-            line-height: 1.6; 
-            color: #1f2937;
-            background: #f9fafb;
-            padding: 20px;
-          }
-          .container { max-width: 1200px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-          h1 { color: #1e40af; margin-bottom: 10px; font-size: 32px; }
-          h2 { color: #1e40af; margin-top: 40px; margin-bottom: 20px; font-size: 24px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }
-          h3 { color: #374151; margin-top: 30px; margin-bottom: 15px; font-size: 18px; }
-          .subtitle { color: #6b7280; margin-bottom: 30px; font-size: 16px; }
-          .endpoint { 
-            background: #f3f4f6; 
-            padding: 20px; 
-            border-radius: 8px; 
-            margin-bottom: 30px;
-            border-left: 4px solid #2563eb;
-          }
-          .method { 
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 4px;
-            font-weight: 600;
-            font-size: 12px;
-            margin-right: 10px;
-          }
-          .method.post { background: #059669; color: white; }
-          .method.get { background: #2563eb; color: white; }
-          .path { 
-            font-family: 'Monaco', 'Courier New', monospace; 
-            font-size: 14px;
-            color: #1f2937;
-            font-weight: 600;
-          }
-          .description { margin: 15px 0; color: #4b5563; }
-          .params, .response { 
-            background: white; 
-            padding: 15px; 
-            border-radius: 6px; 
-            margin-top: 15px;
-            border: 1px solid #e5e7eb;
-          }
-          .params h4, .response h4 { 
-            font-size: 14px; 
-            color: #6b7280; 
-            text-transform: uppercase; 
-            margin-bottom: 10px;
-            letter-spacing: 0.5px;
-          }
-          pre { 
-            background: #1f2937; 
-            color: #f9fafb; 
-            padding: 15px; 
-            border-radius: 6px; 
-            overflow-x: auto;
-            font-size: 13px;
-            line-height: 1.5;
-          }
-          code { 
-            font-family: 'Monaco', 'Courier New', monospace;
-            background: #f3f4f6;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 13px;
-          }
-          .note { 
-            background: #fef3c7; 
-            border-left: 4px solid #f59e0b;
-            padding: 15px; 
-            margin: 20px 0;
-            border-radius: 6px;
-          }
-          .note strong { color: #92400e; }
-          ul { margin-left: 20px; margin-top: 10px; }
-          li { margin-bottom: 8px; color: #4b5563; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>🚀 Copiloto Financeiro - API Documentation</h1>
-          <p class="subtitle">API REST para gestão financeira de Pessoa Física e Jurídica</p>
+  app.use(
+    "/api/docs",
+    (_req: Request, res: Response, next: NextFunction) => {
+      res.setHeader("Cache-Control", "private, max-age=60");
+      next();
+    },
+    swaggerUi.serve,
+    swaggerUi.setup(openApiSpec, { explorer: false })
+  );
 
-          <div class="note">
-            <strong>⚠️ Autenticação:</strong> Todos os endpoints requerem o header <code>X-API-KEY</code> com a chave de API válida.
-          </div>
-
-          <h2>📊 Gestão de Clientes</h2>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/client/upsert</span>
-            </div>
-            <p class="description">Criar ou atualizar um cliente</p>
-            <div class="params">
-              <h4>Body (JSON)</h4>
-              <pre>{
-  "clientId": "empresa_abc",
-  "name": "Empresa ABC Ltda",
-  "type": "PJ",  // "PF", "PJ" ou "BOTH"
-  "email": "contato@empresaabc.com"
-}</pre>
-            </div>
-          </div>
-
-          <div class="endpoint">
-            <div>
-              <span class="method get">GET</span>
-              <span class="path">/api/clients</span>
-            </div>
-            <p class="description">Listar todos os clientes cadastrados</p>
-          </div>
-
-          <h2>💰 Gestão de Transações</h2>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/import/ofx</span>
-            </div>
-            <p class="description">Importar transações via arquivo OFX bancário</p>
-            <div class="params">
-              <h4>Form Data (multipart/form-data)</h4>
-              <ul>
-                <li><strong>clientId:</strong> ID do cliente</li>
-                <li><strong>ofx:</strong> Arquivo .ofx (até 5MB)</li>
-              </ul>
-            </div>
-            <div class="response">
-              <h4>Resposta</h4>
-              <pre>{
-  "success": true,
-  "imported": 45,
-  "total": 120,
-  "message": "45 transações importadas com sucesso."
-}</pre>
-            </div>
-            <div class="note">
-              <strong>💡 Deduplicação:</strong> O sistema usa o FITID do OFX ou gera um hash (data+desc+valor) para evitar duplicatas.
-            </div>
-          </div>
-
-          <div class="endpoint">
-            <div>
-              <span class="method get">GET</span>
-              <span class="path">/api/transactions/list</span>
-            </div>
-            <p class="description">Listar transações com filtros opcionais</p>
-            <div class="params">
-              <h4>Query Parameters</h4>
-              <ul>
-                <li><strong>clientId</strong> (obrigatório): ID do cliente</li>
-                <li><strong>status</strong> (opcional): pendente, categorizada, revisar, all</li>
-                <li><strong>category</strong> (opcional): Receita, Custo Fixo, etc.</li>
-                <li><strong>from</strong> (opcional): Data inicial (YYYY-MM-DD)</li>
-                <li><strong>to</strong> (opcional): Data final (YYYY-MM-DD)</li>
-              </ul>
-            </div>
-            <div class="response">
-              <h4>Resposta</h4>
-              <pre>{
-  "transactions": [...],
-  "summary": {
-    "totalIn": 15000.00,
-    "totalOut": 8500.00,
-    "count": 42
-  }
-}</pre>
-            </div>
-          </div>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/transactions/categorize</span>
-            </div>
-            <p class="description">Categorizar múltiplas transações em lote</p>
-            <div class="params">
-              <h4>Body (JSON)</h4>
-              <pre>{
-  "clientId": "empresa_abc",
-  "indices": [0, 3, 7],  // índices das transações
-  "category": "Custo Fixo",
-  "subcategory": "Aluguel"  // opcional
-}</pre>
-            </div>
-          </div>
-
-          <h2>📈 Análises e KPIs</h2>
-
-          <div class="endpoint">
-            <div>
-              <span class="method get">GET</span>
-              <span class="path">/api/summary</span>
-            </div>
-            <p class="description">Obter resumo financeiro e KPIs do período</p>
-            <div class="params">
-              <h4>Query Parameters</h4>
-              <ul>
-                <li><strong>clientId</strong> (obrigatório): ID do cliente</li>
-                <li><strong>period</strong> (opcional): YYYY-MM (ex: 2025-10)</li>
-              </ul>
-            </div>
-            <div class="response">
-              <h4>Resposta (PJ)</h4>
-              <pre>{
-  "totalIn": 25000.00,
-  "totalOut": 12000.00,
-  "balance": 13000.00,
-  "revenue": 25000.00,
-  "costs": 10500.00,
-  "profit": 14500.00,
-  "margin": 58.0,
-  "ticketMedio": 2500.00,
-  "topCosts": [
-    { "category": "Custo Fixo", "amount": 5000.00 },
-    ...
-  ],
-  "insights": [
-    "Suas taxas representam 6.2% da receita (> 5%). Recomendamos renegociar..."
-  ]
-}</pre>
-            </div>
-            <div class="note">
-              <strong>🧠 Heurísticas Inteligentes:</strong>
-              <ul>
-                <li><strong>PF:</strong> Alertas sobre Lazer > 30%, RV > target + 10pp</li>
-                <li><strong>PJ:</strong> Alertas sobre Taxas > 5%, Caixa parado > 20% receita</li>
-              </ul>
-            </div>
-          </div>
-
-          <h2>💼 Investimentos</h2>
-
-          <div class="endpoint">
-            <div>
-              <span class="method get">GET</span>
-              <span class="path">/api/investments/positions</span>
-            </div>
-            <p class="description">Listar posições de investimentos</p>
-            <div class="params">
-              <h4>Query Parameters</h4>
-              <ul>
-                <li><strong>clientId</strong> (obrigatório): ID do cliente</li>
-              </ul>
-            </div>
-          </div>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/investments/positions</span>
-            </div>
-            <p class="description">Adicionar nova posição de investimento</p>
-            <div class="params">
-              <h4>Body (JSON)</h4>
-              <pre>{
-  "clientId": "empresa_abc",
-  "asset": "CDB Banco XYZ",
-  "class": "RF",  // RF, RV, Fundos, Outros
-  "value": 15000.00,
-  "rate": 12.5,  // opcional (% a.a.)
-  "liquidity": "D+1",  // opcional
-  "maturity": "2026-12-31"  // opcional (YYYY-MM-DD)
-}</pre>
-            </div>
-          </div>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/investments/rebalance/suggest</span>
-            </div>
-            <p class="description">Obter sugestões de rebalanceamento de carteira</p>
-            <div class="params">
-              <h4>Body (JSON)</h4>
-              <pre>{ "clientId": "empresa_abc" }</pre>
-            </div>
-            <div class="response">
-              <h4>Resposta (PF)</h4>
-              <pre>[
-  {
-    "class": "RV",
-    "currentPct": 35,
-    "targetPct": 20,
-    "difference": 15,
-    "action": "Reduzir RV em 15pp, investindo em RF/Fundos."
-  }
-]</pre>
-            </div>
-          </div>
-
-          <h2>📄 Relatórios</h2>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/reports/generate</span>
-            </div>
-            <p class="description">Gerar relatório mensal em HTML</p>
-            <div class="params">
-              <h4>Body (JSON)</h4>
-              <pre>{
-  "clientId": "empresa_abc",
-  "period": "2025-10",
-  "notes": "Mês com crescimento de 15% em vendas."  // opcional
-}</pre>
-            </div>
-            <div class="response">
-              <h4>Resposta</h4>
-              <pre>{
-  "success": true,
-  "html": "&lt;!DOCTYPE html&gt;..."
-}</pre>
-            </div>
-          </div>
-
-          <div class="endpoint">
-            <div>
-              <span class="method get">GET</span>
-              <span class="path">/api/reports/view</span>
-            </div>
-            <p class="description">Visualizar relatório HTML gerado</p>
-            <div class="params">
-              <h4>Query Parameters</h4>
-              <ul>
-                <li><strong>clientId</strong> (obrigatório): ID do cliente</li>
-                <li><strong>period</strong> (obrigatório): YYYY-MM</li>
-              </ul>
-            </div>
-            <div class="note">
-              <strong>💾 Exportar PDF:</strong> Abra a rota no navegador e use Ctrl+P ou Cmd+P para salvar como PDF.
-            </div>
-          </div>
-
-          <h2>⚙️ Políticas de Investimento</h2>
-
-          <div class="endpoint">
-            <div>
-              <span class="method post">POST</span>
-              <span class="path">/api/policies/upsert</span>
-            </div>
-            <p class="description">Atualizar políticas de investimento</p>
-            <div class="params">
-              <h4>Body para PF</h4>
-              <pre>{
-  "clientId": "joao_pf",
-  "data": {
-    "targets": { "RF": 60, "RV": 20, "Fundos": 15, "Outros": 5 },
-    "rule50_30_20": true
-  }
-}</pre>
-              <h4>Body para PJ</h4>
-              <pre>{
-  "clientId": "empresa_abc",
-  "data": {
-    "cashPolicy": {
-      "minRF": 70,
-      "maxRV": 10,
-      "maxIssuerPct": 30,
-      "maxDurationDays": 365
-    }
-  }
-}</pre>
-            </div>
-          </div>
-
-          <div class="endpoint">
-            <div>
-              <span class="method get">GET</span>
-              <span class="path">/api/policies</span>
-            </div>
-            <p class="description">Obter políticas configuradas</p>
-            <div class="params">
-              <h4>Query Parameters</h4>
-              <ul>
-                <li><strong>clientId</strong> (obrigatório): ID do cliente</li>
-              </ul>
-            </div>
-          </div>
-
-          <h2>🔐 Autenticação</h2>
-          <p>Todos os endpoints requerem o header <code>X-API-KEY</code>. Exemplo:</p>
-          <pre>curl -H "X-API-KEY: sua-chave-aqui" https://seu-app.replit.app/api/clients</pre>
-
-          <div class="note" style="margin-top: 40px;">
-            <strong>📚 Mais informações:</strong> Consulte o arquivo <code>replit.md</code> para detalhes sobre a arquitetura e como testar a aplicação.
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-    
-    res.send(docsHtml);
+  app.get("/api/openapi.json", (_req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "private, max-age=60");
+    res.json(openApiSpec);
   });
 
   // Register Open Finance routes
