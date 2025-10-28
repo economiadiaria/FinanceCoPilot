@@ -64,6 +64,25 @@ export function inPeriod(dateBR: string, period: string): boolean {
 }
 
 /**
+ * Verifica se uma data DD/MM/YYYY está entre duas datas (inclusive)
+ */
+export function isBetweenDates(
+  dateBR: string,
+  startDateBR: string,
+  endDateBR: string
+): boolean {
+  if (!dateBR || !startDateBR || !endDateBR) {
+    return false;
+  }
+
+  const date = new Date(toISOFromBR(dateBR));
+  const start = new Date(toISOFromBR(startDateBR));
+  const end = new Date(toISOFromBR(endDateBR));
+
+  return date >= start && date <= end;
+}
+
+/**
  * Soma segura de array de números (ignora null/undefined)
  */
 export function sum(values: (number | null | undefined)[]): number {
