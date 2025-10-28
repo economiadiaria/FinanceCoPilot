@@ -6,6 +6,7 @@ import {
   extractPattern,
   isDuplicateTransaction,
   matchesPattern,
+  normalizeOfxAmount,
 } from "../server/pj-ingestion-helpers";
 import type {
   BankTransaction,
@@ -52,7 +53,29 @@ test("calculateSettlementPlan splits installments when configured per parcel", (
   ]);
 });
 
-test("isDuplicateTransaction detects duplicates by FITID and fallback signature", () => {
+test("normalizeOfxAmount enforces debit/credit conventions", () => {
+  const credit = normalizeOfxAmount("100.237", "CREDIT");
+  assert.equal(credit.amount, 100.24);
+  assert.equal(credit.adjusted, false);
+
+  const debit = normalizeOfxAmount("125,10", "DEBIT");
+  assert.equal(debit.amount, -125.1);
+  assert.equal(debit.adjusted, true);
+
+  const debitAlreadyNegative = normalizeOfxAmount("-42.30", "DEBIT");
+  assert.equal(debitAlreadyNegative.amount, -42.3);
+  assert.equal(debitAlreadyNegative.adjusted, false);
+
+  const debitWrongSign = normalizeOfxAmount("55.00", "DEBIT");
+  assert.equal(debitWrongSign.amount, -55);
+  assert.equal(debitWrongSign.adjusted, true);
+
+  const creditWrongSign = normalizeOfxAmount("-78.33", "CREDIT");
+  assert.equal(creditWrongSign.amount, 78.33);
+  assert.equal(creditWrongSign.adjusted, true);
+});
+
+test("isDuplicateTransaction detects duplicates by FITID and date+amount", () => {
   const existing: BankTransaction[] = [
     {
       bankTxId: "tx-1",

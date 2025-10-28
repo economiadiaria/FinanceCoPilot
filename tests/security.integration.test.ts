@@ -5,6 +5,7 @@ import session from "express-session";
 import request from "supertest";
 import bcrypt from "bcrypt";
 import { registerRoutes } from "../server/routes";
+import { metricsRegistry } from "../server/observability/metrics";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
 import type { Client, User } from "@shared/schema";
 
@@ -105,6 +106,7 @@ describe("RBAC and organization boundaries", () => {
     const storage = new MemStorage();
     await seedStorage(storage);
     setStorageProvider(storage);
+    metricsRegistry.resetMetrics();
   });
 
   it("denies access to clients from other organizations", async () => {
@@ -142,5 +144,27 @@ describe("RBAC and organization boundaries", () => {
       .expect(200);
 
     await agent.get("/api/audit/logs").expect(403);
+  });
+
+  it("restricts metrics endpoint to master users and exposes Prometheus payload", async () => {
+    const masterAgent = request.agent(appServer);
+    await masterAgent
+      .post("/api/auth/login")
+      .send({ email: "master1@example.com", password: "master-secret" })
+      .expect(200);
+
+    const metricsResponse = await masterAgent.get("/api/internal/metrics").expect(200);
+    const contentType = metricsResponse.headers["content-type"] ?? "";
+    assert.ok(contentType.includes("text/plain"));
+    assert.ok(contentType.includes("version"));
+    assert.match(metricsResponse.text, /ofx_ingestion_duration_seconds/);
+
+    const consultantAgent = request.agent(appServer);
+    await consultantAgent
+      .post("/api/auth/login")
+      .send({ email: "consult1@example.com", password: "consult-secret" })
+      .expect(200);
+
+    await consultantAgent.get("/api/internal/metrics").expect(403);
   });
 });

@@ -27,6 +27,8 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { recordAuditEvent, listAuditLogs } from "./security/audit";
+import { getLogger, updateRequestLoggerContext } from "./observability/logger";
+import { metricsRegistry } from "./observability/metrics";
 
 // Configure multer for file uploads
 const upload = multer({
@@ -191,7 +193,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           targetType: "session",
           metadata: { ip: req.ip },
         }).catch(err => {
-          console.error("Falha ao registrar auditoria de login:", err);
+          getLogger(req).error("Falha ao registrar auditoria de login", {
+            event: "audit.log",
+          }, err);
         });
       });
     } catch (error) {
@@ -227,7 +231,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         targetType: "session",
         metadata: { ip: req.ip },
       }).catch(err => {
-        console.error("Falha ao registrar auditoria de logout:", err);
+        getLogger(req).error("Falha ao registrar auditoria de logout", {
+          event: "audit.log",
+        }, err);
       });
     }
   });
@@ -477,7 +483,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         clientUsers: visibleClientUsers,
       });
     } catch (error) {
-      console.error("Erro ao montar diretório de usuários:", error);
+      getLogger(req).error("Erro ao montar diretório de usuários", {
+        event: "users.directory",
+      }, error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar usuários" });
     }
   });
@@ -488,62 +496,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = req.query.limit ? Number(req.query.limit) : 100;
       const logs = await listAuditLogs(currentUser, Number.isNaN(limit) ? 100 : limit);
       res.json({ logs });
-    } catch (error) {
-      console.error("Erro ao buscar trilha de auditoria:", error);
-      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar auditoria" });
-    }
-  });
-
-  app.post("/api/lgpd/anonymize", requireRole("master"), async (req, res) => {
-    try {
-      const currentUser = req.authUser!;
-      const schema = z.object({
-        targetType: z.enum(["user", "client"]),
-        targetId: z.string().min(1),
-      });
-      const { targetType, targetId } = schema.parse(req.body);
-
-      let result: User | Client | undefined;
-      if (targetType === "user") {
-        const target = await storage.getUserById(targetId);
-        if (!target || target.organizationId !== currentUser.organizationId) {
-          return res.status(404).json({ error: "Usuário não encontrado na organização" });
-        }
-        result = await storage.anonymizeUser(targetId);
-      } else {
-        const target = await storage.getClient(targetId);
-        if (!target || target.organizationId !== currentUser.organizationId) {
-          return res.status(404).json({ error: "Cliente não encontrado na organização" });
-        }
-        result = await storage.anonymizeClient(targetId);
-      }
-
-      if (!result) {
-        return res.status(404).json({ error: "Registro não encontrado" });
-      }
-
-      await recordAuditEvent({
-        user: currentUser,
-        eventType: "lgpd.anonymize",
-        targetType,
-        targetId,
-      });
-
-      res.json({ success: true });
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        const fieldErrors = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
-        return res.status(400).json({ error: fieldErrors });
-      }
-      console.error("Erro ao anonimizar registro:", error);
-      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao anonimizar" });
-    }
-  });
-
-  // GET /api/clients/:clientId - Get single client
-  app.get("/api/clients/:clientId", validateClientAccess, async (req, res) => {
-    try {
-      res.json(req.clientContext);
     } catch (error) {
       getLogger(req).error("Erro ao buscar trilha de auditoria", {
         event: "audit.list",
