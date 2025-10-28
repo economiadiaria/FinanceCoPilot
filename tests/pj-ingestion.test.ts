@@ -114,7 +114,7 @@ test("isDuplicateTransaction detects duplicates by FITID and date+amount", () =>
 
   const candidateSameSignature = {
     date: "03/01/2024",
-    desc: "Transferência duplicada",
+    desc: "Transferência",
     amount: -50,
   };
 
@@ -127,6 +127,29 @@ test("isDuplicateTransaction detects duplicates by FITID and date+amount", () =>
   };
 
   assert.equal(isDuplicateTransaction(existing, pending, candidateUnique), false);
+});
+
+test("isDuplicateTransaction allows same date and amount with different descriptions", () => {
+  const existing: BankTransaction[] = [
+    {
+      bankTxId: "tx-3",
+      date: "05/01/2024",
+      desc: "Pix fornecedor",
+      amount: -75,
+      accountId: "acc-1",
+      sourceHash: "hash-e",
+      linkedLegs: [],
+      reconciled: false,
+    },
+  ];
+
+  const candidateDifferentDesc = {
+    date: "05/01/2024",
+    desc: "Pix aluguel",
+    amount: -75,
+  };
+
+  assert.equal(isDuplicateTransaction(existing, [], candidateDifferentDesc), false);
 });
 
 test("applyCategorizationRules tags only matching transactions", () => {
