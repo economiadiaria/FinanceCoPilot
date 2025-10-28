@@ -12,7 +12,12 @@ import {
   type CategorizationRule,
   type OFXImport,
 } from "@shared/schema";
-import { formatBR, toISOFromBR, isBetweenDates, maskPIIValue } from "@shared/utils";
+import {
+  formatBR,
+  toISOFromBR,
+  isBetweenDates,
+  maskPIIValue,
+} from "@shared/utils";
 import {
   applyCategorizationRules,
   calculateSettlementPlan,
@@ -1606,6 +1611,248 @@ export function registerPJRoutes(app: Express) {
           context: { clientId: req.query?.clientId },
         }, error);
         res.status(500).json({ error: error.message || "Erro ao buscar monthly-insights" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/pj/summary",
+    scopeRequired("PJ"),
+    ensureBankAccountAccess,
+    async (req, res) => {
+      try {
+        const clientId = req.query.clientId as string;
+        const bankAccount = req.bankAccountContext;
+
+        if (!clientId) {
+          return res.status(400).json({ error: "clientId é obrigatório" });
+        }
+
+        if (!bankAccount) {
+          return res
+            .status(500)
+            .json({ error: "Contexto da conta bancária não carregado" });
+        }
+
+        const requestedFrom =
+          typeof req.query.from === "string" ? req.query.from : undefined;
+        const requestedTo =
+          typeof req.query.to === "string" ? req.query.to : undefined;
+
+        let normalizedFrom: string | undefined;
+        let normalizedTo: string | undefined;
+
+        try {
+          normalizedFrom = requestedFrom ? formatBR(requestedFrom) : undefined;
+          normalizedTo = requestedTo ? formatBR(requestedTo) : undefined;
+        } catch (error) {
+          return res.status(400).json({
+            error: "Datas inválidas. Utilize o formato DD/MM/AAAA",
+          });
+        }
+
+        const transactions = await storage.getBankTransactions(
+          clientId,
+          bankAccount.id
+        );
+
+        const isoDates = transactions
+          .filter(tx => tx.date)
+          .map(tx => toISOFromBR(tx.date))
+          .sort();
+
+        let rangeStart = normalizedFrom;
+        let rangeEnd = normalizedTo;
+
+        if (!rangeStart && isoDates.length > 0) {
+          rangeStart = formatBR(isoDates[0]);
+        }
+
+        if (!rangeEnd && isoDates.length > 0) {
+          rangeEnd = formatBR(isoDates[isoDates.length - 1]);
+        }
+
+        if (rangeStart && rangeEnd) {
+          const startISO = toISOFromBR(rangeStart);
+          const endISO = toISOFromBR(rangeEnd);
+
+          if (new Date(startISO) > new Date(endISO)) {
+            return res.status(400).json({
+              error: "Período inválido: data inicial maior que final",
+            });
+          }
+        }
+
+        const filteredTransactions =
+          rangeStart && rangeEnd
+            ? transactions.filter(tx =>
+                isBetweenDates(tx.date, rangeStart!, rangeEnd!)
+              )
+            : transactions;
+
+        const inflowTransactions = filteredTransactions.filter(
+          tx => tx.amount > 0
+        );
+        const outflowTransactions = filteredTransactions.filter(
+          tx => tx.amount < 0
+        );
+
+        const totalIn = inflowTransactions.reduce(
+          (sum, tx) => sum + tx.amount,
+          0
+        );
+        const totalOut = outflowTransactions.reduce(
+          (sum, tx) => sum + Math.abs(tx.amount),
+          0
+        );
+        const balance = totalIn - totalOut;
+
+        const inflowCount = inflowTransactions.length;
+        const outflowCount = outflowTransactions.length;
+        const largestIn = inflowTransactions.length
+          ? Math.max(...inflowTransactions.map(tx => tx.amount))
+          : 0;
+        const largestOut = outflowTransactions.length
+          ? Math.max(...outflowTransactions.map(tx => Math.abs(tx.amount)))
+          : 0;
+
+        const coverageDays = (() => {
+          if (!rangeStart || !rangeEnd) {
+            return 0;
+          }
+          const start = new Date(toISOFromBR(rangeStart));
+          const end = new Date(toISOFromBR(rangeEnd));
+          const diffMs = end.getTime() - start.getTime();
+          return diffMs >= 0 ? Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1 : 0;
+        })();
+
+        const averageDailyNetFlow =
+          coverageDays > 0 ? balance / coverageDays : 0;
+        const averageTicketIn =
+          inflowCount > 0 ? totalIn / inflowCount : 0;
+        const averageTicketOut =
+          outflowCount > 0 ? totalOut / outflowCount : 0;
+        const cashConversionRatio = totalIn > 0 ? balance / totalIn : 0;
+
+        const saleLegs = await storage.getSaleLegs(clientId);
+        const relevantParcels = saleLegs.flatMap(leg =>
+          leg.settlementPlan.filter(parcel => {
+            if (parcel.receivedTxId) {
+              return false;
+            }
+
+            if (!rangeStart || !rangeEnd) {
+              return true;
+            }
+
+            return isBetweenDates(parcel.due, rangeStart, rangeEnd);
+          })
+        );
+
+        const receivableAmount = relevantParcels.reduce(
+          (sum, parcel) => sum + parcel.expected,
+          0
+        );
+        const receivableCount = relevantParcels.length;
+
+        const now = new Date();
+        const overdueParcels = relevantParcels.filter(parcel => {
+          try {
+            const dueISO = toISOFromBR(parcel.due);
+            return new Date(dueISO) < now;
+          } catch (error) {
+            return false;
+          }
+        });
+
+        const overdueReceivableAmount = overdueParcels.reduce(
+          (sum, parcel) => sum + parcel.expected,
+          0
+        );
+
+        const dailyNetFlows = (() => {
+          const aggregation = new Map<string, number>();
+
+          for (const tx of filteredTransactions) {
+            const key = formatBR(tx.date);
+            const existing = aggregation.get(key) ?? 0;
+            aggregation.set(key, existing + tx.amount);
+          }
+
+          return Array.from(aggregation.entries())
+            .map(([date, value]) => ({
+              date,
+              net: value,
+            }))
+            .sort((a, b) => {
+              const aTime = new Date(toISOFromBR(a.date)).getTime();
+              const bTime = new Date(toISOFromBR(b.date)).getTime();
+              return aTime - bTime;
+            });
+        })();
+
+        const projectedBalance = balance + receivableAmount;
+
+        const responsePayload = {
+          clientId,
+          bankAccountId: bankAccount.id,
+          from: rangeStart ?? null,
+          to: rangeEnd ?? null,
+          totals: {
+            totalIn,
+            totalOut,
+            balance,
+          },
+          kpis: {
+            inflowCount,
+            outflowCount,
+            averageTicketIn,
+            averageTicketOut,
+            largestIn,
+            largestOut,
+            averageDailyNetFlow,
+            cashConversionRatio,
+            receivableAmount,
+            receivableCount,
+            overdueReceivableAmount,
+            overdueReceivableCount: overdueParcels.length,
+            projectedBalance,
+          },
+          series: {
+            dailyNetFlows,
+          },
+          metadata: {
+            transactionCount: filteredTransactions.length,
+            coverageDays,
+            generatedAt: new Date().toISOString(),
+          },
+        };
+
+        const etag = crypto
+          .createHash("sha1")
+          .update(JSON.stringify(responsePayload))
+          .digest("hex");
+
+        res.setHeader("Cache-Control", "private, max-age=30");
+        res.setHeader("ETag", etag);
+
+        if (req.headers["if-none-match"] === etag) {
+          return res.status(304).end();
+        }
+
+        return res.json(responsePayload);
+      } catch (error: any) {
+        getLogger(req).error(
+          "Erro ao buscar summary PJ",
+          {
+            event: "pj.summary",
+            context: { clientId: req.query?.clientId },
+          },
+          error
+        );
+        return res
+          .status(500)
+          .json({ error: error?.message || "Erro ao buscar summary" });
       }
     }
   );
