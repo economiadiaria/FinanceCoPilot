@@ -888,20 +888,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 5. GET /api/summary - Get financial summary and KPIs
-  app.get("/api/summary", async (req, res) => {
+  app.get("/api/summary", validateClientAccess, async (req, res) => {
     try {
-      const { clientId, period } = req.query;
+      const { clientId: requestedClientId, period } = req.query;
+      const client = req.clientContext;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
       }
 
-      const client = await storage.getClient(clientId as string);
-      if (!client) {
-        return res.status(404).json({ error: "Cliente não encontrado." });
+      if (requestedClientId && requestedClientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
       }
 
-      let transactions = await storage.getTransactions(clientId as string);
+      let transactions = await storage.getTransactions(client.clientId);
 
       // Filter by period if provided (AAAA-MM)
       if (period) {
@@ -932,8 +932,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         // Check investment allocation
-        const positions = await storage.getPositions(clientId as string);
-        const policy = await storage.getPolicy(clientId as string);
+        const positions = await storage.getPositions(client.clientId);
+        const policy = await storage.getPolicy(client.clientId);
 
         if (policy && "targets" in policy) {
           const totalValue = positions.reduce((sum, p) => sum + p.value, 0);
@@ -958,15 +958,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 6. GET /api/investments/positions - List investment positions
-  app.get("/api/investments/positions", async (req, res) => {
+  app.get("/api/investments/positions", validateClientAccess, async (req, res) => {
     try {
       const { clientId } = req.query;
+      const client = req.clientContext;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
       }
 
-      const positions = await storage.getPositions(clientId as string);
+      if (clientId && clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+      }
+
+      const positions = await storage.getPositions(client.clientId);
       res.json(positions);
     } catch (error) {
       res.status(500).json({ error: "Erro ao buscar posições" });
@@ -974,37 +979,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/investments/positions - Add new position
-  app.post("/api/investments/positions", async (req, res) => {
+  app.post(
+    "/api/investments/positions",
+    validateClientAccess,
+    requireRole("master", "consultor"),
+    async (req, res) => {
     try {
       const { clientId, position } = req.body;
+      const client = req.clientContext;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
       }
 
-      await storage.addPosition(clientId, position);
+      if (clientId && clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+      }
+
+      await storage.addPosition(client.clientId, position);
       res.json({ success: true });
     } catch (error) {
       res.status(400).json({ error: "Erro ao adicionar posição" });
     }
-  });
+    }
+  );
 
   // 7. POST /api/investments/rebalance/suggest - Suggest rebalancing
-  app.post("/api/investments/rebalance/suggest", async (req, res) => {
+  app.post(
+    "/api/investments/rebalance/suggest",
+    validateClientAccess,
+    requireRole("master", "consultor"),
+    async (req, res) => {
     try {
       const { clientId } = req.body;
+      const client = req.clientContext;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
       }
 
-      const client = await storage.getClient(clientId);
-      if (!client) {
-        return res.status(404).json({ error: "Cliente não encontrado." });
+      if (clientId && clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
       }
 
-      const positions = await storage.getPositions(clientId);
-      const policy = await storage.getPolicy(clientId);
+      const positions = await storage.getPositions(client.clientId);
+      const policy = await storage.getPolicy(client.clientId);
       const suggestions: RebalanceSuggestion[] = [];
 
       const totalValue = positions.reduce((sum, p) => sum + p.value, 0);
@@ -1093,24 +1112,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       res.status(500).json({ error: "Erro ao gerar sugestões" });
     }
-  });
+    }
+  );
 
   // 8. POST /api/reports/generate - Generate monthly report
-  app.post("/api/reports/generate", async (req, res) => {
+  app.post(
+    "/api/reports/generate",
+    validateClientAccess,
+    requireRole("master", "consultor"),
+    async (req, res) => {
     try {
       const { clientId, period, notes } = req.body;
+      const client = req.clientContext;
 
-      if (!clientId || !period) {
+      if (!client || !req.authUser || !period) {
         return res.status(400).json({ error: "Informe clientId e period." });
       }
 
-      const client = await storage.getClient(clientId);
-      if (!client) {
-        return res.status(404).json({ error: "Cliente não encontrado." });
+      if (clientId && clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
       }
 
       // Get summary for the period
-      const transactions = (await storage.getTransactions(clientId)).filter((t) =>
+      const transactions = (await storage.getTransactions(client.clientId)).filter((t) =>
         t.date.startsWith(period)
       );
 
@@ -1148,7 +1172,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notes,
       };
 
-      await storage.setReport(clientId, period, report);
+      await storage.setReport(client.clientId, period, report);
 
       // Generate HTML
       const html = `
@@ -1224,34 +1248,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         </html>
       `;
 
-      await storage.setReportHtml(clientId, period, html);
+      await storage.setReportHtml(client.clientId, period, html);
       res.json({ success: true, html });
     } catch (error) {
       res.status(500).json({ error: "Erro ao gerar relatório" });
     }
-  });
+    }
+  );
 
   // 9. GET /api/reports/view - View report
-  app.get("/api/reports/view", async (req, res) => {
+  app.get("/api/reports/view", validateClientAccess, async (req, res) => {
     try {
       const { clientId, period } = req.query;
+      const client = req.clientContext;
 
-      if (!clientId || !period) {
+      if (!client || !req.authUser || !clientId || !period) {
         return res.status(400).json({ error: "Informe clientId e period." });
       }
 
-      let html = await storage.getReportHtml(clientId as string, period as string);
+      if (clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+      }
+
+      let html = await storage.getReportHtml(client.clientId, period as string);
 
       // If no HTML found, try to generate on-the-fly
       if (!html) {
-        const report = await storage.getReport(clientId as string, period as string);
+        const report = await storage.getReport(client.clientId, period as string);
         if (!report) {
           return res.status(404).json({ error: "Relatório não encontrado." });
-        }
-
-        const client = await storage.getClient(clientId as string);
-        if (!client) {
-          return res.status(404).json({ error: "Cliente não encontrado." });
         }
 
         // Generate basic HTML from saved report
@@ -1295,31 +1320,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 10. POST /api/policies/upsert - Update policies
-  app.post("/api/policies/upsert", async (req, res) => {
-    try {
+  app.post(
+    "/api/policies/upsert",
+    validateClientAccess,
+    requireRole("master", "consultor"),
+    async (req, res) => {
+      try {
       const { clientId, data } = req.body;
+      const client = req.clientContext;
 
-      if (!clientId) {
-        return res.status(400).json({ error: "Informe o clientId." });
+      if (!client || !req.authUser) {
+        return res.status(500).json({ error: "Contexto do cliente não carregado" });
       }
 
-      await storage.setPolicy(clientId, data);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(400).json({ error: "Erro ao atualizar políticas" });
+        if (clientId && clientId !== client.clientId) {
+          return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+        }
+
+        await storage.setPolicy(client.clientId, data);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({ error: "Erro ao atualizar políticas" });
+      }
     }
-  });
+  );
 
   // GET /api/policies - Get policies
-  app.get("/api/policies", async (req, res) => {
+  app.get("/api/policies", validateClientAccess, async (req, res) => {
     try {
       const { clientId } = req.query;
+      const client = req.clientContext;
 
-      if (!clientId) {
+      if (!client || !req.authUser || !clientId) {
         return res.status(400).json({ error: "Informe o clientId." });
       }
 
-      const policy = await storage.getPolicy(clientId as string);
+      if (clientId !== client.clientId) {
+        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
+      }
+
+      const policy = await storage.getPolicy(client.clientId);
       res.json(policy || {});
     } catch (error) {
       res.status(500).json({ error: "Erro ao buscar políticas" });
