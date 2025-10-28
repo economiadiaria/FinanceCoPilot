@@ -169,6 +169,9 @@ export const userSchema = z.object({
 
 export type User = z.infer<typeof userSchema>;
 
+export const userProfileSchema = userSchema.omit({ passwordHash: true });
+export type UserProfile = z.infer<typeof userProfileSchema>;
+
 export const registerUserSchema = userSchema.omit({ userId: true, passwordHash: true }).extend({
   password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres"),
 });

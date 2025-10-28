@@ -21,14 +21,20 @@ import {
   type Position,
   type Client,
   type User,
+  type UserProfile,
 } from "@shared/schema";
 import { z } from "zod";
 
 // Configure multer for file uploads
-const upload = multer({ 
+const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
+
+function sanitizeUser(user: User): UserProfile {
+  const { passwordHash: _passwordHash, ...safeUser } = user;
+  return safeUser;
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ===== AUTHENTICATION ROUTES (PUBLIC) =====
@@ -307,11 +313,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/clients - List all clients
   app.get("/api/clients", async (req, res) => {
     try {
-      const clients = await storage.getClients();
+      if (!req.session.userId) {
+        return res.status(401).json({ error: "Não autenticado" });
+      }
+
+      const currentUser = await storage.getUserById(req.session.userId);
+      if (!currentUser) {
+        return res.status(401).json({ error: "Usuário não encontrado" });
+      }
+
+      let clients = await storage.getClients();
+
+      if (currentUser.role === "consultor") {
+        const allowedIds = new Set(currentUser.clientIds ?? []);
+        clients = clients.filter(client =>
+          allowedIds.has(client.clientId) || client.consultantId === currentUser.userId
+        );
+      }
+
+      if (currentUser.role === "cliente") {
+        const allowedIds = new Set(currentUser.clientIds ?? []);
+        clients = clients.filter(client => allowedIds.has(client.clientId));
+      }
+
       res.json(clients);
     } catch (error) {
       console.error("Erro ao buscar clientes:", error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar clientes" });
+    }
+  });
+
+  app.get("/api/users/directory", async (req, res) => {
+    try {
+      if (!req.session.userId) {
+        return res.status(401).json({ error: "Não autenticado" });
+      }
+
+      const currentUser = await storage.getUserById(req.session.userId);
+      if (!currentUser) {
+        return res.status(401).json({ error: "Usuário não encontrado" });
+      }
+
+      if (currentUser.role === "cliente") {
+        return res.status(403).json({ error: "Acesso restrito a consultores e usuários master" });
+      }
+
+      const users = await storage.getUsers();
+      const clients = await storage.getClients();
+
+      const sanitizedUsers = users.map(sanitizeUser);
+      const consultants = sanitizedUsers.filter(user => user.role === "consultor");
+      const masters = sanitizedUsers.filter(user => user.role === "master");
+      const clientUsers = sanitizedUsers.filter(user => user.role === "cliente");
+
+      let visibleClients = clients;
+      if (currentUser.role === "consultor") {
+        const allowedIds = new Set(currentUser.clientIds ?? []);
+        visibleClients = clients.filter(client =>
+          allowedIds.has(client.clientId) || client.consultantId === currentUser.userId
+        );
+      }
+
+      const visibleClientIds = new Set(visibleClients.map(client => client.clientId));
+      const visibleClientUsers = currentUser.role === "master"
+        ? clientUsers
+        : clientUsers.filter(user => (user.clientIds ?? []).some(id => visibleClientIds.has(id)));
+
+      res.json({
+        currentUser: sanitizeUser(currentUser),
+        consultants,
+        masters,
+        clients: visibleClients,
+        clientUsers: visibleClientUsers,
+      });
+    } catch (error) {
+      console.error("Erro ao montar diretório de usuários:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Erro ao buscar usuários" });
     }
   });
 

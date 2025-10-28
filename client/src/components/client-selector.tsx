@@ -21,7 +21,7 @@ interface ClientSelectorProps {
   clients: Client[];
   selectedClient: string | null;
   onSelectClient: (clientId: string) => void;
-  onNewClient: () => void;
+  onNewClient?: () => void;
 }
 
 export function ClientSelector({
@@ -91,20 +91,22 @@ export function ClientSelector({
               ))}
             </CommandGroup>
           </CommandList>
-          <div className="border-t p-2">
-            <Button
-              variant="ghost"
-              className="w-full justify-start"
-              onClick={() => {
-                onNewClient();
-                setOpen(false);
-              }}
-              data-testid="button-new-client"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Novo cliente
-            </Button>
-          </div>
+          {onNewClient && (
+            <div className="border-t p-2">
+              <Button
+                variant="ghost"
+                className="w-full justify-start"
+                onClick={() => {
+                  onNewClient();
+                  setOpen(false);
+                }}
+                data-testid="button-new-client"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Novo cliente
+              </Button>
+            </div>
+          )}
         </Command>
       </PopoverContent>
     </Popover>
