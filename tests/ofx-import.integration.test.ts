@@ -9,11 +9,35 @@ import crypto from "crypto";
 import { registerRoutes } from "../server/routes";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
 import type { Client, User } from "@shared/schema";
+import * as metrics from "../server/observability/metrics";
 
 const MASTER_EMAIL = "master@example.com";
 const MASTER_PASSWORD = "master-secret";
 const CLIENT_ID = "client-1";
 const ORGANIZATION_ID = "org-1";
+
+function getDurationCount(snapshot: any[], status: "success" | "error") {
+  const metric = snapshot.find(entry => entry.name === "ofx_ingestion_duration_seconds");
+  const countEntry = metric?.values?.find((value: any) => {
+    const labels = value.labels ?? {};
+    return (
+      labels.clientId === CLIENT_ID &&
+      labels.status === status &&
+      labels.le === "+Inf"
+    );
+  });
+  return countEntry?.value ?? 0;
+}
+
+function getErrorCount(snapshot: any[], stage: string) {
+  const metric = snapshot.find(entry => entry.name === "ofx_ingestion_errors_total");
+  const entry = metric?.values?.find(
+    (value: any) =>
+      value.labels?.clientId === CLIENT_ID &&
+      value.labels?.stage === stage
+  );
+  return entry?.value ?? 0;
+}
 
 async function seedStorage(storage: IStorage) {
   const passwordHash = await bcrypt.hash(MASTER_PASSWORD, 10);
@@ -161,5 +185,117 @@ describe("OFX ingestion robustness", () => {
       ),
       "expected divergence warning"
     );
+  });
+
+  it("records prometheus metrics on successful OFX imports", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    await metrics.metricsRegistry.metrics();
+    const beforeSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
+    const beforeSuccessCount = getDurationCount(beforeSnapshot, "success");
+    const beforeErrorCount = getDurationCount(beforeSnapshot, "error");
+    const beforeErrorCounter = getErrorCount(beforeSnapshot, "parse");
+
+    const sampleOfx = `OFXHEADER:100
+DATA:OFXSGML
+VERSION:102
+SECURITY:NONE
+ENCODING:UTF-8
+CHARSET:1252
+COMPRESSION:NONE
+OLDFILEUID:NONE
+NEWFILEUID:NONE
+
+<OFX>
+  <BANKMSGSRSV1>
+    <STMTTRNRS>
+      <STATUS>
+        <CODE>0
+        <SEVERITY>INFO
+      </STATUS>
+      <STMTRS>
+        <BANKACCTFROM>
+          <BANKID>001
+          <ACCTID>7890
+        </BANKACCTFROM>
+        <BANKTRANLIST>
+          <DTSTART>20240101000000
+          <DTEND>20240131235959
+          <STMTTRN>
+            <TRNTYPE>CREDIT
+            <DTPOSTED>20240102
+            <TRNAMT>500.00
+            <FITID>METRIC1
+            <NAME>Recebimento
+          </STMTTRN>
+        </BANKTRANLIST>
+        <LEDGERBAL>
+          <BALAMT>500.00
+        </LEDGERBAL>
+      </STMTRS>
+    </STMTTRNRS>
+  </BANKMSGSRSV1>
+</OFX>
+`;
+
+    const response = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", Buffer.from(sampleOfx, "utf8"), {
+        filename: "metrics-success.ofx",
+        contentType: "application/ofx",
+      });
+
+    assert.equal(response.status, 200);
+
+    await metrics.metricsRegistry.metrics();
+    const afterSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
+
+    const afterSuccessCount = getDurationCount(afterSnapshot, "success");
+    const afterErrorCount = getDurationCount(afterSnapshot, "error");
+    const afterErrorCounter = getErrorCount(afterSnapshot, "parse");
+
+    assert.equal(afterSuccessCount, beforeSuccessCount + 1);
+    assert.equal(afterErrorCount, beforeErrorCount);
+    assert.equal(afterErrorCounter, beforeErrorCounter);
+  });
+
+  it("records prometheus metrics on failed OFX imports", async () => {
+    const agent = request.agent(appServer);
+    await agent
+      .post("/api/auth/login")
+      .send({ email: MASTER_EMAIL, password: MASTER_PASSWORD })
+      .expect(200);
+
+    const invalidOfx = "INVALID CONTENT";
+
+    await metrics.metricsRegistry.metrics();
+    const beforeSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
+    const beforeSuccessCount = getDurationCount(beforeSnapshot, "success");
+    const beforeErrorCount = getDurationCount(beforeSnapshot, "error");
+    const beforeParseErrors = getErrorCount(beforeSnapshot, "parse");
+
+    const response = await agent
+      .post(`/api/pj/import/ofx?clientId=${CLIENT_ID}`)
+      .attach("ofx", Buffer.from(invalidOfx, "utf8"), {
+        filename: "metrics-error.ofx",
+        contentType: "application/ofx",
+      });
+
+    assert.equal(response.status, 500);
+
+    await metrics.metricsRegistry.metrics();
+    const afterSnapshot = await metrics.metricsRegistry.getMetricsAsJSON();
+
+    const afterSuccessCount = getDurationCount(afterSnapshot, "success");
+    const afterErrorCount = getDurationCount(afterSnapshot, "error");
+    const afterParseErrors = getErrorCount(afterSnapshot, "parse");
+
+    assert.equal(afterErrorCount, beforeErrorCount + 1);
+    assert.equal(afterSuccessCount, beforeSuccessCount);
+    assert.equal(afterParseErrors, beforeParseErrors + 1);
   });
 });

@@ -316,13 +316,15 @@ export function registerPJRoutes(app: Express) {
         | string
         | string[]
         | undefined;
-      const clientId = Array.isArray(candidateClientId)
+      clientId = Array.isArray(candidateClientId)
         ? candidateClientId[0]
         : candidateClientId;
 
       if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
+
+      timer = startOfxIngestionTimer(clientId);
       
       // Parse CSV
       const csvContent = req.file.buffer.toString("utf-8");
@@ -534,13 +536,15 @@ export function registerPJRoutes(app: Express) {
         | string
         | string[]
         | undefined;
-      const clientId = Array.isArray(candidateClientId)
+      clientId = Array.isArray(candidateClientId)
         ? candidateClientId[0]
         : candidateClientId;
 
       if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
         return res.status(400).json({ error: "clientId é obrigatório" });
       }
+
+      timer = startOfxIngestionTimer(clientId);
 
       const buffer = req.file.buffer;
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
