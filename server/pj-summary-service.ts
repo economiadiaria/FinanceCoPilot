@@ -2,6 +2,13 @@ import type { BankSummarySnapshot, BankTransaction, SaleLeg } from "@shared/sche
 import { formatBR, toISOFromBR, isBetweenDates } from "@shared/utils";
 import type { IStorage } from "./storage";
 import { storage as globalStorage } from "./storage";
+import {
+  aggregateTransactionsByCategory,
+  type CategoryHierarchyNode,
+  type CategoryHierarchyResult,
+  type CategoryLike,
+} from "./pj-category-aggregation";
+import { getLedgerGroup } from "./pj-ledger-groups";
 
 const SUPPORTED_WINDOWS = [30, 90, 365];
 
@@ -209,6 +216,39 @@ function normalizeDailyNetFlows(entries: unknown): DailyNetFlowEntry[] | undefin
   return normalized;
 }
 
+function serializeCategoryNode(node: CategoryHierarchyNode) {
+  return {
+    id: node.id,
+    label: node.label,
+    path: node.path,
+    level: node.level,
+    sortOrder: node.sortOrder,
+    parentPath: node.parentPath,
+    acceptsPostings: node.acceptsPostings,
+    group: node.group,
+    baseCategoryId: node.baseCategoryId,
+    inflows: node.inflows,
+    outflows: node.outflows,
+    net: node.net,
+    directInflows: node.directInflows,
+    directOutflows: node.directOutflows,
+    children: node.children.map(serializeCategoryNode),
+  };
+}
+
+function serializeCategoryHierarchy(result: CategoryHierarchyResult) {
+  return {
+    roots: result.roots.map(serializeCategoryNode),
+    ledgerTotals: Object.fromEntries(
+      Array.from(result.ledgerByGroup.entries()).map(([group, node]) => [group, {
+        inflows: node.inflows,
+        outflows: node.outflows,
+        net: node.net,
+      }]),
+    ),
+  };
+}
+
 function extractSeriesFromMetadata(metadata: Record<string, unknown> | undefined) {
   if (!metadata || typeof metadata !== "object") {
     return {};
@@ -273,6 +313,19 @@ class PJSummaryService {
 
     const selectedSnapshot = this.selectSnapshot(snapshots, targetCoverage);
 
+    let cachedCategories: CategoryLike[] | undefined;
+    const loadCategories = async () => {
+      if (cachedCategories) {
+        return cachedCategories;
+      }
+      if (!orgId) {
+        cachedCategories = [];
+        return cachedCategories;
+      }
+      cachedCategories = await this.storage.getPjClientCategories(orgId, clientId);
+      return cachedCategories;
+    };
+
     if (selectedSnapshot) {
       const snapshotPartial = this.buildSnapshotSummary(selectedSnapshot.snapshot, {
         rangeStart: normalizedFrom,
@@ -287,6 +340,7 @@ class PJSummaryService {
         const transactionPartial = this.computeTransactionMetrics(transactions, {
           rangeStart: snapshotPartial.partial.from ?? normalizedFrom,
           rangeEnd: snapshotPartial.partial.to ?? normalizedTo,
+          categories: await loadCategories(),
         });
         partials.push(transactionPartial);
         usedFallback = true;
@@ -327,6 +381,7 @@ class PJSummaryService {
     const transactionPartial = this.computeTransactionMetrics(transactions, {
       rangeStart: normalizedFrom,
       rangeEnd: normalizedTo,
+      categories: await loadCategories(),
     });
 
     const saleLegs = await this.storage.getSaleLegs(clientId);
@@ -359,8 +414,9 @@ class PJSummaryService {
     from?: string;
     to?: string;
     windowDays?: number;
+    categories?: CategoryLike[];
   }): Promise<SummaryResponse> {
-    const { clientId, bankAccountId, transactions, saleLegs, from, to, windowDays } = options;
+    const { clientId, bankAccountId, transactions, saleLegs, from, to, windowDays, categories } = options;
 
     if (from && to) {
       ensureValidRange(from, to);
@@ -369,6 +425,7 @@ class PJSummaryService {
     const transactionPartial = this.computeTransactionMetrics(transactions, {
       rangeStart: from,
       rangeEnd: to,
+      categories,
     });
 
     const receivablePartial = this.computeReceivableMetrics(saleLegs, {
@@ -533,7 +590,7 @@ class PJSummaryService {
 
   private computeTransactionMetrics(
     transactions: BankTransaction[],
-    context: { rangeStart?: string; rangeEnd?: string }
+    context: { rangeStart?: string; rangeEnd?: string; categories?: CategoryLike[] }
   ): PartialSummaryResult {
     const partial = createEmptyPartialSummary();
     const provided = createEmptyProvided();
@@ -565,6 +622,13 @@ class PJSummaryService {
       rangeStart && rangeEnd
         ? transactions.filter(tx => isBetweenDates(tx.date, rangeStart!, rangeEnd!))
         : transactions;
+
+    const categoryAggregation = aggregateTransactionsByCategory(filteredTransactions, {
+      categories: context.categories ?? [],
+      ledgerGroupResolver: getLedgerGroup,
+    });
+    partial.metadata.categoryHierarchy = serializeCategoryHierarchy(categoryAggregation);
+    provided.metadata.add("categoryHierarchy");
 
     const inflowTransactions = filteredTransactions.filter(tx => tx.amount > 0);
     const outflowTransactions = filteredTransactions.filter(tx => tx.amount < 0);

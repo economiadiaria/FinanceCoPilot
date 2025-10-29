@@ -15,7 +15,12 @@ const bankTransactions: BankTransaction[] = [
     sourceHash: "hash-1",
     linkedLegs: [],
     reconciled: false,
-    categorizedAs: { group: "RECEITA", auto: true },
+    categorizedAs: {
+      group: "RECEITA",
+      auto: true,
+      categoryId: "cat-receita-loja",
+      categoryPath: "client.cat-root-receita.cat-receita-loja",
+    },
   },
   {
     bankTxId: "oct-receita-2",
@@ -28,7 +33,12 @@ const bankTransactions: BankTransaction[] = [
     sourceHash: "hash-1",
     linkedLegs: [],
     reconciled: false,
-    categorizedAs: { group: "RECEITA", auto: true },
+    categorizedAs: {
+      group: "RECEITA",
+      auto: true,
+      categoryId: "cat-receita-loja",
+      categoryPath: "client.cat-root-receita.cat-receita-loja",
+    },
   },
   {
     bankTxId: "oct-deducao",
@@ -41,7 +51,13 @@ const bankTransactions: BankTransaction[] = [
     sourceHash: "hash-1",
     linkedLegs: [],
     reconciled: false,
-    categorizedAs: { group: "DEDUCOES_RECEITA", subcategory: "Taxas", auto: true },
+    categorizedAs: {
+      group: "DEDUCOES_RECEITA",
+      subcategory: "Taxas",
+      auto: true,
+      categoryId: "cat-ded-taxes",
+      categoryPath: "client.cat-root-deducoes.cat-ded-taxes",
+    },
   },
   {
     bankTxId: "oct-gea",
@@ -54,7 +70,13 @@ const bankTransactions: BankTransaction[] = [
     sourceHash: "hash-1",
     linkedLegs: [],
     reconciled: false,
-    categorizedAs: { group: "GEA", subcategory: "Aluguel", auto: true },
+    categorizedAs: {
+      group: "GEA",
+      subcategory: "Aluguel",
+      auto: true,
+      categoryId: "cat-gea-rent",
+      categoryPath: "client.cat-root-gea.cat-gea-rent",
+    },
   },
   {
     bankTxId: "oct-uncat",
@@ -78,7 +100,13 @@ const bankTransactions: BankTransaction[] = [
     sourceHash: "hash-1",
     linkedLegs: [],
     reconciled: false,
-    categorizedAs: { group: "COMERCIAL_MKT", subcategory: "Ads", auto: true },
+    categorizedAs: {
+      group: "COMERCIAL_MKT",
+      subcategory: "Ads",
+      auto: true,
+      categoryId: "cat-com-ads",
+      categoryPath: "client.cat-root-com.cat-com-digital.cat-com-ads",
+    },
   },
   {
     bankTxId: "oct-fin-pos",
@@ -130,6 +158,109 @@ const bankTransactions: BankTransaction[] = [
   },
 ];
 
+const categories = [
+  {
+    id: "cat-root-receita",
+    name: "Receitas",
+    path: "client.cat-root-receita",
+    level: 1,
+    sortOrder: 10,
+    parentId: null,
+    acceptsPostings: false,
+    baseCategoryId: "seed-pj-category-receita",
+  },
+  {
+    id: "cat-receita-loja",
+    name: "Receita Loja",
+    path: "client.cat-root-receita.cat-receita-loja",
+    level: 2,
+    sortOrder: 10,
+    parentId: "cat-root-receita",
+    acceptsPostings: true,
+    baseCategoryId: null,
+  },
+  {
+    id: "cat-root-deducoes",
+    name: "Deduções",
+    path: "client.cat-root-deducoes",
+    level: 1,
+    sortOrder: 20,
+    parentId: null,
+    acceptsPostings: false,
+    baseCategoryId: "seed-pj-category-deducoes-receita",
+  },
+  {
+    id: "cat-ded-taxes",
+    name: "Taxas",
+    path: "client.cat-root-deducoes.cat-ded-taxes",
+    level: 2,
+    sortOrder: 10,
+    parentId: "cat-root-deducoes",
+    acceptsPostings: true,
+    baseCategoryId: null,
+  },
+  {
+    id: "cat-root-gea",
+    name: "Despesas Gerais",
+    path: "client.cat-root-gea",
+    level: 1,
+    sortOrder: 30,
+    parentId: null,
+    acceptsPostings: false,
+    baseCategoryId: "seed-pj-category-gea",
+  },
+  {
+    id: "cat-gea-rent",
+    name: "Aluguel",
+    path: "client.cat-root-gea.cat-gea-rent",
+    level: 2,
+    sortOrder: 10,
+    parentId: "cat-root-gea",
+    acceptsPostings: true,
+    baseCategoryId: null,
+  },
+  {
+    id: "cat-gea-utilities",
+    name: "Energia",
+    path: "client.cat-root-gea.cat-gea-utilities",
+    level: 2,
+    sortOrder: 20,
+    parentId: "cat-root-gea",
+    acceptsPostings: true,
+    baseCategoryId: null,
+  },
+  {
+    id: "cat-root-com",
+    name: "Marketing",
+    path: "client.cat-root-com",
+    level: 1,
+    sortOrder: 40,
+    parentId: null,
+    acceptsPostings: false,
+    baseCategoryId: "seed-pj-category-comercial-mkt",
+  },
+  {
+    id: "cat-com-digital",
+    name: "Marketing Digital",
+    path: "client.cat-root-com.cat-com-digital",
+    level: 2,
+    sortOrder: 10,
+    parentId: "cat-root-com",
+    acceptsPostings: false,
+    baseCategoryId: null,
+  },
+  {
+    id: "cat-com-ads",
+    name: "Ads",
+    path: "client.cat-root-com.cat-com-digital.cat-com-ads",
+    level: 3,
+    sortOrder: 10,
+    parentId: "cat-com-digital",
+    acceptsPostings: true,
+    baseCategoryId: null,
+  },
+];
+
 const sales: Sale[] = [
   {
     saleId: "sale-1",
@@ -170,7 +301,7 @@ const sales: Sale[] = [
 ];
 
 test("buildMonthlyInsights aggregates PJ metrics with imported data", () => {
-  const insights = buildMonthlyInsights(bankTransactions, sales, "2023-10");
+  const insights = buildMonthlyInsights(bankTransactions, sales, "2023-10", undefined, categories);
 
   assert.equal(insights.month, "2023-10");
   assert.deepEqual(insights.availableMonths, ["2023-10", "2023-09"]);
@@ -186,6 +317,12 @@ test("buildMonthlyInsights aggregates PJ metrics with imported data", () => {
   assert.equal(insights.highlights.topVendas.length, 2);
   assert.equal(insights.highlights.topVendas[0]?.amount, 1500);
   assert.equal(insights.highlights.topCustos[0]?.amount, 300);
+  assert.equal(
+    insights.highlights.topCustos[0]?.categoryPath,
+    "client.cat-root-gea.cat-gea-rent",
+  );
+  assert.equal(insights.highlights.topCustos[0]?.categoryLabel, "Aluguel");
+  assert.equal(insights.highlights.topCustos[0]?.categoryAcceptsPostings, true);
   assert.equal(insights.highlights.despesasNaoCategorizadas.count, 1);
   assert.equal(insights.highlights.despesasNaoCategorizadas.total, 120);
 
@@ -197,14 +334,35 @@ test("buildMonthlyInsights aggregates PJ metrics with imported data", () => {
 });
 
 test("buildCostBreakdown consolidates categories and uncategorized expenses", () => {
-  const breakdown = buildCostBreakdown(bankTransactions, sales, "2023-10");
+  const breakdown = buildCostBreakdown(bankTransactions, sales, "2023-10", categories);
 
   assert.equal(breakdown.month, "2023-10");
-  assert.equal(breakdown.groups.find((g) => g.key === "GEA")?.outflows, 300);
+  const geaGroup = breakdown.groups.find((g) => g.key === "GEA");
+  const marketingGroup = breakdown.groups.find((g) => g.key === "COMERCIAL_MKT");
+
+  assert.equal(geaGroup?.outflows, 300);
   assert.equal(breakdown.groups.find((g) => g.key === "DEDUCOES_RECEITA")?.outflows, 150);
-  assert.equal(breakdown.groups.find((g) => g.key === "COMERCIAL_MKT")?.outflows, 80);
+  assert.equal(marketingGroup?.outflows, 80);
   assert.equal(breakdown.groups.find((g) => g.key === "FINANCEIRAS")?.inflows, 50);
   assert.equal(breakdown.groups.find((g) => g.key === "FINANCEIRAS")?.outflows, 40);
   assert.equal(breakdown.uncategorized.total, 120);
   assert.equal(breakdown.totals.net, 560);
+
+  assert.ok(geaGroup);
+  assert.equal(geaGroup?.items.length, 2);
+  const rentNode = geaGroup?.items.find((item) => item.categoryId === "cat-gea-rent");
+  const energyNode = geaGroup?.items.find((item) => item.categoryId === "cat-gea-utilities");
+  assert.equal(rentNode?.outflows, 300);
+  assert.equal(energyNode?.outflows, 100);
+
+  assert.ok(marketingGroup);
+  const marketingDigital = marketingGroup?.items.find((item) => item.categoryId === "cat-com-digital");
+  assert.ok(marketingDigital);
+  assert.equal(marketingDigital?.acceptsPostings, false);
+  assert.equal(marketingDigital?.directOutflows, 0);
+  assert.equal(marketingDigital?.children.length, 1);
+  const adsNode = marketingDigital?.children[0];
+  assert.equal(adsNode?.categoryId, "cat-com-ads");
+  assert.equal(adsNode?.outflows, 80);
+  assert.equal(adsNode?.acceptsPostings, true);
 });
