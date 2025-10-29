@@ -1,7 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import { getLogger, updateRequestLoggerContext } from "../observability/logger";
-import type { BankAccount } from "@shared/schema";
+import { recordAuditEvent } from "../security/audit";
+import type { BankAccount, User } from "@shared/schema";
 
 /**
  * Middleware de validação de scope (PF/PJ)
@@ -10,6 +11,63 @@ import type { BankAccount } from "@shared/schema";
 const CLIENT_NOT_FOUND_RESPONSE = { error: "Cliente não encontrado" } as const;
 const ACCESS_DENIED_RESPONSE = { error: "Acesso negado" } as const;
 const BANK_ACCOUNT_NOT_FOUND_RESPONSE = { error: "Conta bancária não encontrada" } as const;
+
+type AccessDeniedEventType =
+  | "security.access_denied.organization"
+  | "security.access_denied.client_link"
+  | "security.access_denied.bank_account";
+
+async function resolveRequestUser(req: Request): Promise<User | undefined> {
+  if (req.authUser) {
+    return req.authUser;
+  }
+
+  const userId = req.session?.userId;
+  if (!userId) {
+    return undefined;
+  }
+
+  return storage.getUserById(userId);
+}
+
+async function logAccessDeniedAudit(
+  req: Request,
+  user: User | undefined,
+  {
+    eventType,
+    targetType,
+    targetId,
+    metadata,
+  }: {
+    eventType: AccessDeniedEventType;
+    targetType: string;
+    targetId?: string;
+    metadata: Record<string, unknown>;
+  }
+): Promise<void> {
+  if (!user) {
+    return;
+  }
+
+  try {
+    await recordAuditEvent({
+      user,
+      eventType,
+      targetType,
+      targetId,
+      metadata,
+    });
+  } catch (error) {
+    getLogger(req).error(
+      "Falha ao registrar auditoria de acesso negado",
+      {
+        event: "audit.access_denied",
+        context: { eventType, targetType, targetId },
+      },
+      error
+    );
+  }
+}
 
 export function scopeRequired(requiredScope: "PF" | "PJ") {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -42,16 +100,46 @@ export function scopeRequired(requiredScope: "PF" | "PJ") {
       }
 
       if (client.organizationId !== user.organizationId) {
+        await logAccessDeniedAudit(req, user, {
+          eventType: "security.access_denied.organization",
+          targetType: "client",
+          targetId: clientId,
+          metadata: {
+            clientId,
+            reason: "organization_mismatch",
+            requiredScope,
+          },
+        });
         return res.status(404).json(CLIENT_NOT_FOUND_RESPONSE);
       }
 
       // Consultores só podem acessar seus clientes
       if (user.role === "consultor" && !user.clientIds.includes(clientId)) {
+        await logAccessDeniedAudit(req, user, {
+          eventType: "security.access_denied.client_link",
+          targetType: "client",
+          targetId: clientId,
+          metadata: {
+            clientId,
+            reason: "client_not_linked",
+            userRole: user.role,
+          },
+        });
         return res.status(403).json(ACCESS_DENIED_RESPONSE);
       }
 
       // Cliente só pode acessar seus próprios dados
       if (user.role === "cliente" && !user.clientIds.includes(clientId)) {
+        await logAccessDeniedAudit(req, user, {
+          eventType: "security.access_denied.client_link",
+          targetType: "client",
+          targetId: clientId,
+          metadata: {
+            clientId,
+            reason: "client_not_linked",
+            userRole: user.role,
+          },
+        });
         return res.status(403).json(ACCESS_DENIED_RESPONSE);
       }
 
@@ -101,14 +189,43 @@ export async function validateClientAccess(req: Request, res: Response, next: Ne
     }
 
     if (client.organizationId !== user.organizationId) {
+      await logAccessDeniedAudit(req, user, {
+        eventType: "security.access_denied.organization",
+        targetType: "client",
+        targetId: clientId,
+        metadata: {
+          clientId,
+          reason: "organization_mismatch",
+        },
+      });
       return res.status(404).json(CLIENT_NOT_FOUND_RESPONSE);
     }
 
     if (user.role === "consultor" && !user.clientIds.includes(clientId)) {
+      await logAccessDeniedAudit(req, user, {
+        eventType: "security.access_denied.client_link",
+        targetType: "client",
+        targetId: clientId,
+        metadata: {
+          clientId,
+          reason: "client_not_linked",
+          userRole: user.role,
+        },
+      });
       return res.status(403).json(ACCESS_DENIED_RESPONSE);
     }
 
     if (user.role === "cliente" && !user.clientIds.includes(clientId)) {
+      await logAccessDeniedAudit(req, user, {
+        eventType: "security.access_denied.client_link",
+        targetType: "client",
+        targetId: clientId,
+        metadata: {
+          clientId,
+          reason: "client_not_linked",
+          userRole: user.role,
+        },
+      });
       return res.status(403).json(ACCESS_DENIED_RESPONSE);
     }
 
@@ -165,7 +282,32 @@ export async function ensureBankAccountAccess(
     );
 
     if (accountInOrg) {
+      const user = await resolveRequestUser(req);
+      await logAccessDeniedAudit(req, user, {
+        eventType: "security.access_denied.bank_account",
+        targetType: "bank_account",
+        targetId: bankAccountId,
+        metadata: {
+          clientId,
+          bankAccountId,
+          reason: "bank_account_not_linked",
+        },
+      });
       return res.status(404).json(BANK_ACCOUNT_NOT_FOUND_RESPONSE);
+    }
+
+    {
+      const user = await resolveRequestUser(req);
+      await logAccessDeniedAudit(req, user, {
+        eventType: "security.access_denied.bank_account",
+        targetType: "bank_account",
+        targetId: bankAccountId,
+        metadata: {
+          clientId,
+          bankAccountId,
+          reason: "bank_account_not_found",
+        },
+      });
     }
 
     return res.status(404).json(BANK_ACCOUNT_NOT_FOUND_RESPONSE);

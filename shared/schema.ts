@@ -211,6 +211,9 @@ export const auditEventTypes = [
   "lgpd.anonymize",
   "openfinance.webhook.accepted",
   "openfinance.webhook.rejected",
+  "security.access_denied.organization",
+  "security.access_denied.client_link",
+  "security.access_denied.bank_account",
 ] as const;
 
 export const auditLogEntrySchema = z.object({

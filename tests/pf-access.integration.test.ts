@@ -103,6 +103,7 @@ async function seedStorage(storage: IStorage) {
 
 describe("PF validateClientAccess guard", () => {
   let appServer: import("http").Server;
+  let storageProvider: MemStorage;
 
   before(async () => {
     const app = express();
@@ -116,9 +117,9 @@ describe("PF validateClientAccess guard", () => {
       })
     );
 
-    const storage = new MemStorage();
-    setStorageProvider(storage);
-    await seedStorage(storage);
+    storageProvider = new MemStorage();
+    setStorageProvider(storageProvider);
+    await seedStorage(storageProvider);
 
     appServer = await registerRoutes(app);
   });
@@ -132,9 +133,9 @@ describe("PF validateClientAccess guard", () => {
   });
 
   beforeEach(async () => {
-    const storage = new MemStorage();
-    setStorageProvider(storage);
-    await seedStorage(storage);
+    storageProvider = new MemStorage();
+    setStorageProvider(storageProvider);
+    await seedStorage(storageProvider);
   });
 
   it("denies PF transaction listing for users from another organization", async () => {
@@ -155,6 +156,15 @@ describe("PF validateClientAccess guard", () => {
       .expect(404);
 
     assert.deepEqual(forbidden.body, missing.body);
+
+    const auditLogs = await storageProvider.getAuditLogs(ORG_TWO);
+    const deniedEvent = auditLogs.find(entry => entry.eventType === "security.access_denied.organization");
+    assert.ok(deniedEvent, "expected organization mismatch to be audited");
+    assert.equal(deniedEvent?.targetType, "client");
+    assert.equal(deniedEvent?.targetId, CLIENT_ID);
+    const metadata = deniedEvent?.metadata as Record<string, unknown> | undefined;
+    assert.equal(metadata?.clientId, CLIENT_ID);
+    assert.equal(metadata?.reason, "organization_mismatch");
   });
 
   it("blocks OFX imports when the client belongs to another organization", async () => {
@@ -190,6 +200,16 @@ describe("PF validateClientAccess guard", () => {
       .expect(403);
 
     assert.match(categorizeAttempt.body.error, /acesso negado/i);
+
+    const auditLogs = await storageProvider.getAuditLogs(ORG_ONE);
+    const deniedEvent = auditLogs.find(entry => entry.eventType === "security.access_denied.client_link");
+    assert.ok(deniedEvent, "expected client linkage denial to be audited");
+    assert.equal(deniedEvent?.targetType, "client");
+    assert.equal(deniedEvent?.targetId, CLIENT_ID);
+    const metadata = deniedEvent?.metadata as Record<string, unknown> | undefined;
+    assert.equal(metadata?.clientId, CLIENT_ID);
+    assert.equal(metadata?.reason, "client_not_linked");
+    assert.equal(metadata?.userRole, "consultor");
   });
 
   it("denies PF summary for users from another organization", async () => {
