@@ -1,14 +1,6 @@
-export interface BankAccountSummary {
-  id: string;
-  clientIds?: string[];
-  bankName: string;
-  accountNumberMask: string;
-  accountType: string;
-  currency: string;
-  isActive: boolean;
-}
+import type { PJBankAccount } from ".";
 
-export const mockBankAccounts: BankAccountSummary[] = [
+export const mockBankAccounts: PJBankAccount[] = [
   {
     id: "acc-bb-001",
     clientIds: ["pj-client-1", "client-1"],

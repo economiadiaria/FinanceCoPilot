@@ -36,7 +36,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { mockBankAccounts } from "@/services/pj/mockData";
+import { PJServiceProvider, usePJService } from "@/contexts/PJServiceContext";
+import type { PJBankAccount } from "@/services/pj";
 
 function Router() {
   return (
@@ -56,6 +57,7 @@ function AuthenticatedApp() {
   const [selectedBankAccountId, setSelectedBankAccountId] = useState<string | null>(null);
   const [newClientDialogOpen, setNewClientDialogOpen] = useState(false);
   const { user } = useAuth();
+  const pjService = usePJService();
 
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
@@ -87,23 +89,12 @@ function AuthenticatedApp() {
 
   const currentClient = filteredClients.find((c) => c.clientId === selectedClient) ?? null;
   const isPJClient = currentClient?.type === "PJ" || currentClient?.type === "BOTH";
-  const availableBankAccounts = useMemo(() => {
-    if (!selectedClient) {
-      return [] as typeof mockBankAccounts;
-    }
 
-    return mockBankAccounts.filter((account) => {
-      if (!account.isActive) {
-        return false;
-      }
-
-      if (!account.clientIds?.length) {
-        return true;
-      }
-
-      return account.clientIds.includes(selectedClient);
-    });
-  }, [selectedClient]);
+  const { data: availableBankAccounts = [] } = useQuery<PJBankAccount[]>({
+    queryKey: ["pj:bank-accounts", { clientId: selectedClient }],
+    enabled: isPJClient && !!selectedClient,
+    queryFn: () => pjService.listBankAccounts({ clientId: selectedClient }),
+  });
 
   useEffect(() => {
     setSelectedBankAccountId(null);
@@ -263,16 +254,18 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ThemeProvider defaultTheme="light">
-          <TooltipProvider>
-            <SidebarProvider style={style as React.CSSProperties}>
-              <Router />
-            </SidebarProvider>
-            <Toaster />
-          </TooltipProvider>
-        </ThemeProvider>
-      </AuthProvider>
+      <PJServiceProvider>
+        <AuthProvider>
+          <ThemeProvider defaultTheme="light">
+            <TooltipProvider>
+              <SidebarProvider style={style as React.CSSProperties}>
+                <Router />
+              </SidebarProvider>
+              <Toaster />
+            </TooltipProvider>
+          </ThemeProvider>
+        </AuthProvider>
+      </PJServiceProvider>
     </QueryClientProvider>
   );
 }
