@@ -15,12 +15,14 @@ export const pjCategories = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     code: text("code").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
     parentId: uuid("parent_id"),
-    level: integer("level").notNull().default(0),
+    isCore: boolean("is_core").notNull().default(false),
+    acceptsPostings: boolean("accepts_postings").notNull().default(true),
+    level: integer("level").notNull(),
     path: text("path").notNull(),
     sortOrder: integer("sort_order").notNull().default(0),
-    isActive: boolean("is_active").notNull().default(true),
-    isSystem: boolean("is_system").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .notNull()
       .defaultNow(),
@@ -30,9 +32,10 @@ export const pjCategories = pgTable(
   },
   table => [
     uniqueIndex("pj_categories_code_key").on(table.code),
-    uniqueIndex("pj_categories_path_key").on(table.path),
+    uniqueIndex("pj_categories_parent_name_key").on(table.parentId, table.name),
     index("pj_categories_parent_idx").on(table.parentId),
     index("pj_categories_level_idx").on(table.level),
+    index("pj_categories_path_idx").on(table.path),
     foreignKey({
       name: "pj_categories_parent_fk",
       columns: [table.parentId],

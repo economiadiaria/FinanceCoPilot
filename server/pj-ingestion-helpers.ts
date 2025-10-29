@@ -204,6 +204,8 @@ export function applyCategorizationRules(
         tx.categorizedAs = {
           group: rule.action.category as LedgerGroup,
           subcategory: rule.action.subcategory,
+          categoryId: rule.action.categoryId,
+          categoryPath: rule.action.categoryPath,
           auto: true,
         };
       }

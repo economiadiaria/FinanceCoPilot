@@ -101,7 +101,6 @@ export async function onboardPjClientCategories({
   }
 
   const baseCategories = await transaction.query.pjCategories.findMany({
-    where: eq(pjCategories.isActive, true),
     orderBy: [
       asc(pjCategories.level),
       asc(pjCategories.sortOrder),

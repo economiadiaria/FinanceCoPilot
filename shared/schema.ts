@@ -217,6 +217,8 @@ export const auditEventTypes = [
   "security.access_denied.organization",
   "security.access_denied.client_link",
   "security.access_denied.bank_account",
+  "security.access_denied.pj_plan_global",
+  "security.access_denied.pj_plan_client",
 ] as const;
 
 export const auditLogEntrySchema = z.object({
@@ -455,11 +457,15 @@ export const bankTransactionSchema = z.object({
     nParcela: z.number().optional(),
   })).default([]),
   reconciled: z.boolean().default(false),
-  categorizedAs: z.object({
-    group: z.enum(ledgerGroups).optional(),
-    subcategory: z.string().optional(),
-    auto: z.boolean().default(false), // categorização automática?
-  }).optional(),
+  categorizedAs: z
+    .object({
+      group: z.enum(ledgerGroups).optional(),
+      subcategory: z.string().optional(),
+      categoryId: z.string().optional(),
+      categoryPath: z.string().optional(),
+      auto: z.boolean().default(false), // categorização automática?
+    })
+    .optional(),
   // Campos de categorização DFC (compatibilidade com código existente)
   dfcCategory: z.string().optional(),
   dfcItem: z.string().optional(),
@@ -528,6 +534,8 @@ export const categorizationRuleSchema = z.object({
     type: z.enum(categorizationActionTypes),
     category: z.enum(ledgerGroups).optional(),
     subcategory: z.string().optional(),
+    categoryId: z.string().optional(),
+    categoryPath: z.string().optional(),
     autoConfirm: z.boolean().default(false),
   }),
   confidence: z.number().min(0).max(100), // 0-100

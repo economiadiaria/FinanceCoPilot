@@ -330,6 +330,14 @@ components:
             subcategory:
               type: string
               nullable: true
+            categoryId:
+              type: string
+              nullable: true
+              description: Identifier of the PJ client category applied to the transaction
+            categoryPath:
+              type: string
+              nullable: true
+              description: Hierarchical path (dot notation) of the PJ client category when categorized
             auto:
               type: boolean
               description: Indicates whether the categorization was automatic

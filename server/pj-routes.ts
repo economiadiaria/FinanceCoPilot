@@ -1698,6 +1698,8 @@ export function registerPJRoutes(app: Express) {
         matchType: z.enum(["exact", "contains", "startsWith"]),
         dfcCategory: z.string(),
         dfcItem: z.string(),
+        categoryId: z.string().optional(),
+        categoryPath: z.string().optional(),
         applyRetroactive: z.boolean().default(true),
       });
       
@@ -1713,6 +1715,8 @@ export function registerPJRoutes(app: Express) {
           type: "categorize_as_expense",
           category: data.dfcCategory as CategorizationRule["action"]["category"],
           subcategory: data.dfcItem,
+          categoryId: data.categoryId,
+          categoryPath: data.categoryPath,
           autoConfirm: false,
         },
         confidence: 100,
@@ -1741,6 +1745,13 @@ export function registerPJRoutes(app: Express) {
           if (matchesPattern(tx.desc, rule.pattern, rule.matchType)) {
             tx.dfcCategory = rule.dfcCategory;
             tx.dfcItem = rule.dfcItem;
+            tx.categorizedAs = {
+              group: rule.action.category,
+              subcategory: rule.action.subcategory,
+              categoryId: rule.action.categoryId,
+              categoryPath: rule.action.categoryPath,
+              auto: true,
+            };
             tx.categorizedBy = "rule";
             tx.categorizedRuleId = rule.ruleId;
             retroactiveCount++;
@@ -1806,6 +1817,8 @@ export function registerPJRoutes(app: Express) {
         bankTxId: z.string(),
         dfcCategory: z.string(),
         dfcItem: z.string(),
+        categoryId: z.string().optional(),
+        categoryPath: z.string().optional(),
         learnPattern: z.boolean().default(true),
         matchType: z.enum(["exact", "contains", "startsWith"]).default("contains"),
       });
@@ -1828,8 +1841,15 @@ export function registerPJRoutes(app: Express) {
       // Aplicar categorização manual
       tx.dfcCategory = data.dfcCategory;
       tx.dfcItem = data.dfcItem;
+      tx.categorizedAs = {
+        group: data.dfcCategory as CategorizationRule["action"]["category"],
+        subcategory: data.dfcItem,
+        categoryId: data.categoryId,
+        categoryPath: data.categoryPath,
+        auto: false,
+      };
       tx.categorizedBy = "manual";
-      
+
       await storage.setBankTransactions(data.clientId, bankTxs);
       
       // Aprender padrão (se solicitado)
@@ -1850,6 +1870,8 @@ export function registerPJRoutes(app: Express) {
             type: "categorize_as_expense",
             category: data.dfcCategory as CategorizationRule["action"]["category"],
             subcategory: data.dfcItem,
+            categoryId: data.categoryId,
+            categoryPath: data.categoryPath,
             autoConfirm: false,
           },
           confidence: 90,
@@ -1879,6 +1901,13 @@ export function registerPJRoutes(app: Express) {
           ) {
             otherTx.dfcCategory = data.dfcCategory;
             otherTx.dfcItem = data.dfcItem;
+            otherTx.categorizedAs = {
+              group: newRule.action.category,
+              subcategory: newRule.action.subcategory,
+              categoryId: newRule.action.categoryId,
+              categoryPath: newRule.action.categoryPath,
+              auto: true,
+            };
             otherTx.categorizedBy = "rule";
             otherTx.categorizedRuleId = newRule.ruleId;
             prospectiveCount++;

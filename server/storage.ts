@@ -618,7 +618,13 @@ export class MemStorage implements IStorage {
   async setPjCategories(categories: PjCategory[]): Promise<void> {
     this.pjCategories.clear();
     for (const category of categories) {
-      this.pjCategories.set(category.id, category);
+      this.pjCategories.set(category.id, {
+        ...category,
+        description: category.description ?? undefined,
+        parentId: category.parentId ?? null,
+        acceptsPostings: category.acceptsPostings ?? true,
+        isCore: category.isCore ?? false,
+      });
     }
   }
 
@@ -638,7 +644,15 @@ export class MemStorage implements IStorage {
 
     const bucket = this.getClientCategoryBucket(orgId, clientId);
     for (const category of categories) {
-      bucket.set(category.id, { ...category, orgId, clientId });
+      bucket.set(category.id, {
+        ...category,
+        orgId,
+        clientId,
+        baseCategoryId: category.baseCategoryId ?? null,
+        parentId: category.parentId ?? null,
+        acceptsPostings: category.acceptsPostings ?? true,
+        description: category.description ?? undefined,
+      });
     }
   }
 
@@ -903,7 +917,15 @@ export class MemStorage implements IStorage {
   async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategoryRecord[]> {
     const key = this.getPjClientCategoryKey(orgId, clientId);
     const categories = this.pjClientCategories.get(key);
-    return categories ? categories.map(category => ({ ...category })) : [];
+    return categories
+      ? categories.map(category => ({
+          ...category,
+          baseCategoryId: category.baseCategoryId ?? null,
+          parentId: category.parentId ?? null,
+          description: category.description ?? null,
+          acceptsPostings: category.acceptsPostings ?? true,
+        }))
+      : [];
   }
 
   async setPjClientCategories(
@@ -914,7 +936,13 @@ export class MemStorage implements IStorage {
     const key = this.getPjClientCategoryKey(orgId, clientId);
     this.pjClientCategories.set(
       key,
-      categories.map(category => ({ ...category })),
+      categories.map(category => ({
+        ...category,
+        baseCategoryId: category.baseCategoryId ?? null,
+        parentId: category.parentId ?? null,
+        description: category.description ?? null,
+        acceptsPostings: category.acceptsPostings ?? true,
+      })),
     );
   }
 
@@ -971,7 +999,11 @@ export class ReplitDbStorage implements IStorage {
 
   constructor() {
     this.db = new Database();
-    this.migrationsReady = this.normalizeLegacyOFXImports();
+    this.migrationsReady = Promise.all([
+      this.normalizeLegacyOFXImports(),
+      this.normalizeLegacyPjCategories(),
+      this.normalizeLegacyPjClientCategories(),
+    ]).then(() => undefined);
   }
 
   async checkHealth(): Promise<void> {
@@ -1190,6 +1222,154 @@ export class ReplitDbStorage implements IStorage {
       }
     } catch (error) {
       console.error("Failed to normalize legacy OFX imports", error);
+    }
+  }
+
+  private async normalizeLegacyPjCategories(): Promise<void> {
+    try {
+      const result = await this.db.get(this.getPjCategoriesKey());
+      if (!result.ok) {
+        if (result.error?.statusCode !== 404) {
+          throw new Error(
+            `Error loading PJ categories for normalization: ${result.error?.message || JSON.stringify(result.error)}`,
+          );
+        }
+        return;
+      }
+
+      const raw = result.value;
+      if (!Array.isArray(raw)) {
+        return;
+      }
+
+      let mutated = false;
+      const normalized = (raw as PjCategory[]).map(category => {
+        const next: PjCategory & { isCore?: boolean } = {
+          ...category,
+          name: (category as any).name ?? category.code,
+          description: category.description ?? undefined,
+          parentId: category.parentId ?? null,
+          acceptsPostings: category.acceptsPostings ?? true,
+          isCore: (category as any).isCore ?? false,
+        };
+        if ((category as any).name === undefined) {
+          mutated = true;
+        }
+        if (category.parentId === undefined) {
+          mutated = true;
+        }
+        if (category.acceptsPostings === undefined) {
+          mutated = true;
+        }
+        if ((category as any).isCore === undefined) {
+          mutated = true;
+        }
+        return next;
+      });
+
+      if (mutated) {
+        const setResult = await this.db.set(this.getPjCategoriesKey(), normalized);
+        if (!setResult.ok) {
+          throw new Error(
+            `Error saving normalized PJ categories: ${setResult.error?.message || JSON.stringify(setResult.error)}`,
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Failed to normalize PJ categories", error);
+    }
+  }
+
+  private async normalizeLegacyPjClientCategories(): Promise<void> {
+    try {
+      const baseResult = await this.db.get(this.getPjCategoriesKey());
+      const baseCategories =
+        baseResult.ok && Array.isArray(baseResult.value)
+          ? ((baseResult.value as PjCategory[]).map(category => ({
+              ...category,
+              name: (category as any).name ?? category.code,
+              description: category.description ?? undefined,
+              parentId: category.parentId ?? null,
+              acceptsPostings: category.acceptsPostings ?? true,
+            })) as PjCategory[])
+          : [];
+      const baseById = new Map(baseCategories.map(category => [category.id, category] as const));
+
+      const listResult = await this.db.list("pj_client_categories:");
+      if (!listResult.ok) {
+        if (listResult.error?.statusCode !== 404) {
+          throw new Error(listResult.error?.message || "Unknown error listing PJ client categories");
+        }
+        return;
+      }
+
+      const keys = listResult.value ?? [];
+      for (const key of keys) {
+        const result = await this.db.get(key);
+        if (!result.ok) {
+          if (result.error?.statusCode !== 404) {
+            throw new Error(
+              `Error loading PJ client categories ${key}: ${result.error?.message || JSON.stringify(result.error)}`,
+            );
+          }
+          continue;
+        }
+
+        const raw = result.value;
+        if (!Array.isArray(raw)) {
+          continue;
+        }
+
+        let mutated = false;
+        const normalized = (raw as PjClientCategoryRecord[]).map(category => {
+          const base = category.baseCategoryId ? baseById.get(category.baseCategoryId) : undefined;
+          const next: PjClientCategoryRecord = {
+            ...category,
+            baseCategoryId: category.baseCategoryId ?? null,
+            parentId: category.parentId ?? null,
+            name: (category as any).name ?? base?.name ?? "Categoria",
+            description:
+              (category as any).description ?? base?.description ?? null,
+            acceptsPostings:
+              category.acceptsPostings ?? base?.acceptsPostings ?? true,
+            level: category.level,
+            path: category.path,
+            sortOrder: category.sortOrder ?? 0,
+          };
+
+          if ((category as any).name === undefined) {
+            mutated = true;
+          }
+          if ((category as any).description === undefined) {
+            mutated = true;
+          }
+          if (category.acceptsPostings === undefined) {
+            mutated = true;
+          }
+          if (category.baseCategoryId === undefined) {
+            mutated = true;
+          }
+          if (category.parentId === undefined) {
+            mutated = true;
+          }
+          if (category.sortOrder === undefined) {
+            mutated = true;
+          }
+
+          return next;
+        });
+
+        if (mutated) {
+          const setResult = await this.db.set(key, normalized);
+          if (!setResult.ok) {
+            throw new Error(
+              `Error saving normalized PJ client categories ${key}: ${setResult.error?.message || JSON.stringify(setResult.error)}`,
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Failed to normalize PJ client categories", error);
     }
   }
 
@@ -1841,11 +2021,26 @@ export class ReplitDbStorage implements IStorage {
 
     const raw = result.ok ? result.value : null;
     const categories = Array.isArray(raw) ? (raw as PjCategory[]) : [];
-    return this.sortPjCategories(categories);
+    return this.sortPjCategories(
+      categories.map(category => ({
+        ...category,
+        description: category.description ?? undefined,
+        parentId: category.parentId ?? null,
+        acceptsPostings: category.acceptsPostings ?? true,
+        isCore: category.isCore ?? false,
+      })),
+    );
   }
 
   async setPjCategories(categories: PjCategory[]): Promise<void> {
-    const result = await this.db.set(this.getPjCategoriesKey(), categories);
+    const normalized = categories.map(category => ({
+      ...category,
+      description: category.description ?? undefined,
+      parentId: category.parentId ?? null,
+      acceptsPostings: category.acceptsPostings ?? true,
+      isCore: category.isCore ?? false,
+    }));
+    const result = await this.db.set(this.getPjCategoriesKey(), normalized);
     if (!result.ok) {
       throw new Error(
         `Database error setting PJ categories: ${result.error?.message || JSON.stringify(result.error)}`,
@@ -1864,7 +2059,15 @@ export class ReplitDbStorage implements IStorage {
 
     const raw = result.ok ? result.value : null;
     const categories = Array.isArray(raw) ? (raw as PjClientCategory[]) : [];
-    return this.sortPjCategories(categories);
+    return this.sortPjCategories(
+      categories.map(category => ({
+        ...category,
+        baseCategoryId: category.baseCategoryId ?? null,
+        parentId: category.parentId ?? null,
+        description: category.description ?? undefined,
+        acceptsPostings: category.acceptsPostings ?? true,
+      })),
+    );
   }
 
   async bulkInsertPjClientCategories(
@@ -1879,7 +2082,15 @@ export class ReplitDbStorage implements IStorage {
     const existing = await this.getPjClientCategories(orgId, clientId);
     const merged = new Map(existing.map(category => [category.id, category] as const));
     for (const category of categories) {
-      merged.set(category.id, { ...category, orgId, clientId });
+      merged.set(category.id, {
+        ...category,
+        orgId,
+        clientId,
+        baseCategoryId: category.baseCategoryId ?? null,
+        parentId: category.parentId ?? null,
+        description: category.description ?? null,
+        acceptsPostings: category.acceptsPostings ?? true,
+      });
     }
 
     const key = this.getPjClientCategoriesKey(orgId, clientId);
@@ -2204,7 +2415,13 @@ export class ReplitDbStorage implements IStorage {
     if (!result.ok || !Array.isArray(result.value)) {
       return [];
     }
-    return (result.value as PjClientCategoryRecord[]).map(category => ({ ...category }));
+    return (result.value as PjClientCategoryRecord[]).map(category => ({
+      ...category,
+      baseCategoryId: category.baseCategoryId ?? null,
+      parentId: category.parentId ?? null,
+      description: category.description ?? null,
+      acceptsPostings: category.acceptsPostings ?? true,
+    }));
   }
 
   async setPjClientCategories(
@@ -2213,7 +2430,13 @@ export class ReplitDbStorage implements IStorage {
     categories: PjClientCategoryRecord[],
   ): Promise<void> {
     const key = this.getPjClientCategoryKey(orgId, clientId);
-    const payload = categories.map(category => ({ ...category }));
+    const payload = categories.map(category => ({
+      ...category,
+      baseCategoryId: category.baseCategoryId ?? null,
+      parentId: category.parentId ?? null,
+      description: category.description ?? null,
+      acceptsPostings: category.acceptsPostings ?? true,
+    }));
     const result = await this.db.set(key, payload);
     if (!result.ok) {
       throw new Error(
