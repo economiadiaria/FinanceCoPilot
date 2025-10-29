@@ -461,28 +461,22 @@ export default function DashboardPJ({ clientId, clientType, bankAccountId }: Das
           <CardTitle>Ações Rápidas</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3">
-          <Link href="/pj/vendas">
-            <Button variant="outline" data-testid="button-nav-vendas">
+          <Link href="/pj/resumo">
+            <Button variant="outline" data-testid="button-nav-resumo">
               <BarChart3 className="mr-2 h-4 w-4" />
-              Gerenciar Vendas
+              Resumo Financeiro
             </Button>
           </Link>
-          <Link href="/pj/conciliacao">
-            <Button variant="outline" data-testid="button-nav-conciliacao">
+          <Link href="/pj/transacoes">
+            <Button variant="outline" data-testid="button-nav-transacoes">
               <Wallet className="mr-2 h-4 w-4" />
-              Conciliação Bancária
-            </Button>
-          </Link>
-          <Link href="/pj/regras">
-            <Button variant="outline" data-testid="button-nav-regras">
-              <BarChart3 className="mr-2 h-4 w-4" />
-              Regras de Categorização
+              Transações e Liquidações
             </Button>
           </Link>
           <Link href="/pj/relatorios">
             <Button variant="outline" data-testid="button-nav-relatorios">
               <FileBarChart className="mr-2 h-4 w-4" />
-              Relatórios Mensais
+              Relatórios Analíticos
             </Button>
           </Link>
         </CardContent>

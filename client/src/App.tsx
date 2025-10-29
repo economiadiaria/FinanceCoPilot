@@ -22,10 +22,9 @@ import Configuracoes from "@/pages/configuracoes";
 import OpenFinancePage from "@/pages/open-finance";
 import LoginPage from "@/pages/login";
 import DashboardPJ from "@/pages/pj/dashboard-pj";
-import VendasPJ from "@/pages/pj/vendas-pj";
-import ConciliacaoPJ from "@/pages/pj/conciliacao-pj";
-import RegrasPJ from "@/pages/pj/regras-pj";
-import RelatoriosPJ from "@/pages/pj/relatorios-pj";
+import ResumoPJ from "@/pages/pj/resumo";
+import TransacoesPJ from "@/pages/pj/transacoes";
+import RelatoriosPJ from "@/pages/pj/relatorios";
 import type { Client } from "@shared/schema";
 import AdminAssociacoes from "@/pages/admin/associacoes";
 import AdminAuditoria from "@/pages/admin/auditoria";
@@ -38,6 +37,24 @@ import {
 } from "@/components/ui/select";
 import { PJServiceProvider, usePJService } from "@/contexts/PJServiceContext";
 import type { PJBankAccount } from "@/services/pj";
+
+type PJPageProps = {
+  clientId: string | null;
+  clientType: string | null;
+  bankAccountId: string | null;
+};
+
+type PJRouteEntry = {
+  path: string;
+  component: (props: PJPageProps) => JSX.Element;
+};
+
+export const pjRouteEntries: PJRouteEntry[] = [
+  { path: "/pj/dashboard", component: DashboardPJ },
+  { path: "/pj/resumo", component: ResumoPJ },
+  { path: "/pj/transacoes", component: TransacoesPJ },
+  { path: "/pj/relatorios", component: RelatoriosPJ },
+];
 
 function Router() {
   return (
@@ -190,41 +207,15 @@ function AuthenticatedApp() {
                   clientType={currentClient?.type || null}
                 />
               </Route>
-              <Route path="/pj/dashboard">
-                <DashboardPJ
-                  clientId={selectedClient}
-                  clientType={currentClient?.type || null}
-                  bankAccountId={selectedBankAccountId}
-                />
-              </Route>
-              <Route path="/pj/vendas">
-                <VendasPJ
-                  clientId={selectedClient}
-                  clientType={currentClient?.type || null}
-                  bankAccountId={selectedBankAccountId}
-                />
-              </Route>
-              <Route path="/pj/conciliacao">
-                <ConciliacaoPJ
-                  clientId={selectedClient}
-                  clientType={currentClient?.type || null}
-                  bankAccountId={selectedBankAccountId}
-                />
-              </Route>
-              <Route path="/pj/regras">
-                <RegrasPJ
-                  clientId={selectedClient}
-                  clientType={currentClient?.type || null}
-                  bankAccountId={selectedBankAccountId}
-                />
-              </Route>
-              <Route path="/pj/relatorios">
-                <RelatoriosPJ
-                  clientId={selectedClient}
-                  clientType={currentClient?.type || null}
-                  bankAccountId={selectedBankAccountId}
-                />
-              </Route>
+              {pjRouteEntries.map(({ path, component: Component }) => (
+                <Route key={path} path={path}>
+                  <Component
+                    clientId={selectedClient}
+                    clientType={currentClient?.type || null}
+                    bankAccountId={selectedBankAccountId}
+                  />
+                </Route>
+              ))}
               <Route path="/admin/associacoes">
                 <AdminAssociacoes />
               </Route>

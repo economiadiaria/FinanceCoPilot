@@ -1,4 +1,16 @@
-import { Home, FileText, TrendingUp, FileBarChart, Settings, Building2, BarChart3, CreditCard, Brain, Users, ShieldCheck } from "lucide-react";
+import type { ComponentType, SVGProps } from "react";
+import {
+  Home,
+  FileText,
+  TrendingUp,
+  FileBarChart,
+  Settings,
+  Building2,
+  BarChart3,
+  CreditCard,
+  Users,
+  ShieldCheck,
+} from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -12,7 +24,14 @@ import {
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 
-const menuItems = [
+export type MenuItem = {
+  title: string;
+  url: string;
+  icon: ComponentType<SVGProps<SVGSVGElement>>;
+  testId?: string;
+};
+
+export const menuItems: MenuItem[] = [
   {
     title: "Dashboard",
     url: "/",
@@ -45,35 +64,34 @@ const menuItems = [
   },
 ];
 
-const pjMenuItems = [
+export const pjMenuItems: MenuItem[] = [
   {
     title: "Dashboard PJ",
     url: "/pj/dashboard",
     icon: Home,
+    testId: "link-pj-dashboard",
   },
   {
-    title: "Vendas",
-    url: "/pj/vendas",
+    title: "Resumo",
+    url: "/pj/resumo",
     icon: BarChart3,
+    testId: "link-pj-resumo",
   },
   {
-    title: "Conciliação",
-    url: "/pj/conciliacao",
+    title: "Transações",
+    url: "/pj/transacoes",
     icon: CreditCard,
+    testId: "link-pj-transacoes",
   },
   {
     title: "Relatórios PJ",
     url: "/pj/relatorios",
     icon: FileBarChart,
-  },
-  {
-    title: "Regras",
-    url: "/pj/regras",
-    icon: Brain,
+    testId: "link-pj-relatorios",
   },
 ];
 
-const adminMenuItems = [
+const adminMenuItems: MenuItem[] = [
   {
     title: "Associações",
     url: "/admin/associacoes",
@@ -104,7 +122,7 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     asChild
                     isActive={location === item.url}
-                    data-testid={`link-${item.title.toLowerCase()}`}
+                    data-testid={item.testId ?? `link-${item.title.toLowerCase()}`}
                   >
                     <Link href={item.url}>
                       <item.icon className="h-5 w-5" />
@@ -128,7 +146,7 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     asChild
                     isActive={location === item.url}
-                    data-testid={`link-pj-${item.title.toLowerCase()}`}
+                    data-testid={item.testId ?? `link-pj-${item.title.toLowerCase()}`}
                   >
                     <Link href={item.url}>
                       <item.icon className="h-5 w-5" />
@@ -153,7 +171,7 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       asChild
                       isActive={location === item.url}
-                      data-testid={`link-admin-${item.title.toLowerCase()}`}
+                      data-testid={item.testId ?? `link-admin-${item.title.toLowerCase()}`}
                     >
                       <Link href={item.url}>
                         <item.icon className="h-5 w-5" />
