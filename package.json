@@ -17,7 +17,8 @@
     "db:push": "drizzle-kit push",
     "openapi:validate": "openapi validate docs/openapi/pj-banking.yaml",
     "openapi:sdk": "openapi-generator-cli generate -i docs/openapi/pj-banking.yaml -g typescript-axios -o client/sdk/pj --additional-properties=supportsES6=true,withSeparateModelsAndApi=true,modelPackage=models,apiPackage=apis,enumPropertyNaming=original,typescriptThreePlus=true",
-    "openapi:orval": "orval --config orval.config.ts"
+    "openapi:orval": "orval --config orval.config.ts",
+    "smoke": "tsx scripts/smoke/index.ts"
   },
   "dependencies": {
     "@financecopilot/pj-banking-sdk": "workspace:*",
