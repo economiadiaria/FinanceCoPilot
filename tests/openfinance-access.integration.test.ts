@@ -137,7 +137,7 @@ describe("Open Finance client isolation", () => {
     await seedStorage(storage);
   });
 
-  it("returns 403 when a foreign master starts an Open Finance consent", async () => {
+  it("returns neutral not found when a foreign master starts an Open Finance consent", async () => {
     const agent = request.agent(appServer);
 
     await agent
@@ -145,12 +145,17 @@ describe("Open Finance client isolation", () => {
       .send({ email: MASTER_FOREIGN_EMAIL, password: MASTER_FOREIGN_PASSWORD })
       .expect(200);
 
-    const response = await agent
+    const forbidden = await agent
       .post("/api/openfinance/consent/start")
       .send({ clientId: CLIENT_PRIMARY_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(response.body.error, /outra organização/i);
+    const missing = await agent
+      .post("/api/openfinance/consent/start")
+      .send({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 
   it("denies Open Finance sync for consultants from another organization", async () => {
@@ -161,12 +166,17 @@ describe("Open Finance client isolation", () => {
       .send({ email: CONSULTANT_FOREIGN_EMAIL, password: CONSULTANT_FOREIGN_PASSWORD })
       .expect(200);
 
-    const response = await agent
+    const forbidden = await agent
       .post("/api/openfinance/sync")
       .send({ clientId: CLIENT_PRIMARY_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(response.body.error, /outra organização/i);
+    const missing = await agent
+      .post("/api/openfinance/sync")
+      .send({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 
   it("blocks Open Finance item listing for clients from another organization", async () => {
@@ -177,12 +187,17 @@ describe("Open Finance client isolation", () => {
       .send({ email: CLIENT_FOREIGN_EMAIL, password: CLIENT_FOREIGN_PASSWORD })
       .expect(200);
 
-    const response = await agent
+    const forbidden = await agent
       .get("/api/openfinance/items")
       .query({ clientId: CLIENT_PRIMARY_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(response.body.error, /outra organização/i);
+    const missing = await agent
+      .get("/api/openfinance/items")
+      .query({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 });
 

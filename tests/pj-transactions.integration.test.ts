@@ -236,8 +236,13 @@ describe("GET /api/pj/transactions", () => {
     const forbidden = await agent
       .get("/api/pj/transactions")
       .query({ clientId: CLIENT_TWO, bankAccountId: ACCOUNT_TWO })
-      .expect(403);
+      .expect(404);
 
-    assert.match(forbidden.body.error, /outra organização/i);
+    const missing = await agent
+      .get("/api/pj/transactions")
+      .query({ clientId: "missing-client", bankAccountId: "missing-account" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 });
