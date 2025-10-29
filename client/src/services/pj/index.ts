@@ -1,4 +1,4 @@
-import axios, { type AxiosInstance } from "axios";
+import axios, { type AxiosInstance, type AxiosRequestHeaders } from "axios";
 import {
   Configuration,
   PJBankingApi,
@@ -28,7 +28,10 @@ pjAxios.interceptors.request.use((config) => {
   const baseHeaders = headersInitToRecord(getApiHeaders());
   const currentHeaders = (config.headers ?? {}) as Record<string, string>;
 
-  config.headers = { ...baseHeaders, ...currentHeaders };
+  config.headers = {
+    ...currentHeaders,
+    ...baseHeaders,
+  } as AxiosRequestHeaders;
   return config;
 });
 

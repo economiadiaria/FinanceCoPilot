@@ -35,8 +35,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PJServiceProvider } from "@/contexts/PJServiceContext";
-import { getAccounts, type PJBankAccount } from "@/services/pj";
+import { PJServiceProvider, usePJService } from "@/contexts/PJServiceContext";
+import type { PJBankAccount } from "@/services/pj";
 
 type PJPageProps = {
   clientId: string | null;
@@ -74,6 +74,7 @@ function AuthenticatedApp() {
   const [selectedBankAccountId, setSelectedBankAccountId] = useState<string | null>(null);
   const [newClientDialogOpen, setNewClientDialogOpen] = useState(false);
   const { user } = useAuth();
+  const pjService = usePJService();
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
   });
@@ -105,30 +106,57 @@ function AuthenticatedApp() {
   const currentClient = filteredClients.find((c) => c.clientId === selectedClient) ?? null;
   const isPJClient = currentClient?.type === "PJ" || currentClient?.type === "BOTH";
 
-  const { data: availableBankAccounts = [] } = useQuery<PJBankAccount[]>({
+  const {
+    data: bankAccounts = [],
+    isLoading: isLoadingBankAccounts,
+  } = useQuery<PJBankAccount[]>({
     queryKey: ["pj:bank-accounts", { clientId: selectedClient }],
     enabled: isPJClient && !!selectedClient,
-    queryFn: () => getAccounts(),
+    queryFn: () =>
+      pjService.listBankAccounts({
+        clientId: selectedClient!,
+      }),
   });
+
+  const availableBankAccounts = useMemo(() => {
+    if (!isPJClient) {
+      return [] as PJBankAccount[];
+    }
+    return bankAccounts;
+  }, [bankAccounts, isPJClient]);
+
+  const selectedBankAccount = useMemo(() => {
+    return (
+      availableBankAccounts.find((account) => account.id === selectedBankAccountId) ?? null
+    );
+  }, [availableBankAccounts, selectedBankAccountId]);
 
   useEffect(() => {
     setSelectedBankAccountId(null);
   }, [selectedClient]);
 
   useEffect(() => {
-    if (
-      selectedBankAccountId &&
-      !availableBankAccounts.some((account) => account.id === selectedBankAccountId)
-    ) {
-      setSelectedBankAccountId(null);
-    }
-  }, [availableBankAccounts, selectedBankAccountId]);
-
-  useEffect(() => {
     if (!isPJClient) {
       setSelectedBankAccountId(null);
+      return;
     }
-  }, [isPJClient]);
+
+    if (!availableBankAccounts.length) {
+      setSelectedBankAccountId(null);
+      return;
+    }
+
+    setSelectedBankAccountId((current) => {
+      if (
+        current &&
+        availableBankAccounts.some((account) => account.id === current)
+      ) {
+        return current;
+      }
+
+      return availableBankAccounts[0].id;
+    });
+  }, [availableBankAccounts, isPJClient]);
 
   return (
     <div className="flex h-screen w-full">
@@ -149,33 +177,49 @@ function AuthenticatedApp() {
               onNewClient={user?.role === "master" ? () => setNewClientDialogOpen(true) : undefined}
             />
             {isPJClient && (
-              <Select
-                value={selectedBankAccountId ?? undefined}
-                onValueChange={setSelectedBankAccountId}
-                disabled={!availableBankAccounts.length}
-              >
-                <SelectTrigger className="w-[240px]" data-testid="select-bank-account">
-                  <SelectValue placeholder="Selecione uma conta PJ" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableBankAccounts.length ? (
-                    availableBankAccounts.map((account) => (
-                      <SelectItem key={account.id} value={account.id}>
+              <div className="flex flex-col gap-1">
+                <span className="text-[0.65rem] uppercase text-muted-foreground">Conta PJ</span>
+                <Select
+                  value={selectedBankAccountId ?? undefined}
+                  onValueChange={setSelectedBankAccountId}
+                  disabled={isLoadingBankAccounts || !availableBankAccounts.length}
+                >
+                  <SelectTrigger className="w-[260px] text-left" data-testid="select-bank-account">
+                    <SelectValue placeholder="Selecione uma conta PJ">
+                      {selectedBankAccount ? (
                         <div className="flex flex-col">
-                          <span className="font-medium">{account.bankName}</span>
+                          <span className="font-medium">{selectedBankAccount.bankName}</span>
                           <span className="text-xs text-muted-foreground">
-                            {account.accountType} • {account.accountNumberMask}
+                            {selectedBankAccount.accountNumberMask}
                           </span>
                         </div>
-                      </SelectItem>
-                    ))
-                  ) : (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">
-                      Nenhuma conta disponível
-                    </div>
-                  )}
-                </SelectContent>
-              </Select>
+                      ) : null}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableBankAccounts.length ? (
+                      availableBankAccounts.map((account) => (
+                        <SelectItem
+                          key={account.id}
+                          value={account.id}
+                          textValue={`${account.bankName} ${account.accountNumberMask}`}
+                        >
+                          <div className="flex flex-col">
+                            <span className="font-medium">{account.bankName}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {account.accountType} • {account.accountNumberMask}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <div className="px-3 py-2 text-sm text-muted-foreground">
+                        Nenhuma conta disponível
+                      </div>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
             )}
             <ThemeToggle />
             <UserMenu />
