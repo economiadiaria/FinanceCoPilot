@@ -1,4 +1,4 @@
-import { describe, before, after, it } from "node:test";
+import { describe, before, after, beforeEach, it } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import session from "express-session";
@@ -19,6 +19,7 @@ function signPayload(payload: unknown): string {
 
 describe("Open Finance webhook authentication", () => {
   let appServer: import("http").Server;
+  let currentStorage: MemStorage;
 
   before(async () => {
     process.env.PLUGGY_WEBHOOK_SECRET = TEST_WEBHOOK_SECRET;
@@ -40,8 +41,14 @@ describe("Open Finance webhook authentication", () => {
       })
     );
 
-    setStorageProvider(new MemStorage());
+    currentStorage = new MemStorage();
+    setStorageProvider(currentStorage);
     appServer = await registerRoutes(app);
+  });
+
+  beforeEach(() => {
+    currentStorage = new MemStorage();
+    setStorageProvider(currentStorage);
   });
 
   after(async () => {
@@ -68,6 +75,11 @@ describe("Open Finance webhook authentication", () => {
 
     assert.equal(response.status, 403);
     assert.equal(response.body.error, "Assinatura inválida");
+
+    const auditLogs = await currentStorage.getAuditLogs("system", 5);
+    const rejectionAudit = auditLogs.find(log => log.eventType === "openfinance.webhook.rejected");
+    assert.ok(rejectionAudit);
+    assert.equal(rejectionAudit.metadata.reason, "invalid-signature");
   });
 
   it("rejects webhook payloads with a stale timestamp", async () => {
@@ -88,6 +100,34 @@ describe("Open Finance webhook authentication", () => {
 
     assert.equal(response.status, 401);
     assert.equal(response.body.error, "Timestamp expirado");
+
+    const auditLogs = await currentStorage.getAuditLogs("system", 5);
+    const rejectionAudit = auditLogs.find(log => log.eventType === "openfinance.webhook.rejected");
+    assert.ok(rejectionAudit);
+    assert.equal(rejectionAudit.metadata.reason, "stale-timestamp");
+  });
+
+  it("rejects webhook payloads when required headers are missing", async () => {
+    const payload = {
+      event: "item/created",
+      itemId: "item-123",
+      data: {},
+    };
+
+    const signature = signPayload(payload);
+
+    const response = await request(appServer)
+      .post("/api/openfinance/webhook")
+      .set("X-Pluggy-Signature", signature)
+      .send(payload);
+
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error, "Timestamp obrigatório");
+
+    const auditLogs = await currentStorage.getAuditLogs("system", 5);
+    const rejectionAudit = auditLogs.find(log => log.eventType === "openfinance.webhook.rejected");
+    assert.ok(rejectionAudit);
+    assert.equal(rejectionAudit.metadata.reason, "missing-timestamp");
   });
 
   it("accepts webhook payloads with a valid signature and timestamp", async () => {
