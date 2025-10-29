@@ -31,13 +31,15 @@ export interface PjClientCategoryRecord {
   orgId: string;
   clientId: string;
   baseCategoryId: string | null;
-  parentId: string | null;
   name: string;
   description?: string | null;
+  parentId: string | null;
   acceptsPostings: boolean;
   level: number;
   path: string;
   sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface IStorage {
