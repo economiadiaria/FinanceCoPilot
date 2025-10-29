@@ -401,6 +401,42 @@ export const ledgerEntrySchema = z.object({
 
 export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 
+// PJ Categories
+export const pjCategorySchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  parentId: z.string().nullable().optional(),
+  isCore: z.boolean().default(false),
+  acceptsPostings: z.boolean().default(true),
+  level: z.number(),
+  path: z.string(),
+  sortOrder: z.number().default(0),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type PjCategory = z.infer<typeof pjCategorySchema>;
+
+export const pjClientCategorySchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  clientId: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  parentId: z.string().nullable().optional(),
+  baseCategoryId: z.string().nullable().optional(),
+  acceptsPostings: z.boolean().default(true),
+  level: z.number(),
+  path: z.string(),
+  sortOrder: z.number().default(0),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type PjClientCategory = z.infer<typeof pjClientCategorySchema>;
+
 // Bank Transaction (PJ)
 export const bankTransactionSchema = z.object({
   bankTxId: z.string(),

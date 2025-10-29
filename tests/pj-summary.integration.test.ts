@@ -7,7 +7,14 @@ import bcrypt from "bcrypt";
 
 import { registerRoutes } from "../server/routes";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
-import type { BankAccount, BankTransaction, Client, SaleLeg, User } from "@shared/schema";
+import type {
+  BankAccount,
+  BankTransaction,
+  Client,
+  PjClientCategory,
+  SaleLeg,
+  User,
+} from "@shared/schema";
 import { toISOFromBR } from "@shared/utils";
 
 const ORG_ONE = "org-1";
@@ -23,6 +30,43 @@ const MASTER_TWO_PASSWORD = "master-two";
 
 async function seedStorage(storage: IStorage) {
   const now = new Date().toISOString();
+
+  const baseCategories = await storage.getPjCategories();
+  const clientCategorySeeds: PjClientCategory[] = baseCategories.map(category => ({
+    id: `${CLIENT_MAIN}-${category.code}`,
+    orgId: ORG_ONE,
+    clientId: CLIENT_MAIN,
+    name: category.name,
+    description: category.description,
+    parentId: null,
+    baseCategoryId: category.id,
+    acceptsPostings: category.acceptsPostings,
+    level: category.level,
+    path: category.path,
+    sortOrder: category.sortOrder,
+    createdAt: now,
+    updatedAt: now,
+  }));
+
+  await storage.bulkInsertPjClientCategories(ORG_ONE, CLIENT_MAIN, clientCategorySeeds);
+
+  const secondaryCategorySeeds: PjClientCategory[] = baseCategories.map(category => ({
+    id: `${CLIENT_OTHER}-${category.code}`,
+    orgId: ORG_ONE,
+    clientId: CLIENT_OTHER,
+    name: category.name,
+    description: category.description,
+    parentId: null,
+    baseCategoryId: category.id,
+    acceptsPostings: category.acceptsPostings,
+    level: category.level,
+    path: category.path,
+    sortOrder: category.sortOrder,
+    createdAt: now,
+    updatedAt: now,
+  }));
+
+  await storage.bulkInsertPjClientCategories(ORG_ONE, CLIENT_OTHER, secondaryCategorySeeds);
 
   const masterOrgOne: User = {
     userId: "user-master-1",

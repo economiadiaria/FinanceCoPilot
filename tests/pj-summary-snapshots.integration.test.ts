@@ -7,7 +7,13 @@ import bcrypt from "bcrypt";
 
 import { registerRoutes } from "../server/routes";
 import { setStorageProvider, MemStorage } from "../server/storage";
-import type { BankAccount, BankSummarySnapshot, Client, User } from "@shared/schema";
+import type {
+  BankAccount,
+  BankSummarySnapshot,
+  Client,
+  PjClientCategory,
+  User,
+} from "@shared/schema";
 
 const ORG_ID = "snapshot-org";
 const CLIENT_ID = "snapshot-client";
@@ -108,6 +114,26 @@ async function seedSnapshotStorage(storage: SnapshotOnlyStorage) {
   await storage.upsertClient(client);
   await storage.upsertBankAccount(bankAccount);
   await storage.setBankSummarySnapshots(ORG_ID, CLIENT_ID, BANK_ACCOUNT_ID, [snapshot]);
+
+  const baseCategories = await storage.getPjCategories();
+  const timestamp = new Date().toISOString();
+  const categorySeeds: PjClientCategory[] = baseCategories.map(category => ({
+    id: `${CLIENT_ID}-${category.code}`,
+    orgId: ORG_ID,
+    clientId: CLIENT_ID,
+    name: category.name,
+    description: category.description,
+    parentId: null,
+    baseCategoryId: category.id,
+    acceptsPostings: category.acceptsPostings,
+    level: category.level,
+    path: category.path,
+    sortOrder: category.sortOrder,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }));
+
+  await storage.bulkInsertPjClientCategories(ORG_ID, CLIENT_ID, categorySeeds);
 }
 
 describe("PJ summary with snapshots", () => {
