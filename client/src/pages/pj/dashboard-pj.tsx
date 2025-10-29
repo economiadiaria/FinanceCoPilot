@@ -6,6 +6,14 @@ import { MetricCard } from "@/components/metric-card";
 import { DollarSign, TrendingDown, Wallet, CreditCard, BarChart3, FileBarChart } from "lucide-react";
 import { useEffect, useState, useRef } from "react";
 import { Link } from "wouter";
+import { usePJService } from "@/contexts/PJServiceContext";
+import type {
+  PJSummary,
+  PJTrend,
+  PJTopCostItem,
+  PJRevenueSplitItem,
+  PJSalesKpis,
+} from "@/services/pj";
 
 interface DashboardPJProps {
   clientId: string | null;
@@ -13,42 +21,8 @@ interface DashboardPJProps {
   bankAccountId: string | null;
 }
 
-interface Summary {
-  month: string;
-  receitas: number;
-  despesas: number;
-  saldo: number;
-  contasReceber: number;
-  lucroBruto: number;
-  lucroLiquido: number;
-  margemLiquida: number;
-}
-
-interface Trend {
-  month: string;
-  receitas: number;
-  despesas: number;
-}
-
-interface TopCost {
-  category: string;
-  item: string;
-  total: number;
-}
-
-interface RevenueSplit {
-  channel: string;
-  amount: number;
-}
-
-interface SalesKPIs {
-  totalSales: number;
-  totalRevenue: number;
-  ticketMedio: number;
-  topClientes: { customer: string; amount: number }[];
-}
-
 export default function DashboardPJ({ clientId, clientType, bankAccountId }: DashboardPJProps) {
+  const pjService = usePJService();
   const [month, setMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -62,29 +36,76 @@ export default function DashboardPJ({ clientId, clientType, bankAccountId }: Das
 
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
-  const { data: summary, isLoading: loadingSummary, error: errorSummary } = useQuery<Summary>({
+  const getMonthRange = () => {
+    const [yearPart, monthPart] = month.split("-");
+    const yearNum = Number(yearPart);
+    const monthNum = Number(monthPart) - 1;
+    const fromDate = new Date(Date.UTC(yearNum, monthNum, 1));
+    const toDate = new Date(Date.UTC(yearNum, monthNum + 1, 0));
+    return {
+      from: fromDate.toISOString().split("T")[0],
+      to: toDate.toISOString().split("T")[0],
+    };
+  };
+
+  const { data: summary, isLoading: loadingSummary, error: errorSummary } = useQuery<PJSummary>({
     queryKey: ["/api/pj/dashboard/summary", { clientId, month, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () => {
+      const { from, to } = getMonthRange();
+      return pjService.getSummary({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        from,
+        to,
+      });
+    },
   });
 
-  const { data: trendsData, error: errorTrends } = useQuery<{ trends: Trend[] }>({
+  const { data: trendsData, error: errorTrends } = useQuery<{ trends: PJTrend[] }>({
     queryKey: ["/api/pj/dashboard/trends", { clientId, year, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getTrends({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        year,
+      }),
   });
 
-  const { data: revenueSplitData, error: errorRevenue } = useQuery<{ revenueSplit: RevenueSplit[] }>({
+  const { data: revenueSplitData, error: errorRevenue } = useQuery<{
+    revenueSplit: PJRevenueSplitItem[];
+  }>({
     queryKey: ["/api/pj/dashboard/revenue-split", { clientId, month, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getRevenueSplit({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        month,
+      }),
   });
 
-  const { data: topCostsData, error: errorCosts } = useQuery<{ topCosts: TopCost[] }>({
+  const { data: topCostsData, error: errorCosts } = useQuery<{ topCosts: PJTopCostItem[] }>({
     queryKey: ["/api/pj/dashboard/top-costs", { clientId, month, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getTopCosts({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        month,
+      }),
   });
 
-  const { data: salesKPIs, error: errorKPIs } = useQuery<SalesKPIs>({
+  const { data: salesKPIs, error: errorKPIs } = useQuery<PJSalesKpis>({
     queryKey: ["/api/pj/dashboard/sales-kpis", { clientId, month, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getSalesKpis({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        month,
+      }),
   });
 
   // Chart.js rendering

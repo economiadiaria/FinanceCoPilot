@@ -20,49 +20,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { usePJService } from "@/contexts/PJServiceContext";
+import type { PJSaleLeg, PJBankTransactionsResponse } from "@/services/pj";
 
 interface ConciliacaoPJProps {
   clientId: string | null;
   clientType: string | null;
   bankAccountId: string | null;
-}
-
-interface SaleLeg {
-  saleLegId: string;
-  saleId: string;
-  paymentMethod: string;
-  grossAmount: number;
-  netAmount: number;
-  settlementPlan: {
-    n: number;
-    due: string;
-    expected: number;
-    receivedTxId?: string;
-    receivedAt?: string;
-  }[];
-  reconciliation: {
-    state: string;
-  };
-}
-
-interface BankTransaction {
-  bankTxId: string;
-  date: string;
-  desc: string;
-  amount: number;
-  reconciled: boolean;
-}
-
-interface BankTransactionsResponse {
-  items: BankTransaction[];
-  pagination: {
-    page: number;
-    limit: number;
-    totalItems: number;
-    totalPages: number;
-    hasNextPage: boolean;
-    hasPreviousPage: boolean;
-  };
 }
 
 interface Suggestion {
@@ -78,43 +42,41 @@ interface Suggestion {
 export default function ConciliacaoPJ({ clientId, clientType, bankAccountId }: ConciliacaoPJProps) {
   const { toast } = useToast();
   const ofxInputRef = useRef<HTMLInputElement>(null);
-  const [selectedLeg, setSelectedLeg] = useState<SaleLeg | null>(null);
+  const [selectedLeg, setSelectedLeg] = useState<PJSaleLeg | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const pjService = usePJService();
 
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
-  const { data: legsData, isLoading: loadingLegs, error: errorLegs } = useQuery<{ legs: SaleLeg[] }>({
+  const { data: legsData, isLoading: loadingLegs, error: errorLegs } = useQuery<{ legs: PJSaleLeg[] }>({
     queryKey: ["/api/pj/sales/legs", { clientId, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getSalesLegs({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+      }),
   });
 
-  const { data: bankTxsData, isLoading: loadingTxs, error: errorTxs } = useQuery<BankTransactionsResponse>({
+  const { data: bankTxsData, isLoading: loadingTxs, error: errorTxs } = useQuery<PJBankTransactionsResponse>({
     queryKey: ["/api/pj/transactions", { clientId, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getBankTransactions({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+      }),
   });
 
   const uploadOfxMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append("ofx", file);
-      formData.append("clientId", clientId!);
-      formData.append("bankAccountId", bankAccountId!);
-
-      const res = await fetch("/api/pj/import/ofx", {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
-      }
-
-      return await res.json();
-    },
-    onSuccess: (data: any) => {
+    mutationFn: async (file: File) =>
+      pjService.importBankStatement({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        file,
+      }),
+    onSuccess: (data) => {
       toast({
         title: "OFX importado com sucesso",
         description: `${data.imported} transações bancárias importadas`,
@@ -185,7 +147,7 @@ export default function ConciliacaoPJ({ clientId, clientType, bankAccountId }: C
     }
   };
 
-  const handleSuggest = (leg: SaleLeg) => {
+  const handleSuggest = (leg: PJSaleLeg) => {
     setSelectedLeg(leg);
     suggestMutation.mutate(leg.saleLegId);
   };

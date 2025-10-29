@@ -9,118 +9,12 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { MetricCard } from "@/components/metric-card";
 import { Separator } from "@/components/ui/separator";
 import { AlertCircle, BarChart3, FileBarChart } from "lucide-react";
-
-interface DashboardMonthlySummary {
-  faturamento: number;
-  receita: number;
-  despesas: number;
-  saldo: number;
-  lucroBruto: number;
-  lucroLiquido: number;
-  margemLiquida: number;
-  ticketMedio: number;
-  quantidadeVendas: number;
-  deducoesReceita: number;
-  despesasGerais: number;
-  despesasComercialMarketing: number;
-  financeiroIn: number;
-  financeiroOut: number;
-  outrasIn: number;
-  outrasOut: number;
-}
-
-interface TopSaleHighlight {
-  saleId: string;
-  date: string;
-  amount: number;
-  netAmount: number;
-  customer: string;
-  channel: string;
-}
-
-interface TopCostHighlight {
-  bankTxId: string;
-  date: string;
-  desc: string;
-  amount: number;
-  group: string;
-  groupLabel: string;
-}
-
-interface RevenueChannelHighlight {
-  channel: string;
-  total: number;
-  count: number;
-  percentage: number;
-}
-
-interface UncategorisedExpenseItem {
-  bankTxId: string;
-  date: string;
-  desc: string;
-  amount: number;
-}
-
-interface MonthlyInsightsResponse {
-  month: string | null;
-  availableMonths: string[];
-  summary: DashboardMonthlySummary;
-  charts: {
-    faturamentoVsReceita: {
-      labels: string[];
-      faturamento: number[];
-      receita: number[];
-    };
-    lucroEMargem: {
-      labels: string[];
-      lucroLiquido: number[];
-      margemLiquida: number[];
-    };
-    evolucaoCaixa: {
-      labels: string[];
-      saldo: number[];
-    };
-  };
-  highlights: {
-    topVendas: TopSaleHighlight[];
-    topCustos: TopCostHighlight[];
-    origemReceita: RevenueChannelHighlight[];
-    despesasNaoCategorizadas: {
-      total: number;
-      count: number;
-      items: UncategorisedExpenseItem[];
-    };
-  };
-}
-
-interface CostBreakdownResponse {
-  month: string | null;
-  availableMonths: string[];
-  totals: {
-    inflows: number;
-    outflows: number;
-    net: number;
-  };
-  groups: {
-    key: string;
-    label: string;
-    inflows: number;
-    outflows: number;
-    net: number;
-    items: {
-      key: string;
-      label: string;
-      inflows: number;
-      outflows: number;
-      net: number;
-    }[];
-  }[];
-  uncategorized: {
-    total: number;
-    count: number;
-    items: UncategorisedExpenseItem[];
-  };
-}
+import { usePJService } from "@/contexts/PJServiceContext";
+import type {
+  PJMonthlyInsightsResponse,
+  PJCostBreakdownResponse,
+  PJDashboardMonthlySummary,
+} from "@/services/pj";
 
 interface RelatoriosPJProps {
   clientId: string | null;
@@ -163,23 +57,36 @@ export default function RelatoriosPJ({ clientId, clientType, bankAccountId }: Re
   const lucroChartInstance = useRef<any>(null);
   const caixaChartRef = useRef<HTMLCanvasElement>(null);
   const caixaChartInstance = useRef<any>(null);
+  const pjService = usePJService();
 
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
-  const { data: insights, isLoading: loadingInsights } = useQuery<MonthlyInsightsResponse>({
+  const { data: insights, isLoading: loadingInsights } = useQuery<PJMonthlyInsightsResponse>({
     queryKey: [
       "/api/pj/dashboard/monthly-insights",
       { clientId, month: selectedMonth ?? undefined, bankAccountId },
     ],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getMonthlyInsights({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        month: selectedMonth ?? undefined,
+      }),
   });
 
-  const { data: costBreakdown } = useQuery<CostBreakdownResponse>({
+  const { data: costBreakdown } = useQuery<PJCostBreakdownResponse>({
     queryKey: [
       "/api/pj/dashboard/costs-breakdown",
       { clientId, month: selectedMonth ?? undefined, bankAccountId },
     ],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getCostBreakdown({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        month: selectedMonth ?? undefined,
+      }),
   });
 
   useEffect(() => {
@@ -826,7 +733,10 @@ function computeDelta(current?: number, previous?: number | null) {
   return current - previous;
 }
 
-function buildSyntheticSummary(insights: MonthlyInsightsResponse, month: string): DashboardMonthlySummary | null {
+function buildSyntheticSummary(
+  insights: PJMonthlyInsightsResponse,
+  month: string,
+): PJDashboardMonthlySummary | null {
   const index = insights.charts.faturamentoVsReceita.labels.findIndex((label) => label === month);
   if (index === -1) {
     return null;

@@ -577,182 +577,206 @@ export async function registerRoutes(app: Express): Promise<Server> {
     upload.single("ofx"),
     validateClientAccess,
     async (req, res) => {
-    let clientIdForLogging: string | null = null;
-    try {
-      const client = req.clientContext;
-      let clientId: string | undefined = client?.clientId;
+      let clientIdForLogging: string | null = null;
       try {
+        const client = req.clientContext;
 
-      if (!client || !req.authUser) {
-        return res.status(500).json({ error: "Contexto do cliente não carregado" });
-      }
-
-      if (req.body?.clientId && req.body.clientId !== client.clientId) {
-        return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
-      }
-
-      const clientId = client.clientId;
-      clientIdForLogging = clientId;
-
-      if (!req.file) {
-        return res.status(400).json({ error: "Nenhum arquivo OFX enviado." });
-      }
-
-      const ofxContent = req.file.buffer.toString("utf-8");
-      
-      // Generate SHA256 hash of file content to prevent duplicate imports
-      const fileHash = crypto.createHash("sha256").update(ofxContent).digest("hex");
-      
-      // Parse OFX using ofx-js
-      let ofxData;
-      try {
-        ofxData = await Ofx.parse(ofxContent);
-        getLogger(req).info("OFX parseado com sucesso", {
-          event: "pf.ofx.parse.success",
-          context: { clientId: ensuredClientId },
-        });
-      } catch (parseError) {
-        getLogger(req).error("Erro ao fazer parse do OFX", {
-          event: "pf.ofx.parse.failure",
-          context: { clientId: ensuredClientId },
-        }, parseError);
-        return res.status(400).json({
-          error: "Erro ao processar arquivo OFX. Verifique se o arquivo está no formato correto."
-        });
-      }
-
-      if (!ofxData || !ofxData.OFX) {
-        getLogger(req).error("OFX parseado mas sem estrutura válida", {
-          event: "pf.ofx.structure.invalid",
-          context: { clientId: ensuredClientId },
-        }, ofxData);
-        return res.status(400).json({ error: "Arquivo OFX inválido ou sem dados." });
-      }
-
-      // Extract bank name from OFX (try <ORG> first, fallback to <FID>)
-      let bankName = "Banco não identificado";
-      try {
-        const signonInfo = ofxData.OFX.SIGNONMSGSRSV1?.SONRS?.FI;
-        if (signonInfo) {
-          bankName = signonInfo.ORG || signonInfo.FID || bankName;
-        }
-      } catch (e) {
-        getLogger(req).warn("Não foi possível extrair nome do banco do OFX", {
-          event: "pf.ofx.bankname.missing",
-          context: { clientId: ensuredClientId },
-        }, e);
-      }
-
-      const transactions: Transaction[] = [];
-      const existingTransactions = await storage.getTransactions(ensuredClientId);
-      const existingFitIds = new Set(existingTransactions.map(t => t.fitid).filter(Boolean));
-
-      const parseStatementDate = (value?: string): string | undefined => {
-        if (!value) {
-          return undefined;
-        }
-        const trimmed = value.toString().trim();
-        if (trimmed.length < 8) {
-          return undefined;
-        }
-        return `${trimmed.substring(0, 4)}-${trimmed.substring(4, 6)}-${trimmed.substring(6, 8)}`;
-      };
-
-      // Extract transactions from OFX structure
-      // Normalize to arrays (OFX parser returns object for single account, array for multiple)
-      const bankAccountsRaw = ofxData.OFX.BANKMSGSRSV1?.STMTTRNRS;
-      const creditCardAccountsRaw = ofxData.OFX.CREDITCARDMSGSRSV1?.CCSTMTTRNRS;
-      
-      const bankAccounts = bankAccountsRaw 
-        ? (Array.isArray(bankAccountsRaw) ? bankAccountsRaw : [bankAccountsRaw])
-        : [];
-      const creditCardAccounts = creditCardAccountsRaw
-        ? (Array.isArray(creditCardAccountsRaw) ? creditCardAccountsRaw : [creditCardAccountsRaw])
-        : [];
-
-      const accountSummaries: {
-        accountId: string;
-        statementStart?: string;
-        statementEnd?: string;
-        transactionCount: number;
-      }[] = [];
-      const duplicateAccounts = new Set<string>();
-
-      for (const account of [...bankAccounts, ...creditCardAccounts]) {
-        const statement = account.STMTRS || account.CCSTMTRS;
-        if (!statement || !statement.BANKTRANLIST || !statement.BANKTRANLIST.STMTTRN) {
-          continue;
+        if (!client || !req.authUser) {
+          return res.status(500).json({ error: "Contexto do cliente não carregado" });
         }
 
-        const transListRaw = statement.BANKTRANLIST.STMTTRN;
-        const transList = Array.isArray(transListRaw)
-          ? transListRaw
-          : [transListRaw];
-
-        const accountId = statement.BANKACCTFROM?.ACCTID || statement.CCACCTFROM?.ACCTID || "unknown";
-        const statementStart = parseStatementDate(statement.BANKTRANLIST.DTSTART);
-        const statementEnd = parseStatementDate(statement.BANKTRANLIST.DTEND);
-
-        const existingImport = await storage.getOFXImport(ensuredClientId, accountId, fileHash);
-        if (existingImport) {
-          duplicateAccounts.add(accountId);
+        if (req.body?.clientId && req.body.clientId !== client.clientId) {
+          return res.status(400).json({ error: "clientId inconsistente com o contexto carregado" });
         }
 
-        transList.forEach((trans: any) => {
-          const fitid = trans.FITID || crypto.createHash("md5")
-            .update(`${trans.DTPOSTED}-${trans.MEMO || trans.NAME}-${trans.TRNAMT}`)
-            .digest("hex");
+        const ensuredClientId = client.clientId;
+        clientIdForLogging = ensuredClientId;
 
-          if (existingFitIds.has(fitid)) {
-            return;
+        if (!req.file) {
+          return res.status(400).json({ error: "Nenhum arquivo OFX enviado." });
+        }
+
+        const ofxContent = req.file.buffer.toString("utf-8");
+
+        // Generate SHA256 hash of file content to prevent duplicate imports
+        const fileHash = crypto.createHash("sha256").update(ofxContent).digest("hex");
+
+        // Parse OFX using ofx-js
+        let ofxData;
+        try {
+          ofxData = await Ofx.parse(ofxContent);
+          getLogger(req).info("OFX parseado com sucesso", {
+            event: "pf.ofx.parse.success",
+            context: { clientId: ensuredClientId },
+          });
+        } catch (parseError) {
+          getLogger(req).error("Erro ao fazer parse do OFX", {
+            event: "pf.ofx.parse.failure",
+            context: { clientId: ensuredClientId },
+          }, parseError);
+          return res.status(400).json({
+            error: "Erro ao processar arquivo OFX. Verifique se o arquivo está no formato correto."
+          });
+        }
+
+        if (!ofxData || !ofxData.OFX) {
+          getLogger(req).error("OFX parseado mas sem estrutura válida", {
+            event: "pf.ofx.structure.invalid",
+            context: { clientId: ensuredClientId },
+          }, ofxData);
+          return res.status(400).json({ error: "Arquivo OFX inválido ou sem dados." });
+        }
+
+        // Extract bank name from OFX (try <ORG> first, fallback to <FID>)
+        let bankName = "Banco não identificado";
+        try {
+          const signonInfo = ofxData.OFX.SIGNONMSGSRSV1?.SONRS?.FI;
+          if (signonInfo) {
+            bankName = signonInfo.ORG || signonInfo.FID || bankName;
+          }
+        } catch (e) {
+          getLogger(req).warn("Não foi possível extrair nome do banco do OFX", {
+            event: "pf.ofx.bankname.missing",
+            context: { clientId: ensuredClientId },
+          }, e);
+        }
+
+        const transactions: Transaction[] = [];
+        const existingTransactions = await storage.getTransactions(ensuredClientId);
+        const existingFitIds = new Set(existingTransactions.map(t => t.fitid).filter(Boolean));
+
+        const parseStatementDate = (value?: string): string | undefined => {
+          if (!value) {
+            return undefined;
+          }
+          const trimmed = value.toString().trim();
+          if (trimmed.length < 8) {
+            return undefined;
+          }
+          return `${trimmed.substring(0, 4)}-${trimmed.substring(4, 6)}-${trimmed.substring(6, 8)}`;
+        };
+
+        // Extract transactions from OFX structure
+        // Normalize to arrays (OFX parser returns object for single account, array for multiple)
+        const bankAccountsRaw = ofxData.OFX.BANKMSGSRSV1?.STMTTRNRS;
+        const creditCardAccountsRaw = ofxData.OFX.CREDITCARDMSGSRSV1?.CCSTMTTRNRS;
+
+        const bankAccounts = bankAccountsRaw
+          ? (Array.isArray(bankAccountsRaw) ? bankAccountsRaw : [bankAccountsRaw])
+          : [];
+        const creditCardAccounts = creditCardAccountsRaw
+          ? (Array.isArray(creditCardAccountsRaw) ? creditCardAccountsRaw : [creditCardAccountsRaw])
+          : [];
+
+        const accountSummaries: {
+          accountId: string;
+          statementStart?: string;
+          statementEnd?: string;
+          transactionCount: number;
+        }[] = [];
+        const duplicateAccounts = new Set<string>();
+
+        for (const account of [...bankAccounts, ...creditCardAccounts]) {
+          const statement = account.STMTRS || account.CCSTMTRS;
+          if (!statement || !statement.BANKTRANLIST || !statement.BANKTRANLIST.STMTTRN) {
+            continue;
           }
 
-          const dateStr = trans.DTPOSTED?.toString().substring(0, 8) || "";
-          const date = dateStr
-            ? `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`
-            : new Date().toISOString().split("T")[0];
+          const transListRaw = statement.BANKTRANLIST.STMTTRN;
+          const transList = Array.isArray(transListRaw)
+            ? transListRaw
+            : [transListRaw];
 
-          const amount = parseFloat(trans.TRNAMT || "0");
-          const desc = trans.MEMO || trans.NAME || "Transação sem descrição";
+          const accountId = statement.BANKACCTFROM?.ACCTID || statement.CCACCTFROM?.ACCTID || "unknown";
+          const statementStart = parseStatementDate(statement.BANKTRANLIST.DTSTART);
+          const statementEnd = parseStatementDate(statement.BANKTRANLIST.DTEND);
 
-          let category: Transaction['category'] = undefined;
-          let subcategory: string | undefined;
-          let status: "pendente" | "categorizada" = "pendente";
+          const existingImport = await storage.getOFXImport(ensuredClientId, accountId, fileHash);
+          if (existingImport) {
+            duplicateAccounts.add(accountId);
+          }
 
-          if (desc.toUpperCase().includes("CDB")) {
-            category = "Investimento";
-            status = "categorizada";
-            if (amount >= 0) {
-              subcategory = "Resgate";
-            } else {
-              subcategory = "Aplicação";
+          transList.forEach((trans: any) => {
+            const fitid = trans.FITID || crypto.createHash("md5")
+              .update(`${trans.DTPOSTED}-${trans.MEMO || trans.NAME}-${trans.TRNAMT}`)
+              .digest("hex");
+
+            if (existingFitIds.has(fitid)) {
+              return;
             }
-          }
 
-          transactions.push({
-            date,
-            desc,
-            amount,
-            category,
-            subcategory,
-            status,
-            fitid,
-            accountId,
-            bankName,
+            const dateStr = trans.DTPOSTED?.toString().substring(0, 8) || "";
+            const date = dateStr
+              ? `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`
+              : new Date().toISOString().split("T")[0];
+
+            const amount = parseFloat(trans.TRNAMT || "0");
+            const desc = trans.MEMO || trans.NAME || "Transação sem descrição";
+
+            let category: Transaction['category'] = undefined;
+            let subcategory: string | undefined;
+            let status: "pendente" | "categorizada" = "pendente";
+
+            if (desc.toUpperCase().includes("CDB")) {
+              category = "Investimento";
+              status = "categorizada";
+              if (amount >= 0) {
+                subcategory = "Resgate";
+              } else {
+                subcategory = "Aplicação";
+              }
+            }
+
+            transactions.push({
+              date,
+              desc,
+              amount,
+              category,
+              subcategory,
+              status,
+              fitid,
+              accountId,
+              bankName,
+            });
+
+            existingFitIds.add(fitid);
           });
 
-          existingFitIds.add(fitid);
-        });
+          accountSummaries.push({
+            accountId,
+            statementStart,
+            statementEnd,
+            transactionCount: transList.length,
+          });
+        }
 
-        accountSummaries.push({
-          accountId,
-          statementStart,
-          statementEnd,
-          transactionCount: transList.length,
-        });
-      }
+        if (transactions.length === 0) {
+          const importedAt = new Date().toISOString();
+          await Promise.all(
+            accountSummaries.map(summary =>
+              storage.addOFXImport({
+                fileHash,
+                clientId: ensuredClientId,
+                bankAccountId: summary.accountId,
+                importedAt,
+                transactionCount: summary.transactionCount,
+                statementStart: summary.statementStart,
+                statementEnd: summary.statementEnd,
+              })
+            )
+          );
 
-      if (transactions.length === 0) {
+          return res.json({
+            success: true,
+            imported: 0,
+            total: existingTransactions.length,
+            message: "Nenhuma transação nova encontrada no arquivo OFX.",
+            duplicateAccounts: Array.from(duplicateAccounts),
+          });
+        }
+
+        await storage.addTransactions(ensuredClientId, transactions);
+
         const importedAt = new Date().toISOString();
         await Promise.all(
           accountSummaries.map(summary =>
@@ -768,54 +792,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           )
         );
 
-        return res.json({
+        const totalTransactions = existingTransactions.length + transactions.length;
+
+        res.json({
           success: true,
-          imported: 0,
-          total: existingTransactions.length,
-          message: "Nenhuma transação nova encontrada no arquivo OFX.",
+          imported: transactions.length,
+          total: totalTransactions,
+          message: `${transactions.length} transações importadas com sucesso.`,
           duplicateAccounts: Array.from(duplicateAccounts),
         });
+      } catch (error) {
+        getLogger(req).error(
+          "Erro ao importar OFX",
+          {
+            event: "pf.ofx.import",
+            context: { clientId: clientIdForLogging },
+          },
+          error
+        );
+        res.status(400).json({
+          error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX"
+        });
       }
-
-      await storage.addTransactions(ensuredClientId, transactions);
-
-      const importedAt = new Date().toISOString();
-      await Promise.all(
-        accountSummaries.map(summary =>
-          storage.addOFXImport({
-            fileHash,
-            clientId: ensuredClientId,
-            bankAccountId: summary.accountId,
-            importedAt,
-            transactionCount: summary.transactionCount,
-            statementStart: summary.statementStart,
-            statementEnd: summary.statementEnd,
-          })
-        )
-      );
-      
-      const totalTransactions = existingTransactions.length + transactions.length;
-
-      res.json({
-        success: true,
-        imported: transactions.length,
-        total: totalTransactions,
-        message: `${transactions.length} transações importadas com sucesso.`,
-        duplicateAccounts: Array.from(duplicateAccounts),
-      });
-    } catch (error) {
-      getLogger(req).error(
-        "Erro ao importar OFX",
-        {
-          event: "pf.ofx.import",
-          context: { clientId: clientIdForLogging },
-        },
-        error
-      );
-      res.status(400).json({
-        error: error instanceof Error ? error.message : "Erro ao importar arquivo OFX"
-      });
-    }
     }
   );
 

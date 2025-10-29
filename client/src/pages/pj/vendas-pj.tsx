@@ -34,34 +34,13 @@ import { useForm } from "react-hook-form";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { usePJService } from "@/contexts/PJServiceContext";
+import type { PJSale } from "@/services/pj";
 
 interface VendasPJProps {
   clientId: string | null;
   clientType: string | null;
   bankAccountId: string | null;
-}
-
-interface Sale {
-  saleId: string;
-  date: string;
-  invoiceNumber: string;
-  customer: {
-    name: string;
-    doc?: string;
-    email?: string;
-    telefone?: string;
-  };
-  channel: string;
-  status: string;
-  grossAmount: number;
-  netAmount: number;
-  legs: Array<{
-    method: string;
-    installments: number;
-    grossAmount: number;
-    fees: number;
-    netAmount: number;
-  }>;
 }
 
 const addSaleSchema = z.object({
@@ -91,6 +70,7 @@ export default function VendasPJ({ clientId, clientType, bankAccountId }: Vendas
   });
   const [openAddDialog, setOpenAddDialog] = useState(false);
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const pjService = usePJService();
 
   const form = useForm<AddSaleForm>({
     resolver: zodResolver(addSaleSchema),
@@ -114,9 +94,15 @@ export default function VendasPJ({ clientId, clientType, bankAccountId }: Vendas
 
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
-  const { data: salesData, isLoading, error } = useQuery<{ sales: Sale[] }>({
+  const { data: salesData, isLoading, error } = useQuery<{ sales: PJSale[] }>({
     queryKey: ["/api/pj/sales/list", { clientId, month, bankAccountId }],
     enabled: !!clientId && !!bankAccountId && isPJClient,
+    queryFn: () =>
+      pjService.getSales({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        month,
+      }),
   });
 
   const addSaleMutation = useMutation({
@@ -164,26 +150,13 @@ export default function VendasPJ({ clientId, clientType, bankAccountId }: Vendas
   });
 
   const uploadCsvMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append("csv", file);
-      formData.append("clientId", clientId!);
-      formData.append("bankAccountId", bankAccountId!);
-
-      const res = await fetch("/api/pj/sales/importCsv", {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
-      }
-
-      return await res.json();
-    },
-    onSuccess: (data: any) => {
+    mutationFn: async (file: File) =>
+      pjService.importSalesCsv({
+        clientId: clientId!,
+        bankAccountId: bankAccountId!,
+        file,
+      }),
+    onSuccess: (data) => {
       toast({
         title: "CSV importado com sucesso",
         description: `${data.imported} vendas importadas, ${data.skipped} duplicadas`,
