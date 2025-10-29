@@ -1,7 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 
 import { authMiddleware } from "./middleware/auth";
 import { validateClientAccess } from "./middleware/scope";
@@ -12,10 +11,20 @@ import {
 import { storage } from "./storage";
 import { recordAuditEvent } from "./security/audit";
 import { getLogger } from "./observability/logger";
-import type { PjCategory } from "@shared/schema";
+import {
+  pjClientCategoryCreateSchema,
+  pjClientCategoryUpdateSchema,
+  pjGlobalCategoryCreateSchema,
+  pjGlobalCategoryUpdateSchema,
+  pjPlanAuditEvents,
+  type PjCategory,
+  type PjClientCategoryNode,
+  type PjGlobalCategoryNode,
+} from "@shared/schema";
 
-function sanitizeGlobalCategory(category: PjCategory) {
+function sanitizeGlobalCategory(category: PjCategory): PjGlobalCategoryNode {
   return {
+    type: "global",
     id: category.id,
     code: category.code,
     name: category.name,
@@ -26,56 +35,69 @@ function sanitizeGlobalCategory(category: PjCategory) {
     path: category.path,
     sortOrder: category.sortOrder,
     isCore: category.isCore,
+    children: [],
   };
 }
 
-function sanitizeClientCategory(category: import("./storage").PjClientCategoryRecord) {
+function sanitizeClientCategory(
+  category: import("./storage").PjClientCategoryRecord,
+): PjClientCategoryNode {
   return {
+    type: "client",
     id: category.id,
-    baseCategoryId: category.baseCategoryId,
+    baseCategoryId: category.baseCategoryId ?? null,
     name: category.name,
     description: category.description ?? null,
-    parentId: category.parentId,
+    parentId: category.parentId ?? null,
     acceptsPostings: category.acceptsPostings,
     level: category.level,
     path: category.path,
     sortOrder: category.sortOrder,
+    children: [],
   };
 }
 
-const globalCategoryCreateSchema = z.object({
-  code: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  parentId: z.string().optional().nullable(),
-  acceptsPostings: z.boolean().optional(),
-  sortOrder: z.number().optional(),
-});
+type TreeNodeLike<TNode> = {
+  id: string;
+  parentId: string | null;
+  sortOrder: number;
+  name: string;
+  children: TNode[];
+};
 
-const globalCategoryUpdateSchema = z.object({
-  name: z.string().min(1).optional(),
-  description: z.string().nullable().optional(),
-  parentId: z.string().nullable().optional(),
-  acceptsPostings: z.boolean().optional(),
-  sortOrder: z.number().optional(),
-});
+function buildCategoryTree<TItem, TNode extends TreeNodeLike<TNode>>(
+  items: readonly TItem[],
+  toNode: (item: TItem) => TNode,
+): TNode[] {
+  const nodeMap = new Map<string, TNode>();
+  const roots: TNode[] = [];
 
-const clientCategoryCreateSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  parentId: z.string().optional().nullable(),
-  acceptsPostings: z.boolean().optional(),
-  baseCategoryId: z.string().optional().nullable(),
-  sortOrder: z.number().optional(),
-});
+  for (const item of items) {
+    const node = toNode(item);
+    nodeMap.set(node.id, node);
+  }
 
-const clientCategoryUpdateSchema = z.object({
-  name: z.string().min(1).optional(),
-  description: z.string().nullable().optional(),
-  parentId: z.string().nullable().optional(),
-  acceptsPostings: z.boolean().optional(),
-  sortOrder: z.number().optional(),
-});
+  for (const node of nodeMap.values()) {
+    if (node.parentId && nodeMap.has(node.parentId)) {
+      nodeMap.get(node.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const sortBranch = (branch: TNode[]): void => {
+    branch.sort((a, b) => {
+      if (a.sortOrder === b.sortOrder) {
+        return a.name.localeCompare(b.name, "pt-BR");
+      }
+      return a.sortOrder - b.sortOrder;
+    });
+    branch.forEach(child => sortBranch(child.children));
+  };
+
+  sortBranch(roots);
+  return roots;
+}
 
 function computeHierarchy(
   categories: PjCategory[],
@@ -121,12 +143,13 @@ export function registerPjPlanRoutes(app: Express): void {
 
   globalPlanRouter.get("/", async (_req, res) => {
     const categories = await storage.getPjCategories();
-    res.json({ categories });
+    const tree = buildCategoryTree(categories, sanitizeGlobalCategory);
+    res.json({ type: "global", categories: tree });
   });
 
   globalPlanRouter.post("/", async (req, res) => {
     try {
-      const payload = globalCategoryCreateSchema.parse(req.body);
+      const payload = pjGlobalCategoryCreateSchema.parse(req.body);
       const now = new Date().toISOString();
       const categories = await storage.getPjCategories();
 
@@ -154,18 +177,20 @@ export function registerPjPlanRoutes(app: Express): void {
 
       await storage.setPjCategories([...categories, category]);
 
+      const sanitizedCategory = sanitizeGlobalCategory(category);
+
       await recordAuditEvent({
         user: req.authUser!,
-        eventType: "pj.plan.global.update",
+        eventType: pjPlanAuditEvents.global.create,
         targetType: "pj_category",
         targetId: category.id,
         metadata: {
           action: "create",
-          new: sanitizeGlobalCategory(category),
+          new: sanitizedCategory,
         },
       });
 
-      res.status(201).json({ category });
+      res.status(201).json({ category: sanitizedCategory });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       getLogger(req).error("Erro ao criar categoria global", {
@@ -180,7 +205,7 @@ export function registerPjPlanRoutes(app: Express): void {
     const { categoryId } = req.params;
 
     try {
-      const updates = globalCategoryUpdateSchema.parse(req.body);
+      const updates = pjGlobalCategoryUpdateSchema.parse(req.body);
       const categories = await storage.getPjCategories();
       const current = categories.find(category => category.id === categoryId);
 
@@ -191,11 +216,13 @@ export function registerPjPlanRoutes(app: Express): void {
       if (current.isCore) {
         logger.warn("Tentativa de mutação em categoria global core bloqueada", {
           event: "pj.plan.global.blocked",
-          categoryId,
           userId: req.authUser?.userId,
+          context: { categoryId },
         });
         return res.status(403).json({ error: "Categorias núcleo não podem ser alteradas" });
       }
+
+      const sanitizedBefore = sanitizeGlobalCategory(current);
 
       let updatedLevel = current.level;
       let updatedPath = current.path;
@@ -223,24 +250,26 @@ export function registerPjPlanRoutes(app: Express): void {
 
       await storage.setPjCategories(merged);
 
+      const sanitizedAfter = sanitizeGlobalCategory(updatedCategory);
+
       await recordAuditEvent({
         user: req.authUser!,
-        eventType: "pj.plan.global.update",
+        eventType: pjPlanAuditEvents.global.update,
         targetType: "pj_category",
         targetId: categoryId,
         metadata: {
           action: "update",
-          old: sanitizeGlobalCategory(current),
-          new: sanitizeGlobalCategory(updatedCategory),
+          old: sanitizedBefore,
+          new: sanitizedAfter,
         },
       });
 
-      res.json({ category: updatedCategory });
+      res.json({ category: sanitizedAfter });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       getLogger(req).error("Erro ao atualizar categoria global", {
         event: "pj.plan.global.update_error",
-        categoryId,
+        context: { categoryId },
       }, error);
       res.status(400).json({ error: message });
     }
@@ -260,8 +289,8 @@ export function registerPjPlanRoutes(app: Express): void {
     if (current.isCore) {
       logger.warn("Tentativa de remoção de categoria core bloqueada", {
         event: "pj.plan.global.blocked",
-        categoryId,
         userId: req.authUser?.userId,
+        context: { categoryId },
       });
       return res.status(403).json({ error: "Categorias núcleo não podem ser removidas" });
     }
@@ -274,14 +303,16 @@ export function registerPjPlanRoutes(app: Express): void {
     const remaining = categories.filter(category => category.id !== categoryId);
     await storage.setPjCategories(remaining);
 
+    const sanitizedCurrent = sanitizeGlobalCategory(current);
+
     await recordAuditEvent({
       user: req.authUser!,
-      eventType: "pj.plan.global.update",
+      eventType: pjPlanAuditEvents.global.delete,
       targetType: "pj_category",
       targetId: categoryId,
       metadata: {
         action: "delete",
-        old: sanitizeGlobalCategory(current),
+        old: sanitizedCurrent,
       },
     });
 
@@ -295,16 +326,23 @@ export function registerPjPlanRoutes(app: Express): void {
 
   clientPlanRouter.get("/", async (req, res) => {
     const client = req.clientContext!;
-    const categories = await storage.getPjClientCategories(client.organizationId, client.clientId);
-    res.json({ categories });
+    const categories = (await storage.getPjClientCategories(
+      client.organizationId,
+      client.clientId,
+    )) as import("./storage").PjClientCategoryRecord[];
+    const tree = buildCategoryTree(categories, sanitizeClientCategory);
+    res.json({ type: "client", categories: tree });
   });
 
   clientPlanRouter.post("/", async (req, res) => {
     const client = req.clientContext!;
 
     try {
-      const payload = clientCategoryCreateSchema.parse(req.body);
-      const categories = await storage.getPjClientCategories(client.organizationId, client.clientId);
+      const payload = pjClientCategoryCreateSchema.parse(req.body);
+      const categories = (await storage.getPjClientCategories(
+        client.organizationId,
+        client.clientId,
+      )) as import("./storage").PjClientCategoryRecord[];
       const now = new Date().toISOString();
 
       const id = randomUUID();
@@ -332,19 +370,21 @@ export function registerPjPlanRoutes(app: Express): void {
         category,
       ]);
 
+      const sanitizedCategory = sanitizeClientCategory(category);
+
       await recordAuditEvent({
         user: req.authUser!,
-        eventType: "pj.plan.client.update",
+        eventType: pjPlanAuditEvents.client.create,
         targetType: "pj_client_category",
         targetId: category.id,
         metadata: {
           action: "create",
           clientId: client.clientId,
-          new: sanitizeClientCategory(category),
+          new: sanitizedCategory,
         },
       });
 
-      res.status(201).json({ category });
+      res.status(201).json({ category: sanitizedCategory });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       getLogger(req).error("Erro ao criar categoria do cliente", {
@@ -361,8 +401,11 @@ export function registerPjPlanRoutes(app: Express): void {
     const logger = getLogger(req);
 
     try {
-      const updates = clientCategoryUpdateSchema.parse(req.body);
-      const categories = await storage.getPjClientCategories(client.organizationId, client.clientId);
+      const updates = pjClientCategoryUpdateSchema.parse(req.body);
+      const categories = (await storage.getPjClientCategories(
+        client.organizationId,
+        client.clientId,
+      )) as import("./storage").PjClientCategoryRecord[];
       const current = categories.find(category => category.id === categoryId);
 
       if (!current) {
@@ -375,13 +418,15 @@ export function registerPjPlanRoutes(app: Express): void {
         if (base?.isCore) {
           logger.warn("Tentativa de mutação em categoria cliente núcleo bloqueada", {
             event: "pj.plan.client.blocked",
-            categoryId,
             clientId: client.clientId,
             userId: req.authUser?.userId,
+            context: { categoryId },
           });
           return res.status(403).json({ error: "Categorias núcleo não podem ser alteradas" });
         }
       }
+
+      const sanitizedBefore = sanitizeClientCategory(current);
 
       let updatedLevel = current.level;
       let updatedPath = current.path;
@@ -396,7 +441,7 @@ export function registerPjPlanRoutes(app: Express): void {
       const updatedCategory: import("./storage").PjClientCategoryRecord = {
         ...current,
         ...updates,
-        parentId: updates.parentId ?? current.parentId,
+        parentId: updates.parentId ?? current.parentId ?? null,
         acceptsPostings: updates.acceptsPostings ?? current.acceptsPostings,
         sortOrder: updates.sortOrder ?? current.sortOrder,
         level: updatedLevel,
@@ -410,26 +455,28 @@ export function registerPjPlanRoutes(app: Express): void {
 
       await storage.setPjClientCategories(client.organizationId, client.clientId, merged);
 
+      const sanitizedAfter = sanitizeClientCategory(updatedCategory);
+
       await recordAuditEvent({
         user: req.authUser!,
-        eventType: "pj.plan.client.update",
+        eventType: pjPlanAuditEvents.client.update,
         targetType: "pj_client_category",
         targetId: categoryId,
         metadata: {
           action: "update",
           clientId: client.clientId,
-          old: sanitizeClientCategory(current),
-          new: sanitizeClientCategory(updatedCategory),
+          old: sanitizedBefore,
+          new: sanitizedAfter,
         },
       });
 
-      res.json({ category: updatedCategory });
+      res.json({ category: sanitizedAfter });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       getLogger(req).error("Erro ao atualizar categoria do cliente", {
         event: "pj.plan.client.update_error",
         clientId: req.clientContext?.clientId,
-        categoryId,
+        context: { categoryId },
       }, error);
       res.status(400).json({ error: message });
     }
@@ -440,7 +487,10 @@ export function registerPjPlanRoutes(app: Express): void {
     const { categoryId } = req.params;
     const logger = getLogger(req);
 
-    const categories = await storage.getPjClientCategories(client.organizationId, client.clientId);
+    const categories = (await storage.getPjClientCategories(
+      client.organizationId,
+      client.clientId,
+    )) as import("./storage").PjClientCategoryRecord[];
     const current = categories.find(category => category.id === categoryId);
 
     if (!current) {
@@ -453,9 +503,9 @@ export function registerPjPlanRoutes(app: Express): void {
       if (base?.isCore) {
         logger.warn("Tentativa de remoção de categoria cliente núcleo bloqueada", {
           event: "pj.plan.client.blocked",
-          categoryId,
           clientId: client.clientId,
           userId: req.authUser?.userId,
+          context: { categoryId },
         });
         return res.status(403).json({ error: "Categorias núcleo não podem ser removidas" });
       }
@@ -469,15 +519,17 @@ export function registerPjPlanRoutes(app: Express): void {
     const remaining = categories.filter(category => category.id !== categoryId);
     await storage.setPjClientCategories(client.organizationId, client.clientId, remaining);
 
+    const sanitizedCurrent = sanitizeClientCategory(current);
+
     await recordAuditEvent({
       user: req.authUser!,
-      eventType: "pj.plan.client.update",
+      eventType: pjPlanAuditEvents.client.delete,
       targetType: "pj_client_category",
       targetId: categoryId,
       metadata: {
         action: "delete",
         clientId: client.clientId,
-        old: sanitizeClientCategory(current),
+        old: sanitizedCurrent,
       },
     });
 

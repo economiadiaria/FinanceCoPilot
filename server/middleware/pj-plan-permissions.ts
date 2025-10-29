@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import { getLogger } from "../observability/logger";
 import { recordAuditEvent } from "../security/audit";
-import type { User } from "@shared/schema";
+import type { PjPlanAccessDeniedAuditEventType, User } from "@shared/schema";
 
 const NOT_AUTHENTICATED_RESPONSE = { error: "Não autenticado" } as const;
 const USER_NOT_FOUND_RESPONSE = { error: "Usuário não encontrado" } as const;
@@ -11,9 +11,7 @@ const CLIENT_NOT_FOUND_RESPONSE = { error: "Cliente não encontrado" } as const;
 
 type ClientIdResolver = (req: Request) => string | undefined | Promise<string | undefined>;
 
-type PlanAccessDeniedEventType =
-  | "security.access_denied.pj_plan_global"
-  | "security.access_denied.pj_plan_client";
+type PlanAccessDeniedEventType = PjPlanAccessDeniedAuditEventType;
 
 async function resolveRequestUser(req: Request): Promise<User | undefined> {
   if (req.authUser) {

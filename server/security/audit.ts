@@ -1,14 +1,11 @@
 import { v4 as uuid } from "uuid";
 import { storage } from "../storage";
 import { scrubPII, maskPIIValue } from "@shared/utils";
-import type { AuditLogEntry, User } from "@shared/schema";
-import { auditEventTypes } from "@shared/schema";
-
-type AuditEvent = (typeof auditEventTypes)[number];
+import type { AuditEventType, AuditLogEntry, User } from "@shared/schema";
 
 type AuditParams = {
   user: User;
-  eventType: AuditEvent;
+  eventType: AuditEventType;
   targetType: string;
   targetId?: string;
   metadata?: Record<string, unknown>;

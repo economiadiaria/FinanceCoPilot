@@ -26,21 +26,7 @@ import Database from "@replit/database";
 
 const PROCESSED_WEBHOOK_RETENTION_MS = 15 * 60 * 1000;
 
-export interface PjClientCategoryRecord {
-  id: string;
-  orgId: string;
-  clientId: string;
-  baseCategoryId: string | null;
-  name: string;
-  description?: string | null;
-  parentId: string | null;
-  acceptsPostings: boolean;
-  level: number;
-  path: string;
-  sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
-}
+export type PjClientCategoryRecord = PjClientCategory;
 
 export interface IStorage {
   // Health
@@ -122,7 +108,6 @@ export interface IStorage {
   // PJ - Categories
   getPjCategories(): Promise<PjCategory[]>;
   setPjCategories(categories: PjCategory[]): Promise<void>;
-  getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategory[]>;
   bulkInsertPjClientCategories(
     orgId: string,
     clientId: string,
@@ -198,14 +183,13 @@ export class MemStorage implements IStorage {
 
   // PJ storage
   private pjCategories: Map<string, PjCategory>;
-  private pjClientCategories: Map<string, Map<string, PjClientCategory>>;
+  private pjClientCategories: Map<string, Map<string, PjClientCategoryRecord>>;
   private pjSales: Map<string, Sale[]>;
   private pjSaleLegs: Map<string, SaleLeg[]>;
   private pjPaymentMethods: Map<string, PaymentMethod[]>;
   private pjLedgerEntries: Map<string, LedgerEntry[]>;
   private pjBankTransactions: Map<string, Map<string, BankTransaction[]> | BankTransaction[]>;
   private pjCategorizationRules: Map<string, CategorizationRule[]>;
-  private pjClientCategories: Map<string, PjClientCategoryRecord[]>;
   private auditLogs: Map<string, AuditLogEntry[]>;
   private processedWebhooks: Map<string, string>;
 
@@ -233,7 +217,6 @@ export class MemStorage implements IStorage {
     this.pjLedgerEntries = new Map();
     this.pjBankTransactions = new Map();
     this.pjCategorizationRules = new Map();
-    this.pjClientCategories = new Map();
     this.auditLogs = new Map();
     this.processedWebhooks = new Map();
   }
@@ -333,7 +316,10 @@ export class MemStorage implements IStorage {
     }
   }
 
-  private getClientCategoryBucket(orgId: string, clientId: string): Map<string, PjClientCategory> {
+  private getClientCategoryBucket(
+    orgId: string,
+    clientId: string,
+  ): Map<string, PjClientCategoryRecord> {
     const key = `${orgId}:${clientId}`;
     let bucket = this.pjClientCategories.get(key);
     if (!bucket) {
@@ -628,9 +614,20 @@ export class MemStorage implements IStorage {
     }
   }
 
-  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategory[]> {
+  async getPjClientCategories(
+    orgId: string,
+    clientId: string,
+  ): Promise<PjClientCategoryRecord[]> {
     const bucket = this.getClientCategoryBucket(orgId, clientId);
-    return this.sortPjCategories(Array.from(bucket.values()));
+    return this.sortPjCategories(Array.from(bucket.values())).map(category => ({
+      ...category,
+      orgId,
+      clientId,
+      baseCategoryId: category.baseCategoryId ?? null,
+      parentId: category.parentId ?? null,
+      description: category.description ?? null,
+      acceptsPostings: category.acceptsPostings ?? true,
+    }));
   }
 
   async bulkInsertPjClientCategories(
@@ -651,17 +648,33 @@ export class MemStorage implements IStorage {
         baseCategoryId: category.baseCategoryId ?? null,
         parentId: category.parentId ?? null,
         acceptsPostings: category.acceptsPostings ?? true,
-        description: category.description ?? undefined,
+        description: category.description ?? null,
+      });
+    }
+  }
+
+  async setPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategoryRecord[],
+  ): Promise<void> {
+    const bucket = this.getClientCategoryBucket(orgId, clientId);
+    bucket.clear();
+    for (const category of categories) {
+      bucket.set(category.id, {
+        ...category,
+        orgId,
+        clientId,
+        baseCategoryId: category.baseCategoryId ?? null,
+        parentId: category.parentId ?? null,
+        acceptsPostings: category.acceptsPostings ?? true,
+        description: category.description ?? null,
       });
     }
   }
 
   private getBankSummaryKey(orgId: string, clientId: string, bankAccountId: string): string {
     return `${orgId}:${clientId}:${bankAccountId}`;
-  }
-
-  private getPjClientCategoryKey(orgId: string, clientId: string): string {
-    return `pj_client_categories:${orgId}:${clientId}`;
   }
 
   async getBankSummarySnapshots(
@@ -912,38 +925,6 @@ export class MemStorage implements IStorage {
       rules[index] = { ...rules[index], ...updates };
       this.pjCategorizationRules.set(clientId, rules);
     }
-  }
-
-  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategoryRecord[]> {
-    const key = this.getPjClientCategoryKey(orgId, clientId);
-    const categories = this.pjClientCategories.get(key);
-    return categories
-      ? categories.map(category => ({
-          ...category,
-          baseCategoryId: category.baseCategoryId ?? null,
-          parentId: category.parentId ?? null,
-          description: category.description ?? null,
-          acceptsPostings: category.acceptsPostings ?? true,
-        }))
-      : [];
-  }
-
-  async setPjClientCategories(
-    orgId: string,
-    clientId: string,
-    categories: PjClientCategoryRecord[],
-  ): Promise<void> {
-    const key = this.getPjClientCategoryKey(orgId, clientId);
-    this.pjClientCategories.set(
-      key,
-      categories.map(category => ({
-        ...category,
-        baseCategoryId: category.baseCategoryId ?? null,
-        parentId: category.parentId ?? null,
-        description: category.description ?? null,
-        acceptsPostings: category.acceptsPostings ?? true,
-      })),
-    );
   }
 
   async recordAudit(entry: AuditLogEntry): Promise<void> {
@@ -2048,7 +2029,10 @@ export class ReplitDbStorage implements IStorage {
     }
   }
 
-  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategory[]> {
+  async getPjClientCategories(
+    orgId: string,
+    clientId: string,
+  ): Promise<PjClientCategoryRecord[]> {
     const key = this.getPjClientCategoriesKey(orgId, clientId);
     const result = await this.db.get(key);
     if (!result.ok && result.error?.statusCode !== 404) {
@@ -2058,13 +2042,15 @@ export class ReplitDbStorage implements IStorage {
     }
 
     const raw = result.ok ? result.value : null;
-    const categories = Array.isArray(raw) ? (raw as PjClientCategory[]) : [];
+    const categories = Array.isArray(raw) ? (raw as PjClientCategoryRecord[]) : [];
     return this.sortPjCategories(
       categories.map(category => ({
         ...category,
+        orgId,
+        clientId,
         baseCategoryId: category.baseCategoryId ?? null,
         parentId: category.parentId ?? null,
-        description: category.description ?? undefined,
+        description: category.description ?? null,
         acceptsPostings: category.acceptsPostings ?? true,
       })),
     );
@@ -2402,26 +2388,6 @@ export class ReplitDbStorage implements IStorage {
       rules[index] = { ...rules[index], ...updates };
       await this.setCategorizationRules(clientId, rules);
     }
-  }
-
-  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategoryRecord[]> {
-    const key = this.getPjClientCategoryKey(orgId, clientId);
-    const result = await this.db.get(key);
-    if (!result.ok && result.error?.statusCode !== 404) {
-      throw new Error(
-        `Database error getting PJ client categories for ${orgId}:${clientId}: ${result.error?.message || JSON.stringify(result.error)}`,
-      );
-    }
-    if (!result.ok || !Array.isArray(result.value)) {
-      return [];
-    }
-    return (result.value as PjClientCategoryRecord[]).map(category => ({
-      ...category,
-      baseCategoryId: category.baseCategoryId ?? null,
-      parentId: category.parentId ?? null,
-      description: category.description ?? null,
-      acceptsPostings: category.acceptsPostings ?? true,
-    }));
   }
 
   async setPjClientCategories(

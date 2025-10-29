@@ -16,7 +16,9 @@ type RefreshOptions = {
   now?: Date | string;
 };
 
-type RefreshManyOptions = SnapshotTarget & {
+type RefreshManyOptions = {
+  organizationId: string;
+  clientId: string;
   bankAccountIds: Iterable<string | null | undefined>;
   logger?: StructuredLogger;
   now?: Date | string;

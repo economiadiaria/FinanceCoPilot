@@ -60,6 +60,17 @@ const ofxStatementSchema = z.object({
         ACCTID: z.string().optional(),
         BANKID: z.string().optional(),
         BRANCHID: z.string().optional(),
+        BANKNAME: z.string().optional(),
+        ACCTTYPE: z.string().optional(),
+      })
+      .optional(),
+    CCACCTFROM: z
+      .object({
+        ACCTID: z.string().optional(),
+        BANKID: z.string().optional(),
+        BRANCHID: z.string().optional(),
+        BANKNAME: z.string().optional(),
+        ACCTTYPE: z.string().optional(),
       })
       .optional(),
     BANKTRANLIST: z
