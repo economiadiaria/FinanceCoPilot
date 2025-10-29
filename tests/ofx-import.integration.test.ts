@@ -194,7 +194,17 @@ describe("OFX ingestion robustness", () => {
     assert.equal(account.currency, "BRL");
     const expectedFingerprint = crypto
       .createHash("sha256")
-      .update(`${ORGANIZATION_ID}:${SAMPLE_ACCOUNT_ID}`)
+      .update(
+        JSON.stringify({
+          orgId: ORGANIZATION_ID,
+          clientId: CLIENT_ID,
+          accountId: SAMPLE_ACCOUNT_ID,
+          bankCode: account.bankCode ?? null,
+          branch: account.branch ?? null,
+          bankOrg: account.bankOrg ?? null,
+          bankFid: account.bankFid ?? null,
+        })
+      )
       .digest("hex");
     assert.equal(account.accountFingerprint, expectedFingerprint);
 
