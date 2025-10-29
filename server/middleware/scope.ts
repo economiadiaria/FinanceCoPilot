@@ -7,6 +7,10 @@ import type { BankAccount } from "@shared/schema";
  * Middleware de validação de scope (PF/PJ)
  * Garante isolamento total entre dados PF e PJ
  */
+const CLIENT_NOT_FOUND_RESPONSE = { error: "Cliente não encontrado" } as const;
+const ACCESS_DENIED_RESPONSE = { error: "Acesso negado" } as const;
+const BANK_ACCOUNT_NOT_FOUND_RESPONSE = { error: "Conta bancária não encontrada" } as const;
+
 export function scopeRequired(requiredScope: "PF" | "PJ") {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -24,14 +28,12 @@ export function scopeRequired(requiredScope: "PF" | "PJ") {
 
       const client = await storage.getClient(clientId);
       if (!client) {
-        return res.status(404).json({ error: "Cliente não encontrado" });
+        return res.status(404).json(CLIENT_NOT_FOUND_RESPONSE);
       }
 
       // Validar scope do cliente
       if (client.type !== requiredScope && client.type !== "BOTH") {
-        return res.status(403).json({
-          error: `Esta operação é permitida apenas para clientes ${requiredScope}`
-        });
+        return res.status(403).json(ACCESS_DENIED_RESPONSE);
       }
 
       const user = req.authUser ?? (await storage.getUserById(req.session.userId));
@@ -40,17 +42,17 @@ export function scopeRequired(requiredScope: "PF" | "PJ") {
       }
 
       if (client.organizationId !== user.organizationId) {
-        return res.status(403).json({ error: "Cliente pertence a outra organização" });
+        return res.status(404).json(CLIENT_NOT_FOUND_RESPONSE);
       }
 
       // Consultores só podem acessar seus clientes
       if (user.role === "consultor" && !user.clientIds.includes(clientId)) {
-        return res.status(403).json({ error: "Acesso negado a este cliente" });
+        return res.status(403).json(ACCESS_DENIED_RESPONSE);
       }
 
       // Cliente só pode acessar seus próprios dados
       if (user.role === "cliente" && !user.clientIds.includes(clientId)) {
-        return res.status(403).json({ error: "Acesso negado" });
+        return res.status(403).json(ACCESS_DENIED_RESPONSE);
       }
 
       // Anexar informações do cliente na request para uso posterior
@@ -89,7 +91,7 @@ export async function validateClientAccess(req: Request, res: Response, next: Ne
     // Buscar cliente
     const client = await storage.getClient(clientId);
     if (!client) {
-      return res.status(404).json({ error: "Cliente não encontrado" });
+      return res.status(404).json(CLIENT_NOT_FOUND_RESPONSE);
     }
 
     // Validar acesso do usuário
@@ -99,15 +101,15 @@ export async function validateClientAccess(req: Request, res: Response, next: Ne
     }
 
     if (client.organizationId !== user.organizationId) {
-      return res.status(403).json({ error: "Cliente pertence a outra organização" });
+      return res.status(404).json(CLIENT_NOT_FOUND_RESPONSE);
     }
 
     if (user.role === "consultor" && !user.clientIds.includes(clientId)) {
-      return res.status(403).json({ error: "Acesso negado a este cliente" });
+      return res.status(403).json(ACCESS_DENIED_RESPONSE);
     }
 
     if (user.role === "cliente" && !user.clientIds.includes(clientId)) {
-      return res.status(403).json({ error: "Acesso negado" });
+      return res.status(403).json(ACCESS_DENIED_RESPONSE);
     }
 
     // Anexar informações na request
@@ -163,10 +165,10 @@ export async function ensureBankAccountAccess(
     );
 
     if (accountInOrg) {
-      return res.status(403).json({ error: "Conta bancária pertence a outro cliente" });
+      return res.status(404).json(BANK_ACCOUNT_NOT_FOUND_RESPONSE);
     }
 
-    return res.status(404).json({ error: "Conta bancária não encontrada" });
+    return res.status(404).json(BANK_ACCOUNT_NOT_FOUND_RESPONSE);
   } catch (error) {
     getLogger(req).error(
       "Erro ao validar acesso à conta bancária",

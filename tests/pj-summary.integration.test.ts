@@ -309,9 +309,19 @@ describe("PJ summary endpoint", () => {
         from: "01/01/2024",
         to: "31/01/2024",
       })
-      .expect(403);
+      .expect(404);
 
-    assert.match(forbidden.body.error, /conta bancária pertence a outro cliente/i);
+    const missing = await agent
+      .get("/api/pj/summary")
+      .query({
+        clientId: CLIENT_MAIN,
+        bankAccountId: "missing-account",
+        from: "01/01/2024",
+        to: "31/01/2024",
+      })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 
   it("returns 404 when the bank account does not exist", async () => {
@@ -349,9 +359,19 @@ describe("PJ summary endpoint", () => {
         from: "01/01/2024",
         to: "31/01/2024",
       })
-      .expect(403);
+      .expect(404);
 
-    assert.match(forbidden.body.error, /outra organização/i);
+    const missing = await agent
+      .get("/api/pj/summary")
+      .query({
+        clientId: "missing-client",
+        bankAccountId: "missing-account",
+        from: "01/01/2024",
+        to: "31/01/2024",
+      })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 });
 

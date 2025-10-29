@@ -147,9 +147,14 @@ describe("PF validateClientAccess guard", () => {
     const forbidden = await agent
       .get("/api/transactions/list")
       .query({ clientId: CLIENT_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(forbidden.body.error, /outra organização/i);
+    const missing = await agent
+      .get("/api/transactions/list")
+      .query({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 
   it("blocks OFX imports when the client belongs to another organization", async () => {
@@ -162,9 +167,14 @@ describe("PF validateClientAccess guard", () => {
     const response = await agent
       .post("/api/import/ofx")
       .field("clientId", CLIENT_ID)
-      .expect(403);
+      .expect(404);
 
-    assert.match(response.body.error, /outra organização/i);
+    const missing = await agent
+      .post("/api/import/ofx")
+      .field("clientId", "missing-client")
+      .expect(404);
+
+    assert.deepEqual(response.body, missing.body);
   });
 
   it("prevents consultants without linkage from categorizing transactions", async () => {
@@ -192,9 +202,14 @@ describe("PF validateClientAccess guard", () => {
     const forbidden = await agent
       .get("/api/summary")
       .query({ clientId: CLIENT_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(forbidden.body.error, /outra organização/i);
+    const missing = await agent
+      .get("/api/summary")
+      .query({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 
   it("denies investment data access for users from another organization", async () => {
@@ -207,16 +222,26 @@ describe("PF validateClientAccess guard", () => {
     const positionsForbidden = await agent
       .get("/api/investments/positions")
       .query({ clientId: CLIENT_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(positionsForbidden.body.error, /outra organização/i);
+    const positionsMissing = await agent
+      .get("/api/investments/positions")
+      .query({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(positionsForbidden.body, positionsMissing.body);
 
     const rebalanceForbidden = await agent
       .post("/api/investments/rebalance/suggest")
       .send({ clientId: CLIENT_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(rebalanceForbidden.body.error, /outra organização/i);
+    const rebalanceMissing = await agent
+      .post("/api/investments/rebalance/suggest")
+      .send({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(rebalanceForbidden.body, rebalanceMissing.body);
   });
 
   it("denies report and policy access across organizations", async () => {
@@ -229,26 +254,42 @@ describe("PF validateClientAccess guard", () => {
     const reportView = await agent
       .get("/api/reports/view")
       .query({ clientId: CLIENT_ID, period: "2024-01" })
-      .expect(403);
-    assert.match(reportView.body.error, /outra organização/i);
+      .expect(404);
+    const reportViewMissing = await agent
+      .get("/api/reports/view")
+      .query({ clientId: "missing-client", period: "2024-01" })
+      .expect(404);
+    assert.deepEqual(reportView.body, reportViewMissing.body);
 
     const reportGenerate = await agent
       .post("/api/reports/generate")
       .send({ clientId: CLIENT_ID, period: "2024-01" })
-      .expect(403);
-    assert.match(reportGenerate.body.error, /outra organização/i);
+      .expect(404);
+    const reportGenerateMissing = await agent
+      .post("/api/reports/generate")
+      .send({ clientId: "missing-client", period: "2024-01" })
+      .expect(404);
+    assert.deepEqual(reportGenerate.body, reportGenerateMissing.body);
 
     const policyView = await agent
       .get("/api/policies")
       .query({ clientId: CLIENT_ID })
-      .expect(403);
-    assert.match(policyView.body.error, /outra organização/i);
+      .expect(404);
+    const policyViewMissing = await agent
+      .get("/api/policies")
+      .query({ clientId: "missing-client" })
+      .expect(404);
+    assert.deepEqual(policyView.body, policyViewMissing.body);
 
     const policyUpdate = await agent
       .post("/api/policies/upsert")
       .send({ clientId: CLIENT_ID, data: { targets: { RF: 50, RV: 30, Fundos: 10, Outros: 10 } } })
-      .expect(403);
-    assert.match(policyUpdate.body.error, /outra organização/i);
+      .expect(404);
+    const policyUpdateMissing = await agent
+      .post("/api/policies/upsert")
+      .send({ clientId: "missing-client", data: { targets: { RF: 50, RV: 30, Fundos: 10, Outros: 10 } } })
+      .expect(404);
+    assert.deepEqual(policyUpdate.body, policyUpdateMissing.body);
   });
 
   it("blocks client users from mutating investment and report data", async () => {

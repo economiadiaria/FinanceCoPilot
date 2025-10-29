@@ -184,9 +184,14 @@ describe("PJ account listing", () => {
     const forbidden = await agent
       .get("/api/pj/accounts")
       .query({ clientId: CLIENT_ID })
-      .expect(403);
+      .expect(404);
 
-    assert.match(forbidden.body.error, /outra organização/i);
+    const missing = await agent
+      .get("/api/pj/accounts")
+      .query({ clientId: "missing-client" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 
   it("returns 404 for unknown clients", async () => {

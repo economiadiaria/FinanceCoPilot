@@ -159,9 +159,14 @@ describe("RBAC and organization boundaries", () => {
     const forbidden = await agent
       .get("/api/pj/transactions")
       .query({ clientId: "client-org-2", bankAccountId: "bank-acc-org-2" })
-      .expect(403);
+      .expect(404);
 
-    assert.match(forbidden.body.error, /outra organização/);
+    const missing = await agent
+      .get("/api/pj/transactions")
+      .query({ clientId: "missing-client", bankAccountId: "missing-bank" })
+      .expect(404);
+
+    assert.deepEqual(forbidden.body, missing.body);
   });
 
   it("limits clients listing to the authenticated organization", async () => {
