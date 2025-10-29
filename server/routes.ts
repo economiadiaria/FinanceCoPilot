@@ -32,6 +32,10 @@ import { z } from "zod";
 import { recordAuditEvent, listAuditLogs } from "./security/audit";
 import { getLogger, updateRequestLoggerContext } from "./observability/logger";
 import { metricsRegistry } from "./observability/metrics";
+import {
+  evaluateReadinessDependencies,
+  type DependencyStatus,
+} from "./observability/readiness";
 
 type SwaggerUiModule = typeof import("swagger-ui-express");
 
@@ -66,6 +70,39 @@ function sanitizeUser(user: User): UserProfile {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  app.get("/healthz", (_req, res) => {
+    res.status(200).json({
+      status: "ok",
+      service: process.env.SERVICE_NAME ?? "financecopilot-api",
+      commit: process.env.GIT_COMMIT_SHA ?? null,
+      buildTime: process.env.BUILD_TIMESTAMP ?? null,
+    });
+  });
+
+  app.get("/readyz", async (_req, res) => {
+    const { dependencies: baseDependencies } = await evaluateReadinessDependencies();
+    const dependencies: Record<string, DependencyStatus> = { ...baseDependencies };
+
+    try {
+      await storage.checkHealth();
+      dependencies.storage = { status: "ok" };
+    } catch (error) {
+      dependencies.storage = {
+        status: "error",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    const healthy = Object.values(dependencies).every(
+      (dependency) => dependency.status === "ok" || dependency.status === "skipped"
+    );
+
+    res.status(healthy ? 200 : 503).json({
+      status: healthy ? "ok" : "error",
+      dependencies,
+    });
+  });
+
   // ===== AUTHENTICATION ROUTES (PUBLIC) =====
   // POST /api/auth/register - Register new user
   app.post("/api/auth/register", async (req, res) => {
