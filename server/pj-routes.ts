@@ -1259,9 +1259,19 @@ export function registerPJRoutes(app: Express) {
               ? metadata.rawBankName
               : undefined) ?? metadata?.maskedBankName ?? summary.accountId;
 
+          const fingerprintSource = JSON.stringify({
+            orgId: clientContext.organizationId,
+            clientId: clientContext.clientId,
+            accountId: summary.accountId,
+            bankCode: metadata?.bankCode ?? null,
+            branch: metadata?.branch ?? null,
+            bankOrg: metadata?.bankOrg ?? null,
+            bankFid: metadata?.bankFid ?? null,
+          });
+
           const fingerprint = crypto
             .createHash("sha256")
-            .update(`${clientContext.organizationId}:${summary.accountId}`)
+            .update(fingerprintSource)
             .digest("hex");
 
           return storage.upsertBankAccount({
