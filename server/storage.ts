@@ -15,6 +15,7 @@ import type {
   PaymentMethod,
   LedgerEntry,
   BankAccount,
+  BankSummarySnapshot,
   BankTransaction,
   CategorizationRule,
   AuditLogEntry,
@@ -75,6 +76,26 @@ export interface IStorage {
   getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]>;
   upsertBankAccount(account: BankAccount): Promise<BankAccount>;
 
+  // Bank summaries
+  getBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId?: string
+  ): Promise<BankSummarySnapshot[]>;
+  setBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    snapshots: BankSummarySnapshot[]
+  ): Promise<void>;
+  upsertBankSummarySnapshot(snapshot: BankSummarySnapshot): Promise<void>;
+  deleteBankSummarySnapshot(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    window?: string
+  ): Promise<void>;
+
   getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null>;
   setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void>;
 
@@ -131,7 +152,8 @@ export class MemStorage implements IStorage {
   private ofAccounts: Map<string, OFAccount[]>;
   private ofSyncMeta: Map<string, OFSyncMeta>;
   private bankAccounts: Map<string, BankAccount>;
-  
+  private bankSummaries: Map<string, BankSummarySnapshot[]>;
+
   // PJ storage
   private pjSales: Map<string, Sale[]>;
   private pjSaleLegs: Map<string, SaleLeg[]>;
@@ -154,6 +176,7 @@ export class MemStorage implements IStorage {
     this.ofAccounts = new Map();
     this.ofSyncMeta = new Map();
     this.bankAccounts = new Map();
+    this.bankSummaries = new Map();
     
     this.pjSales = new Map();
     this.pjSaleLegs = new Map();
@@ -421,6 +444,92 @@ export class MemStorage implements IStorage {
     this.ofSyncMeta.set(clientId, meta);
   }
 
+  private getBankSummaryKey(orgId: string, clientId: string, bankAccountId: string): string {
+    return `${orgId}:${clientId}:${bankAccountId}`;
+  }
+
+  async getBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId?: string
+  ): Promise<BankSummarySnapshot[]> {
+    if (bankAccountId) {
+      return this.bankSummaries.get(this.getBankSummaryKey(orgId, clientId, bankAccountId)) ?? [];
+    }
+
+    const prefix = `${orgId}:${clientId}:`;
+    const snapshots: BankSummarySnapshot[] = [];
+    for (const [key, value] of Array.from(this.bankSummaries.entries())) {
+      if (key.startsWith(prefix)) {
+        snapshots.push(...value);
+      }
+    }
+    return snapshots;
+  }
+
+  async setBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    snapshots: BankSummarySnapshot[]
+  ): Promise<void> {
+    const key = this.getBankSummaryKey(orgId, clientId, bankAccountId);
+    if (snapshots.length === 0) {
+      this.bankSummaries.delete(key);
+      return;
+    }
+
+    const normalized = snapshots.map(snapshot => ({
+      ...snapshot,
+      organizationId: snapshot.organizationId ?? orgId,
+      clientId: snapshot.clientId ?? clientId,
+      bankAccountId: snapshot.bankAccountId ?? bankAccountId,
+    }));
+
+    this.bankSummaries.set(key, normalized);
+  }
+
+  async upsertBankSummarySnapshot(snapshot: BankSummarySnapshot): Promise<void> {
+    const { organizationId, clientId, bankAccountId, window } = snapshot;
+    if (!window) {
+      throw new Error("Bank summary snapshot requires a window identifier");
+    }
+
+    const key = this.getBankSummaryKey(organizationId, clientId, bankAccountId);
+    const current = this.bankSummaries.get(key) ?? [];
+    const index = current.findIndex(existing => existing.window === window);
+    if (index === -1) {
+      current.push(snapshot);
+    } else {
+      current[index] = snapshot;
+    }
+    this.bankSummaries.set(key, current);
+  }
+
+  async deleteBankSummarySnapshot(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    window?: string
+  ): Promise<void> {
+    const key = this.getBankSummaryKey(orgId, clientId, bankAccountId);
+    if (!this.bankSummaries.has(key)) {
+      return;
+    }
+
+    if (!window) {
+      this.bankSummaries.delete(key);
+      return;
+    }
+
+    const remaining = (this.bankSummaries.get(key) ?? []).filter(snapshot => snapshot.window !== window);
+    if (remaining.length === 0) {
+      this.bankSummaries.delete(key);
+    } else {
+      this.bankSummaries.set(key, remaining);
+    }
+  }
+
   // PJ - Sales
   async getSales(clientId: string): Promise<Sale[]> {
     return this.pjSales.get(clientId) || [];
@@ -661,6 +770,15 @@ export class ReplitDbStorage implements IStorage {
     return `pj_bank_tx_index:${clientId}`;
   }
 
+  // Bank summary snapshots are stored under pj_bank_summary:{orgId}:{clientId}:{bankAccountId}
+  private getBankSummaryKey(orgId: string, clientId: string, bankAccountId: string): string {
+    return `pj_bank_summary:${orgId}:${clientId}:${bankAccountId}`;
+  }
+
+  private getBankSummaryIndexKey(orgId: string, clientId: string): string {
+    return `pj_bank_summary_index:${orgId}:${clientId}`;
+  }
+
   private getLegacyBankTransactionsKey(clientId: string): string {
     return `pj_bank_tx:${clientId}`;
   }
@@ -681,6 +799,29 @@ export class ReplitDbStorage implements IStorage {
     const result = await this.db.set(this.getBankTransactionIndexKey(clientId), unique);
     if (!result.ok) {
       throw new Error(`Database error setting bank transaction index for ${clientId}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+  }
+
+  private async loadBankSummaryIndex(orgId: string, clientId: string): Promise<string[]> {
+    const result = await this.db.get(this.getBankSummaryIndexKey(orgId, clientId));
+    if (!result.ok) {
+      if (result.error?.statusCode !== 404) {
+        throw new Error(
+          `Database error getting bank summary index for ${orgId}:${clientId}: ${result.error?.message || JSON.stringify(result.error)}`
+        );
+      }
+      return [];
+    }
+    return Array.isArray(result.value) ? result.value : [];
+  }
+
+  private async saveBankSummaryIndex(orgId: string, clientId: string, bankAccountIds: string[]): Promise<void> {
+    const unique = Array.from(new Set(bankAccountIds));
+    const result = await this.db.set(this.getBankSummaryIndexKey(orgId, clientId), unique);
+    if (!result.ok) {
+      throw new Error(
+        `Database error setting bank summary index for ${orgId}:${clientId}: ${result.error?.message || JSON.stringify(result.error)}`
+      );
     }
   }
 
@@ -1214,6 +1355,186 @@ export class ReplitDbStorage implements IStorage {
     }
 
     return merged;
+  }
+
+  async getBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId?: string
+  ): Promise<BankSummarySnapshot[]> {
+    if (bankAccountId) {
+      const key = this.getBankSummaryKey(orgId, clientId, bankAccountId);
+      const result = await this.db.get(key);
+      if (!result.ok) {
+        if (result.error?.statusCode === 404) {
+          return [];
+        }
+        throw new Error(
+          `Database error getting bank summary snapshots for ${orgId}:${clientId}:${bankAccountId}: ${result.error?.message || JSON.stringify(result.error)}`
+        );
+      }
+      return (result.value as BankSummarySnapshot[] | null) ?? [];
+    }
+
+    const index = await this.loadBankSummaryIndex(orgId, clientId);
+    if (index.length === 0) {
+      return [];
+    }
+
+    const snapshots: BankSummarySnapshot[] = [];
+    for (const accountId of index) {
+      const key = this.getBankSummaryKey(orgId, clientId, accountId);
+      const result = await this.db.get(key);
+      if (!result.ok) {
+        if (result.error?.statusCode === 404) {
+          continue;
+        }
+        throw new Error(
+          `Database error getting bank summary snapshots for ${orgId}:${clientId}:${accountId}: ${result.error?.message || JSON.stringify(result.error)}`
+        );
+      }
+      const entries = (result.value as BankSummarySnapshot[] | null) ?? [];
+      snapshots.push(...entries);
+    }
+    return snapshots;
+  }
+
+  async setBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    snapshots: BankSummarySnapshot[]
+  ): Promise<void> {
+    const key = this.getBankSummaryKey(orgId, clientId, bankAccountId);
+
+    if (snapshots.length === 0) {
+      const deleteResult = await this.db.delete(key);
+      if (!deleteResult.ok && deleteResult.error?.statusCode !== 404) {
+        throw new Error(
+          `Database error deleting bank summary snapshots for ${orgId}:${clientId}:${bankAccountId}: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`
+        );
+      }
+
+      const index = await this.loadBankSummaryIndex(orgId, clientId);
+      const filtered = index.filter(id => id !== bankAccountId);
+      await this.saveBankSummaryIndex(orgId, clientId, filtered);
+      return;
+    }
+
+    const normalized = snapshots.map(snapshot => ({
+      ...snapshot,
+      organizationId: snapshot.organizationId ?? orgId,
+      clientId: snapshot.clientId ?? clientId,
+      bankAccountId: snapshot.bankAccountId ?? bankAccountId,
+    }));
+
+    const setResult = await this.db.set(key, normalized);
+    if (!setResult.ok) {
+      throw new Error(
+        `Database error setting bank summary snapshots for ${orgId}:${clientId}:${bankAccountId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`
+      );
+    }
+
+    const index = await this.loadBankSummaryIndex(orgId, clientId);
+    if (!index.includes(bankAccountId)) {
+      index.push(bankAccountId);
+      await this.saveBankSummaryIndex(orgId, clientId, index);
+    }
+  }
+
+  async upsertBankSummarySnapshot(snapshot: BankSummarySnapshot): Promise<void> {
+    const { organizationId, clientId, bankAccountId, window } = snapshot;
+    if (!window) {
+      throw new Error("Bank summary snapshot requires a window identifier");
+    }
+
+    const key = this.getBankSummaryKey(organizationId, clientId, bankAccountId);
+    const existingResult = await this.db.get(key);
+    if (!existingResult.ok && existingResult.error?.statusCode !== 404) {
+      throw new Error(
+        `Database error getting bank summary snapshots for ${organizationId}:${clientId}:${bankAccountId}: ${existingResult.error?.message || JSON.stringify(existingResult.error)}`
+      );
+    }
+
+    const snapshots = existingResult.ok
+      ? ((existingResult.value as BankSummarySnapshot[] | null) ?? [])
+      : [];
+
+    const index = snapshots.findIndex(entry => entry.window === window);
+    if (index === -1) {
+      snapshots.push(snapshot);
+    } else {
+      snapshots[index] = snapshot;
+    }
+
+    const setResult = await this.db.set(key, snapshots);
+    if (!setResult.ok) {
+      throw new Error(
+        `Database error setting bank summary snapshots for ${organizationId}:${clientId}:${bankAccountId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`
+      );
+    }
+
+    const indexList = await this.loadBankSummaryIndex(organizationId, clientId);
+    if (!indexList.includes(bankAccountId)) {
+      indexList.push(bankAccountId);
+      await this.saveBankSummaryIndex(organizationId, clientId, indexList);
+    }
+  }
+
+  async deleteBankSummarySnapshot(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    window?: string
+  ): Promise<void> {
+    const key = this.getBankSummaryKey(orgId, clientId, bankAccountId);
+    const existingResult = await this.db.get(key);
+    if (!existingResult.ok) {
+      if (existingResult.error?.statusCode === 404) {
+        return;
+      }
+      throw new Error(
+        `Database error getting bank summary snapshots for ${orgId}:${clientId}:${bankAccountId}: ${existingResult.error?.message || JSON.stringify(existingResult.error)}`
+      );
+    }
+
+    if (!window) {
+      const deleteResult = await this.db.delete(key);
+      if (!deleteResult.ok) {
+        throw new Error(
+          `Database error deleting bank summary snapshots for ${orgId}:${clientId}:${bankAccountId}: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`
+        );
+      }
+
+      const index = await this.loadBankSummaryIndex(orgId, clientId);
+      const filtered = index.filter(id => id !== bankAccountId);
+      await this.saveBankSummaryIndex(orgId, clientId, filtered);
+      return;
+    }
+
+    const entries = (existingResult.value as BankSummarySnapshot[] | null) ?? [];
+    const filteredEntries = entries.filter(snapshot => snapshot.window !== window);
+
+    if (filteredEntries.length === 0) {
+      const deleteResult = await this.db.delete(key);
+      if (!deleteResult.ok) {
+        throw new Error(
+          `Database error deleting bank summary snapshots for ${orgId}:${clientId}:${bankAccountId}: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`
+        );
+      }
+
+      const index = await this.loadBankSummaryIndex(orgId, clientId);
+      const filtered = index.filter(id => id !== bankAccountId);
+      await this.saveBankSummaryIndex(orgId, clientId, filtered);
+      return;
+    }
+
+    const setResult = await this.db.set(key, filteredEntries);
+    if (!setResult.ok) {
+      throw new Error(
+        `Database error setting bank summary snapshots for ${orgId}:${clientId}:${bankAccountId}: ${setResult.error?.message || JSON.stringify(setResult.error)}`
+      );
+    }
   }
 
   async getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null> {
