@@ -22,6 +22,8 @@ import type {
 } from "@shared/schema";
 import Database from "@replit/database";
 
+const PROCESSED_WEBHOOK_RETENTION_MS = 15 * 60 * 1000;
+
 export interface IStorage {
   // Health
   checkHealth(): Promise<void>;
@@ -137,6 +139,10 @@ export interface IStorage {
   // Audit trail
   recordAudit(entry: AuditLogEntry): Promise<void>;
   getAuditLogs(organizationId: string, limit?: number): Promise<AuditLogEntry[]>;
+
+  // Webhooks deduplication
+  registerProcessedWebhook(key: string, timestampIso: string): Promise<void>;
+  hasProcessedWebhook(key: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -162,6 +168,7 @@ export class MemStorage implements IStorage {
   private pjBankTransactions: Map<string, Map<string, BankTransaction[]> | BankTransaction[]>;
   private pjCategorizationRules: Map<string, CategorizationRule[]>;
   private auditLogs: Map<string, AuditLogEntry[]>;
+  private processedWebhooks: Map<string, string>;
 
   constructor() {
     this.users = new Map();
@@ -185,6 +192,7 @@ export class MemStorage implements IStorage {
     this.pjBankTransactions = new Map();
     this.pjCategorizationRules = new Map();
     this.auditLogs = new Map();
+    this.processedWebhooks = new Map();
   }
 
   async checkHealth(): Promise<void> {
@@ -706,6 +714,42 @@ export class MemStorage implements IStorage {
   async getAuditLogs(organizationId: string, limit = 100): Promise<AuditLogEntry[]> {
     const entries = this.auditLogs.get(organizationId) ?? [];
     return entries.slice(Math.max(0, entries.length - limit)).reverse();
+  }
+
+  private pruneProcessedWebhooks(now = Date.now()): void {
+    for (const [key, iso] of Array.from(this.processedWebhooks.entries())) {
+      const timestamp = Date.parse(iso);
+      if (Number.isNaN(timestamp) || now - timestamp > PROCESSED_WEBHOOK_RETENTION_MS) {
+        this.processedWebhooks.delete(key);
+      }
+    }
+  }
+
+  async registerProcessedWebhook(key: string, timestampIso: string): Promise<void> {
+    this.pruneProcessedWebhooks();
+    this.processedWebhooks.set(key, timestampIso);
+  }
+
+  async hasProcessedWebhook(key: string): Promise<boolean> {
+    const now = Date.now();
+    this.pruneProcessedWebhooks(now);
+    const iso = this.processedWebhooks.get(key);
+    if (!iso) {
+      return false;
+    }
+
+    const timestamp = Date.parse(iso);
+    if (Number.isNaN(timestamp)) {
+      this.processedWebhooks.delete(key);
+      return false;
+    }
+
+    if (now - timestamp > PROCESSED_WEBHOOK_RETENTION_MS) {
+      this.processedWebhooks.delete(key);
+      return false;
+    }
+
+    return true;
   }
 }
 
@@ -1878,6 +1922,51 @@ export class ReplitDbStorage implements IStorage {
     const events: AuditLogEntry[] = result.ok ? (result.value ?? []) : [];
     const trimmed = events.slice(Math.max(0, events.length - limit));
     return trimmed.reverse();
+  }
+
+  private getProcessedWebhookKey(key: string): string {
+    return `processed_webhook:${key}`;
+  }
+
+  async registerProcessedWebhook(key: string, timestampIso: string): Promise<void> {
+    const record = { timestampIso };
+    const result = await this.db.set(this.getProcessedWebhookKey(key), record);
+    if (!result.ok) {
+      throw new Error(`Database error registering processed webhook ${key}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+  }
+
+  async hasProcessedWebhook(key: string): Promise<boolean> {
+    const storageKey = this.getProcessedWebhookKey(key);
+    const result = await this.db.get(storageKey);
+
+    if (!result.ok) {
+      if (result.error?.statusCode === 404) {
+        return false;
+      }
+      throw new Error(`Database error checking processed webhook ${key}: ${result.error?.message || JSON.stringify(result.error)}`);
+    }
+
+    const value = result.value as { timestampIso?: string } | string | null;
+    const timestampIso = typeof value === "string" ? value : value?.timestampIso;
+
+    if (!timestampIso) {
+      await this.db.delete(storageKey);
+      return false;
+    }
+
+    const timestamp = Date.parse(timestampIso);
+    if (Number.isNaN(timestamp)) {
+      await this.db.delete(storageKey);
+      return false;
+    }
+
+    if (Date.now() - timestamp > PROCESSED_WEBHOOK_RETENTION_MS) {
+      await this.db.delete(storageKey);
+      return false;
+    }
+
+    return true;
   }
 }
 

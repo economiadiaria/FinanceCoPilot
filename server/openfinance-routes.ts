@@ -10,6 +10,9 @@ import { v4 as uuidv4 } from "uuid";
 
 type RawBodyRequest = Request & { rawBody?: Buffer | string };
 
+const WEBHOOK_TIMESTAMP_HEADER = "x-pluggy-timestamp";
+const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
+
 function getRawBodyBuffer(req: Request): Buffer | null {
   const raw = (req as RawBodyRequest).rawBody;
 
@@ -150,6 +153,34 @@ export function registerOpenFinanceRoutes(app: Express) {
         return res.status(401).json({ error: "Assinatura obrigatória" });
       }
 
+      const timestampHeader = req.get(WEBHOOK_TIMESTAMP_HEADER);
+
+      if (!timestampHeader) {
+        logger.warn("Missing Pluggy webhook timestamp", {
+          event: "openfinance.webhook.auth",
+        });
+        return res.status(401).json({ error: "Timestamp obrigatório" });
+      }
+
+      const timestampDate = new Date(timestampHeader);
+      const timestampMs = timestampDate.getTime();
+
+      if (Number.isNaN(timestampMs) || timestampDate.toISOString() !== timestampHeader) {
+        logger.warn("Invalid Pluggy webhook timestamp format", {
+          event: "openfinance.webhook.auth",
+          context: { timestampHeader },
+        });
+        return res.status(401).json({ error: "Timestamp inválido" });
+      }
+
+      if (Math.abs(Date.now() - timestampMs) > WEBHOOK_TIMESTAMP_TOLERANCE_MS) {
+        logger.warn("Stale Pluggy webhook timestamp", {
+          event: "openfinance.webhook.auth",
+          context: { timestampHeader },
+        });
+        return res.status(401).json({ error: "Timestamp expirado" });
+      }
+
       const rawBody = getRawBodyBuffer(req);
 
       if (!rawBody) {
@@ -175,6 +206,15 @@ export function registerOpenFinanceRoutes(app: Express) {
           event: "openfinance.webhook.auth",
         });
         return res.status(403).json({ error: "Assinatura inválida" });
+      }
+
+      const dedupeKey = `${computedSignature}:${timestampHeader}`;
+      if (await storage.hasProcessedWebhook(dedupeKey)) {
+        logger.warn("Duplicate Pluggy webhook received", {
+          event: "openfinance.webhook.duplicate",
+          context: { dedupeKey },
+        });
+        return res.status(409).json({ error: "Webhook duplicado" });
       }
 
       const event = extractEventPayload(req, rawBody);
@@ -212,7 +252,9 @@ export function registerOpenFinanceRoutes(app: Express) {
         });
       }
 
-      res.json({ received: true });
+      await storage.registerProcessedWebhook(dedupeKey, timestampHeader);
+
+      res.status(202).json({ received: true });
     } catch (error: any) {
       getLogger(req).error("Error processing webhook", {
         event: "openfinance.webhook",
