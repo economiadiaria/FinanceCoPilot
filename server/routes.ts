@@ -36,6 +36,8 @@ import {
   evaluateReadinessDependencies,
   type DependencyStatus,
 } from "./observability/readiness";
+import { getDb } from "./db/client";
+import { onboardPjClientCategories } from "./pj-client-category-onboarding";
 
 type SwaggerUiModule = typeof import("swagger-ui-express");
 
@@ -346,6 +348,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Cliente pertence a outra organização" });
       }
 
+      const requestLogger = getLogger(req);
+      updateRequestLoggerContext(req, { clientId: data.clientId });
+
       const consultant = consultantId ? await storage.getUserById(consultantId) : undefined;
       if (consultantId) {
         if (!consultant || consultant.role !== "consultor" || consultant.organizationId !== organizationId) {
@@ -366,6 +371,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
         consultantId: consultantId ?? null,
         masterId: masterId ?? null,
       };
+
+      const shouldProvisionPjPlan =
+        !existingClient && (clientPayload.type === "PJ" || clientPayload.type === "BOTH");
+
+      if (shouldProvisionPjPlan) {
+        const onboardingLogger = requestLogger.child({
+          event: "pj.client.onboarding",
+          clientId: clientPayload.clientId,
+          userId: currentUser.userId,
+        });
+
+        try {
+          const db = getDb();
+          await db.transaction(async transaction => {
+            await onboardPjClientCategories({
+              orgId: organizationId,
+              clientId: clientPayload.clientId,
+              storage,
+              transaction,
+              logger: onboardingLogger,
+            });
+          });
+        } catch (error) {
+          onboardingLogger.error(
+            "Failed to provision PJ client categories",
+            {
+              event: "pj.client.onboarding.failed",
+              clientId: clientPayload.clientId,
+              userId: currentUser.userId,
+              context: { orgId: organizationId },
+            },
+            error,
+          );
+
+          await recordAuditEvent({
+            user: currentUser,
+            eventType: "pj.client.onboarding.failed",
+            targetType: "client",
+            targetId: clientPayload.clientId,
+            metadata: {
+              reason: error instanceof Error ? error.message : String(error),
+            },
+          });
+
+          return res.status(500).json({
+            error: "Não foi possível configurar as categorias PJ do cliente.",
+          });
+        }
+      }
 
       const client = await storage.upsertClient(clientPayload);
       
