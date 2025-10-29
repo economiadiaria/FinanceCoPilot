@@ -4,8 +4,9 @@ import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
 import { validateClientAccess } from "./middleware/scope";
 import { pluggyClient, hasPluggyCredentials } from "./pluggy";
-import { getLogger } from "./observability/logger";
-import type { OFItem, OFAccount, Transaction, Position } from "@shared/schema";
+import { getLogger, type RequestLogger } from "./observability/logger";
+import { recordAuditEvent } from "./security/audit";
+import type { Client, OFItem, OFAccount, Transaction, Position, User } from "@shared/schema";
 import { v4 as uuidv4 } from "uuid";
 
 type RawBodyRequest = Request & { rawBody?: Buffer | string };
@@ -76,6 +77,238 @@ function normalizeAccountType(pluggyType: string): string {
   return typeMap[pluggyType] || pluggyType;
 }
 
+type WebhookSignatureMetadata = {
+  provided: string | null;
+  computed: string | null;
+  timestamp: string | null;
+};
+
+type BankAccountContext = {
+  bankAccountId?: string;
+  bankAccountIds: string[];
+  client?: Client;
+};
+
+function extractAccountIdsFromEvent(eventType: string | undefined, data: unknown): string[] {
+  const ids = new Set<string>();
+
+  const add = (value: unknown) => {
+    if (typeof value === "string" && value.trim() !== "") {
+      ids.add(value);
+    }
+  };
+
+  const handleAccountLike = (value: unknown): void => {
+    if (!value) {
+      return;
+    }
+    if (typeof value === "string") {
+      add(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(handleAccountLike);
+      return;
+    }
+    if (typeof value === "object") {
+      const account = value as Record<string, unknown>;
+      add(account.id);
+      add(account.accountId);
+      add(account.account_id);
+      if ("account" in account) {
+        handleAccountLike(account.account);
+      }
+    }
+  };
+
+  const handleTransactionLike = (value: unknown): void => {
+    if (!value) {
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(handleTransactionLike);
+      return;
+    }
+    if (typeof value === "object") {
+      const transaction = value as Record<string, unknown>;
+      add(transaction.accountId);
+      add(transaction.account_id);
+      if ("account" in transaction) {
+        handleAccountLike(transaction.account);
+      }
+      if ("transaction" in transaction) {
+        handleTransactionLike(transaction.transaction);
+      }
+      if ("transactions" in transaction) {
+        handleTransactionLike(transaction.transactions);
+      }
+    }
+  };
+
+  if (!data) {
+    return [];
+  }
+
+  if (typeof data === "string") {
+    add(data);
+    return Array.from(ids);
+  }
+
+  const isAccountEvent = /account/i.test(eventType ?? "");
+  const isTransactionEvent = /transaction/i.test(eventType ?? "");
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      if (isAccountEvent) {
+        handleAccountLike(item);
+      }
+      if (isTransactionEvent) {
+        handleTransactionLike(item);
+      }
+    }
+    return Array.from(ids);
+  }
+
+  if (typeof data === "object") {
+    const payload = data as Record<string, unknown>;
+    add(payload.accountId);
+    add(payload.account_id);
+    if ("account" in payload) {
+      handleAccountLike(payload.account);
+    }
+    if (isAccountEvent) {
+      handleAccountLike(payload);
+      if ("accounts" in payload) {
+        handleAccountLike(payload.accounts);
+      }
+    }
+    if (isTransactionEvent) {
+      handleTransactionLike(payload);
+      if ("transactions" in payload) {
+        handleTransactionLike(payload.transactions);
+      }
+      if ("transaction" in payload) {
+        handleTransactionLike(payload.transaction);
+      }
+    }
+  }
+
+  return Array.from(ids);
+}
+
+async function findClientByItemId(itemId: string): Promise<Client | undefined> {
+  const clients = await storage.getClients();
+  for (const client of clients) {
+    const items = await storage.getOFItems(client.clientId);
+    if (items.some(item => item.itemId === itemId)) {
+      return client;
+    }
+  }
+  return undefined;
+}
+
+async function resolveWebhookContext(
+  eventType: string | undefined,
+  itemId: string | undefined,
+  data: unknown
+): Promise<BankAccountContext> {
+  const context: BankAccountContext = { bankAccountIds: [] };
+  if (itemId) {
+    context.client = await findClientByItemId(itemId);
+  }
+
+  const relevantEvent = /account|transaction/i.test(eventType ?? "");
+  if (!relevantEvent) {
+    return context;
+  }
+
+  const accountIds = new Set<string>(extractAccountIdsFromEvent(eventType, data));
+
+  if (accountIds.size === 0 && context.client && itemId) {
+    const accounts = await storage.getOFAccounts(context.client.clientId);
+    for (const account of accounts) {
+      if (account.itemId === itemId) {
+        accountIds.add(account.accountId);
+      }
+    }
+  }
+
+  context.bankAccountIds = Array.from(accountIds);
+  context.bankAccountId = context.bankAccountIds[0];
+  return context;
+}
+
+function createSystemAuditUser(organizationId?: string): User {
+  return {
+    userId: "system-openfinance-webhook",
+    email: "openfinance-webhook@system.local",
+    passwordHash: "system",
+    role: "master",
+    name: "Open Finance Webhook",
+    organizationId: organizationId ?? "system",
+    clientIds: [],
+    managedConsultantIds: [],
+    managedClientIds: [],
+  } satisfies User;
+}
+
+async function recordWebhookAudit(
+  logger: RequestLogger,
+  {
+    outcome,
+    reason,
+    signature,
+    pluggyEventType,
+    itemId,
+    bankAccountContext,
+  }: {
+    outcome: "accepted" | "rejected";
+    reason?: string;
+    signature: WebhookSignatureMetadata;
+    pluggyEventType?: string;
+    itemId?: string;
+    bankAccountContext: BankAccountContext;
+  }
+): Promise<void> {
+  const eventType =
+    outcome === "accepted" ? "openfinance.webhook.accepted" : "openfinance.webhook.rejected";
+
+  const signatureMetadata = {
+    provided: signature.provided ?? null,
+    computed: signature.computed ?? null,
+    timestamp: signature.timestamp ?? null,
+  };
+
+  const metadata = {
+    pluggyEventType: pluggyEventType ?? null,
+    itemId: itemId ?? null,
+    clientId: bankAccountContext.client?.clientId ?? null,
+    bankAccountId: bankAccountContext.bankAccountId ?? null,
+    bankAccountIds: bankAccountContext.bankAccountIds,
+    signature: signatureMetadata,
+    reason: reason ?? null,
+  };
+
+  try {
+    await recordAuditEvent({
+      user: createSystemAuditUser(bankAccountContext.client?.organizationId),
+      eventType,
+      targetType: "openfinance.webhook",
+      targetId: bankAccountContext.bankAccountId ?? itemId ?? undefined,
+      metadata,
+    });
+  } catch (error) {
+    logger.error(
+      "Failed to record Open Finance webhook audit entry",
+      {
+        event: "openfinance.webhook.audit",
+        context: { outcome },
+      },
+      error
+    );
+  }
+}
+
 export function registerOpenFinanceRoutes(app: Express) {
   // POST /api/openfinance/consent/start - Create connect token
   app.post("/api/openfinance/consent/start", authMiddleware, validateClientAccess, async (req, res) => {
@@ -133,52 +366,78 @@ export function registerOpenFinanceRoutes(app: Express) {
 
   // POST /api/openfinance/webhook - Receive Pluggy webhooks
   app.post("/api/openfinance/webhook", async (req, res) => {
+    const logger = getLogger(req);
+    const signatureMetadata: WebhookSignatureMetadata = {
+      provided: req.get("x-pluggy-signature") ?? null,
+      computed: null,
+      timestamp: req.get(WEBHOOK_TIMESTAMP_HEADER) ?? null,
+    };
+    let pluggyEventType: string | undefined;
+    let pluggyItemId: string | undefined;
+    let bankAccountContext: BankAccountContext = { bankAccountIds: [] };
+    let auditRecorded = false;
+
+    const emitAudit = async (outcome: "accepted" | "rejected", reason?: string) => {
+      await recordWebhookAudit(logger, {
+        outcome,
+        reason,
+        signature: signatureMetadata,
+        pluggyEventType,
+        itemId: pluggyItemId,
+        bankAccountContext,
+      });
+      auditRecorded = true;
+    };
+
+    const rejectRequest = async (status: number, message: string, reason: string) => {
+      await emitAudit("rejected", reason);
+      return res.status(status).json({ error: message });
+    };
+
     try {
-      const logger = getLogger(req);
       const webhookSecret = process.env.PLUGGY_WEBHOOK_SECRET?.trim();
 
       if (!webhookSecret) {
         logger.error("Pluggy webhook secret not configured", {
           event: "openfinance.webhook.auth",
         });
-        return res.status(500).json({ error: "Segredo do webhook não configurado" });
+        return rejectRequest(500, "Segredo do webhook não configurado", "secret-not-configured");
       }
 
-      const providedSignature = req.get("x-pluggy-signature");
-
-      if (!providedSignature) {
+      if (!signatureMetadata.provided) {
         logger.warn("Missing Pluggy webhook signature", {
           event: "openfinance.webhook.auth",
         });
-        return res.status(401).json({ error: "Assinatura obrigatória" });
+        return rejectRequest(401, "Assinatura obrigatória", "missing-signature");
       }
 
-      const timestampHeader = req.get(WEBHOOK_TIMESTAMP_HEADER);
-
-      if (!timestampHeader) {
+      if (!signatureMetadata.timestamp) {
         logger.warn("Missing Pluggy webhook timestamp", {
           event: "openfinance.webhook.auth",
         });
-        return res.status(401).json({ error: "Timestamp obrigatório" });
+        return rejectRequest(401, "Timestamp obrigatório", "missing-timestamp");
       }
 
-      const timestampDate = new Date(timestampHeader);
+      const timestampDate = new Date(signatureMetadata.timestamp);
       const timestampMs = timestampDate.getTime();
 
-      if (Number.isNaN(timestampMs) || timestampDate.toISOString() !== timestampHeader) {
+      if (
+        Number.isNaN(timestampMs) ||
+        timestampDate.toISOString() !== signatureMetadata.timestamp
+      ) {
         logger.warn("Invalid Pluggy webhook timestamp format", {
           event: "openfinance.webhook.auth",
-          context: { timestampHeader },
+          context: { timestampHeader: signatureMetadata.timestamp },
         });
-        return res.status(401).json({ error: "Timestamp inválido" });
+        return rejectRequest(401, "Timestamp inválido", "invalid-timestamp");
       }
 
       if (Math.abs(Date.now() - timestampMs) > WEBHOOK_TIMESTAMP_TOLERANCE_MS) {
         logger.warn("Stale Pluggy webhook timestamp", {
           event: "openfinance.webhook.auth",
-          context: { timestampHeader },
+          context: { timestampHeader: signatureMetadata.timestamp },
         });
-        return res.status(401).json({ error: "Timestamp expirado" });
+        return rejectRequest(401, "Timestamp expirado", "stale-timestamp");
       }
 
       const rawBody = getRawBodyBuffer(req);
@@ -187,15 +446,16 @@ export function registerOpenFinanceRoutes(app: Express) {
         logger.warn("Missing raw body for Pluggy webhook", {
           event: "openfinance.webhook.auth",
         });
-        return res.status(400).json({ error: "Payload inválido" });
+        return rejectRequest(400, "Payload inválido", "missing-raw-body");
       }
 
       const computedSignature = crypto
         .createHmac("sha256", webhookSecret)
         .update(rawBody)
         .digest("hex");
+      signatureMetadata.computed = computedSignature;
 
-      const providedSignatureBuffer = Buffer.from(providedSignature, "utf8");
+      const providedSignatureBuffer = Buffer.from(signatureMetadata.provided, "utf8");
       const computedSignatureBuffer = Buffer.from(computedSignature, "utf8");
       const signatureMatches =
         providedSignatureBuffer.length === computedSignatureBuffer.length &&
@@ -205,60 +465,90 @@ export function registerOpenFinanceRoutes(app: Express) {
         logger.warn("Invalid Pluggy webhook signature", {
           event: "openfinance.webhook.auth",
         });
-        return res.status(403).json({ error: "Assinatura inválida" });
+        return rejectRequest(403, "Assinatura inválida", "invalid-signature");
       }
 
-      const dedupeKey = `${computedSignature}:${timestampHeader}`;
+      const eventPayload = extractEventPayload(req, rawBody);
+      const eventTypeValue =
+        typeof eventPayload?.event === "string" ? (eventPayload.event as string) : undefined;
+      const itemIdValue =
+        typeof eventPayload?.itemId === "string" ? (eventPayload.itemId as string) : undefined;
+      const eventData = eventPayload?.data;
+
+      pluggyEventType = eventTypeValue;
+      pluggyItemId = itemIdValue;
+      bankAccountContext = await resolveWebhookContext(eventTypeValue, itemIdValue, eventData);
+
+      if (!eventPayload || !eventPayload.data) {
+        return rejectRequest(400, "Payload inválido", "invalid-payload");
+      }
+
+      const eventType = eventTypeValue ?? "";
+      const itemId = itemIdValue;
+      const dedupeKey = `${computedSignature}:${signatureMetadata.timestamp}`;
+
       if (await storage.hasProcessedWebhook(dedupeKey)) {
+        const duplicateContext: Record<string, unknown> = { dedupeKey };
+        if (pluggyEventType) duplicateContext.eventType = pluggyEventType;
+        if (pluggyItemId) duplicateContext.itemId = pluggyItemId;
+        if (bankAccountContext.bankAccountIds.length > 0) {
+          duplicateContext.bankAccountIds = bankAccountContext.bankAccountIds;
+        }
         logger.warn("Duplicate Pluggy webhook received", {
           event: "openfinance.webhook.duplicate",
-          context: { dedupeKey },
+          ...(bankAccountContext.bankAccountId
+            ? { bankAccountId: bankAccountContext.bankAccountId }
+            : {}),
+          context: duplicateContext,
         });
-        return res.status(409).json({ error: "Webhook duplicado" });
+        return rejectRequest(409, "Webhook duplicado", "duplicate");
       }
 
-      const event = extractEventPayload(req, rawBody);
-
-      if (!event || !event.data) {
-        return res.status(400).json({ error: "Payload inválido" });
+      const webhookLogContext: Record<string, unknown> = {
+        eventType,
+        itemId,
+      };
+      if (bankAccountContext.bankAccountIds.length > 0) {
+        webhookLogContext.bankAccountIds = bankAccountContext.bankAccountIds;
       }
 
-      const { itemId, event: eventType, data } = event;
-
-      // Get client ID from item (stored when item was created)
-      // For now, we'll update the item status based on event type
       logger.info("Webhook received", {
         event: "openfinance.webhook",
-        context: { eventType, itemId },
+        ...(bankAccountContext.bankAccountId
+          ? { bankAccountId: bankAccountContext.bankAccountId }
+          : {}),
+        context: webhookLogContext,
       });
 
       // Update item status based on event type
       if (eventType === "item/created" || eventType === "item/updated") {
-        // Item was successfully created or updated
-        // Mark for sync in next call
         logger.info("Item ready for sync", {
           event: "openfinance.webhook.ready",
           context: { itemId },
         });
       } else if (eventType === "item/error" || eventType === "item/login_error") {
-        // Update item status to error
         logger.warn("Item reported error", {
           event: "openfinance.webhook.error",
           context: {
             itemId,
-            code: data?.code ?? data?.errorCode ?? null,
-            status: data?.status ?? null,
+            code: eventPayload.data?.code ?? eventPayload.data?.errorCode ?? null,
+            status: eventPayload.data?.status ?? null,
           },
         });
       }
 
-      await storage.registerProcessedWebhook(dedupeKey, timestampHeader);
+      await storage.registerProcessedWebhook(dedupeKey, signatureMetadata.timestamp);
+      await emitAudit("accepted");
 
       res.status(202).json({ received: true });
     } catch (error: any) {
-      getLogger(req).error("Error processing webhook", {
+      logger.error("Error processing webhook", {
         event: "openfinance.webhook",
       }, error);
+      if (!auditRecorded) {
+        const reason = error instanceof Error ? error.message : String(error);
+        await emitAudit("rejected", reason);
+      }
       res.status(500).json({ error: error.message || "Erro ao processar webhook" });
     }
   });

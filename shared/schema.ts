@@ -209,6 +209,8 @@ export const auditEventTypes = [
   "policy.update",
   "report.generate",
   "lgpd.anonymize",
+  "openfinance.webhook.accepted",
+  "openfinance.webhook.rejected",
 ] as const;
 
 export const auditLogEntrySchema = z.object({
