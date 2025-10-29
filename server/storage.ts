@@ -18,6 +18,8 @@ import type {
   BankSummarySnapshot,
   BankTransaction,
   CategorizationRule,
+  PjCategory,
+  PjClientCategory,
   AuditLogEntry,
 } from "@shared/schema";
 import Database from "@replit/database";
@@ -101,6 +103,16 @@ export interface IStorage {
   getOFSyncMeta(clientId: string): Promise<OFSyncMeta | null>;
   setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void>;
 
+  // PJ - Categories
+  getPjCategories(): Promise<PjCategory[]>;
+  setPjCategories(categories: PjCategory[]): Promise<void>;
+  getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategory[]>;
+  bulkInsertPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategory[],
+  ): Promise<void>;
+
   // PJ - Sales
   getSales(clientId: string): Promise<Sale[]>;
   setSales(clientId: string, sales: Sale[]): Promise<void>;
@@ -161,6 +173,8 @@ export class MemStorage implements IStorage {
   private bankSummaries: Map<string, BankSummarySnapshot[]>;
 
   // PJ storage
+  private pjCategories: Map<string, PjCategory>;
+  private pjClientCategories: Map<string, Map<string, PjClientCategory>>;
   private pjSales: Map<string, Sale[]>;
   private pjSaleLegs: Map<string, SaleLeg[]>;
   private pjPaymentMethods: Map<string, PaymentMethod[]>;
@@ -184,7 +198,10 @@ export class MemStorage implements IStorage {
     this.ofSyncMeta = new Map();
     this.bankAccounts = new Map();
     this.bankSummaries = new Map();
-    
+
+    this.pjCategories = new Map();
+    this.seedPjCategories();
+    this.pjClientCategories = new Map();
     this.pjSales = new Map();
     this.pjSaleLegs = new Map();
     this.pjPaymentMethods = new Map();
@@ -193,6 +210,121 @@ export class MemStorage implements IStorage {
     this.pjCategorizationRules = new Map();
     this.auditLogs = new Map();
     this.processedWebhooks = new Map();
+  }
+
+  private seedPjCategories(): void {
+    const now = new Date().toISOString();
+    const seeds: PjCategory[] = [
+      {
+        id: "seed-pj-category-receita",
+        code: "RECEITA",
+        name: "Receitas",
+        description: "Entradas operacionais de vendas e serviços.",
+        parentId: null,
+        isCore: true,
+        acceptsPostings: false,
+        level: 1,
+        path: "RECEITA",
+        sortOrder: 10,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "seed-pj-category-deducoes-receita",
+        code: "DEDUCOES_RECEITA",
+        name: "(-) Deduções da Receita",
+        description: "Descontos, impostos e devoluções associados às receitas.",
+        parentId: null,
+        isCore: true,
+        acceptsPostings: false,
+        level: 1,
+        path: "DEDUCOES_RECEITA",
+        sortOrder: 20,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "seed-pj-category-gea",
+        code: "GEA",
+        name: "(-) Despesas Gerais e Administrativas",
+        description: "Custos operacionais administrativos.",
+        parentId: null,
+        isCore: true,
+        acceptsPostings: false,
+        level: 1,
+        path: "GEA",
+        sortOrder: 30,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "seed-pj-category-comercial-mkt",
+        code: "COMERCIAL_MKT",
+        name: "(-) Despesas Comerciais e Marketing",
+        description: "Gastos comerciais e de marketing.",
+        parentId: null,
+        isCore: true,
+        acceptsPostings: false,
+        level: 1,
+        path: "COMERCIAL_MKT",
+        sortOrder: 40,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "seed-pj-category-financeiras",
+        code: "FINANCEIRAS",
+        name: "(-/+) Despesas e Receitas Financeiras",
+        description: "Receitas e despesas financeiras.",
+        parentId: null,
+        isCore: true,
+        acceptsPostings: false,
+        level: 1,
+        path: "FINANCEIRAS",
+        sortOrder: 50,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "seed-pj-category-outras",
+        code: "OUTRAS",
+        name: "(-/+) Outras Despesas e Receitas Não Operacionais",
+        description: "Eventos não operacionais.",
+        parentId: null,
+        isCore: true,
+        acceptsPostings: false,
+        level: 1,
+        path: "OUTRAS",
+        sortOrder: 60,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+
+    this.pjCategories.clear();
+    for (const category of seeds) {
+      this.pjCategories.set(category.id, category);
+    }
+  }
+
+  private getClientCategoryBucket(orgId: string, clientId: string): Map<string, PjClientCategory> {
+    const key = `${orgId}:${clientId}`;
+    let bucket = this.pjClientCategories.get(key);
+    if (!bucket) {
+      bucket = new Map();
+      this.pjClientCategories.set(key, bucket);
+    }
+    return bucket;
+  }
+
+  private sortPjCategories<T extends { sortOrder?: number; path: string }>(categories: T[]): T[] {
+    return [...categories].sort((a, b) => {
+      const sortDiff = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+      if (sortDiff !== 0) {
+        return sortDiff;
+      }
+      return a.path.localeCompare(b.path);
+    });
   }
 
   async checkHealth(): Promise<void> {
@@ -450,6 +582,38 @@ export class MemStorage implements IStorage {
 
   async setOFSyncMeta(clientId: string, meta: OFSyncMeta): Promise<void> {
     this.ofSyncMeta.set(clientId, meta);
+  }
+
+  // PJ - Categories
+  async getPjCategories(): Promise<PjCategory[]> {
+    return this.sortPjCategories(Array.from(this.pjCategories.values()));
+  }
+
+  async setPjCategories(categories: PjCategory[]): Promise<void> {
+    this.pjCategories.clear();
+    for (const category of categories) {
+      this.pjCategories.set(category.id, category);
+    }
+  }
+
+  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategory[]> {
+    const bucket = this.getClientCategoryBucket(orgId, clientId);
+    return this.sortPjCategories(Array.from(bucket.values()));
+  }
+
+  async bulkInsertPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategory[],
+  ): Promise<void> {
+    if (categories.length === 0) {
+      return;
+    }
+
+    const bucket = this.getClientCategoryBucket(orgId, clientId);
+    for (const category of categories) {
+      bucket.set(category.id, { ...category, orgId, clientId });
+    }
   }
 
   private getBankSummaryKey(orgId: string, clientId: string, bankAccountId: string): string {
@@ -796,6 +960,24 @@ export class ReplitDbStorage implements IStorage {
 
   private getLegacyOfxImportKey(fileHash: string): string {
     return `ofxImport:${fileHash}`;
+  }
+
+  private getPjCategoriesKey(): string {
+    return "pj_categories";
+  }
+
+  private getPjClientCategoriesKey(orgId: string, clientId: string): string {
+    return `pj_client_categories:${orgId}:${clientId}`;
+  }
+
+  private sortPjCategories<T extends { sortOrder?: number; path: string }>(categories: T[]): T[] {
+    return [...categories].sort((a, b) => {
+      const sortDiff = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+      if (sortDiff !== 0) {
+        return sortDiff;
+      }
+      return a.path.localeCompare(b.path);
+    });
   }
 
   private getBankAccountKey(orgId: string, fingerprint: string): string {
@@ -1596,6 +1778,67 @@ export class ReplitDbStorage implements IStorage {
     }
   }
 
+  // PJ - Categories
+  async getPjCategories(): Promise<PjCategory[]> {
+    const result = await this.db.get(this.getPjCategoriesKey());
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(
+        `Database error getting PJ categories: ${result.error?.message || JSON.stringify(result.error)}`,
+      );
+    }
+
+    const raw = result.ok ? result.value : null;
+    const categories = Array.isArray(raw) ? (raw as PjCategory[]) : [];
+    return this.sortPjCategories(categories);
+  }
+
+  async setPjCategories(categories: PjCategory[]): Promise<void> {
+    const result = await this.db.set(this.getPjCategoriesKey(), categories);
+    if (!result.ok) {
+      throw new Error(
+        `Database error setting PJ categories: ${result.error?.message || JSON.stringify(result.error)}`,
+      );
+    }
+  }
+
+  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategory[]> {
+    const key = this.getPjClientCategoriesKey(orgId, clientId);
+    const result = await this.db.get(key);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(
+        `Database error getting PJ client categories for ${orgId}:${clientId}: ${result.error?.message || JSON.stringify(result.error)}`,
+      );
+    }
+
+    const raw = result.ok ? result.value : null;
+    const categories = Array.isArray(raw) ? (raw as PjClientCategory[]) : [];
+    return this.sortPjCategories(categories);
+  }
+
+  async bulkInsertPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategory[],
+  ): Promise<void> {
+    if (categories.length === 0) {
+      return;
+    }
+
+    const existing = await this.getPjClientCategories(orgId, clientId);
+    const merged = new Map(existing.map(category => [category.id, category] as const));
+    for (const category of categories) {
+      merged.set(category.id, { ...category, orgId, clientId });
+    }
+
+    const key = this.getPjClientCategoriesKey(orgId, clientId);
+    const result = await this.db.set(key, Array.from(merged.values()));
+    if (!result.ok) {
+      throw new Error(
+        `Database error inserting PJ client categories for ${orgId}:${clientId}: ${result.error?.message || JSON.stringify(result.error)}`,
+      );
+    }
+  }
+
   // PJ - Sales
   async getSales(clientId: string): Promise<Sale[]> {
     const result = await this.db.get(`pj_sales:${clientId}`);
@@ -1977,6 +2220,7 @@ const defaultStorage: IStorage = process.env.REPLIT_DB_URL
 
 export let storage: IStorage = defaultStorage;
 
-export function setStorageProvider(next: IStorage) {
+export function setStorageProvider<T extends IStorage>(next: T): T {
   storage = next;
+  return next;
 }
