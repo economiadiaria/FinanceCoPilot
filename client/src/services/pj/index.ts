@@ -209,6 +209,10 @@ export interface PJTopCostHighlight {
   amount: number;
   group: string;
   groupLabel: string;
+  categoryPath: string | null;
+  categoryLabel: string | null;
+  categoryLevel: number | null;
+  categoryAcceptsPostings: boolean | null;
 }
 
 export interface PJUncategorisedExpenseItem {
@@ -269,6 +273,33 @@ export interface PJMonthlyInsightsResponse {
   };
 }
 
+export interface PJCostBreakdownNode {
+  key: string;
+  label: string;
+  inflows: number;
+  outflows: number;
+  net: number;
+  categoryId: string | null;
+  categoryPath: string;
+  level: number;
+  group: string;
+  acceptsPostings: boolean;
+  sortOrder: number;
+  directInflows: number;
+  directOutflows: number;
+  children: PJCostBreakdownNode[];
+}
+
+export interface PJCostBreakdownGroup {
+  key: string;
+  label: string;
+  inflows: number;
+  outflows: number;
+  net: number;
+  group: string;
+  items: PJCostBreakdownNode[];
+}
+
 export interface PJCostBreakdownResponse {
   month: string | null;
   availableMonths: string[];
@@ -277,20 +308,7 @@ export interface PJCostBreakdownResponse {
     outflows: number;
     net: number;
   };
-  groups: {
-    key: string;
-    label: string;
-    inflows: number;
-    outflows: number;
-    net: number;
-    items: {
-      key: string;
-      label: string;
-      inflows: number;
-      outflows: number;
-      net: number;
-    }[];
-  }[];
+  groups: PJCostBreakdownGroup[];
   uncategorized: {
     total: number;
     count: number;
@@ -715,6 +733,10 @@ const mockInsights: PJMonthlyInsightsResponse = {
         amount: -32000,
         group: "GEA",
         groupLabel: "Despesas Gerais",
+        categoryPath: "demo.gea.folha",
+        categoryLabel: "Folha",
+        categoryLevel: 2,
+        categoryAcceptsPostings: true,
       },
       {
         bankTxId: "bank-tx-012",
@@ -723,6 +745,10 @@ const mockInsights: PJMonthlyInsightsResponse = {
         amount: -9800,
         group: "COMERCIAL_MKT",
         groupLabel: "Marketing",
+        categoryPath: "demo.marketing.digital.ads",
+        categoryLabel: "Ads",
+        categoryLevel: 3,
+        categoryAcceptsPostings: true,
       },
     ],
     origemReceita: [
@@ -772,10 +798,73 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
       inflows: 182000,
       outflows: 0,
       net: 182000,
+      group: "RECEITA",
       items: [
-        { key: "E_COMMERCE", label: "E-commerce", inflows: 82000, outflows: 0, net: 82000 },
-        { key: "MARKETPLACE", label: "Marketplace", inflows: 52000, outflows: 0, net: 52000 },
-        { key: "B2B", label: "B2B", inflows: 48000, outflows: 0, net: 48000 },
+        {
+          key: "demo.receita",
+          label: "Receita",
+          inflows: 182000,
+          outflows: 0,
+          net: 182000,
+          categoryId: "demo.receita",
+          categoryPath: "demo.receita",
+          level: 1,
+          group: "RECEITA",
+          acceptsPostings: false,
+          sortOrder: 10,
+          directInflows: 0,
+          directOutflows: 0,
+          children: [
+            {
+              key: "demo.receita.ecommerce",
+              label: "E-commerce",
+              inflows: 82000,
+              outflows: 0,
+              net: 82000,
+              categoryId: "demo.receita.ecommerce",
+              categoryPath: "demo.receita.ecommerce",
+              level: 2,
+              group: "RECEITA",
+              acceptsPostings: true,
+              sortOrder: 10,
+              directInflows: 82000,
+              directOutflows: 0,
+              children: [],
+            },
+            {
+              key: "demo.receita.marketplace",
+              label: "Marketplace",
+              inflows: 52000,
+              outflows: 0,
+              net: 52000,
+              categoryId: "demo.receita.marketplace",
+              categoryPath: "demo.receita.marketplace",
+              level: 2,
+              group: "RECEITA",
+              acceptsPostings: true,
+              sortOrder: 20,
+              directInflows: 52000,
+              directOutflows: 0,
+              children: [],
+            },
+            {
+              key: "demo.receita.b2b",
+              label: "B2B",
+              inflows: 48000,
+              outflows: 0,
+              net: 48000,
+              categoryId: "demo.receita.b2b",
+              categoryPath: "demo.receita.b2b",
+              level: 2,
+              group: "RECEITA",
+              acceptsPostings: true,
+              sortOrder: 30,
+              directInflows: 48000,
+              directOutflows: 0,
+              children: [],
+            },
+          ],
+        },
       ],
     },
     {
@@ -784,10 +873,73 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
       inflows: 0,
       outflows: 64000,
       net: -64000,
+      group: "GEA",
       items: [
-        { key: "FOLHA", label: "Folha", inflows: 0, outflows: 32000, net: -32000 },
-        { key: "OPERACIONAL", label: "Operacional", inflows: 0, outflows: 21000, net: -21000 },
-        { key: "ALUGUEL", label: "Aluguel", inflows: 0, outflows: 11000, net: -11000 },
+        {
+          key: "demo.gea",
+          label: "Despesas Gerais",
+          inflows: 0,
+          outflows: 64000,
+          net: -64000,
+          categoryId: "demo.gea",
+          categoryPath: "demo.gea",
+          level: 1,
+          group: "GEA",
+          acceptsPostings: false,
+          sortOrder: 10,
+          directInflows: 0,
+          directOutflows: 0,
+          children: [
+            {
+              key: "demo.gea.folha",
+              label: "Folha",
+              inflows: 0,
+              outflows: 32000,
+              net: -32000,
+              categoryId: "demo.gea.folha",
+              categoryPath: "demo.gea.folha",
+              level: 2,
+              group: "GEA",
+              acceptsPostings: true,
+              sortOrder: 10,
+              directInflows: 0,
+              directOutflows: 32000,
+              children: [],
+            },
+            {
+              key: "demo.gea.operacional",
+              label: "Operacional",
+              inflows: 0,
+              outflows: 21000,
+              net: -21000,
+              categoryId: "demo.gea.operacional",
+              categoryPath: "demo.gea.operacional",
+              level: 2,
+              group: "GEA",
+              acceptsPostings: true,
+              sortOrder: 20,
+              directInflows: 0,
+              directOutflows: 21000,
+              children: [],
+            },
+            {
+              key: "demo.gea.aluguel",
+              label: "Aluguel",
+              inflows: 0,
+              outflows: 11000,
+              net: -11000,
+              categoryId: "demo.gea.aluguel",
+              categoryPath: "demo.gea.aluguel",
+              level: 2,
+              group: "GEA",
+              acceptsPostings: true,
+              sortOrder: 30,
+              directInflows: 0,
+              directOutflows: 11000,
+              children: [],
+            },
+          ],
+        },
       ],
     },
     {
@@ -796,10 +948,90 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
       inflows: 0,
       outflows: 29000,
       net: -29000,
+      group: "COMERCIAL_MKT",
       items: [
-        { key: "ADS", label: "Ads", inflows: 0, outflows: 12000, net: -12000 },
-        { key: "CRM", label: "CRM", inflows: 0, outflows: 9000, net: -9000 },
-        { key: "EVENTOS", label: "Eventos", inflows: 0, outflows: 8000, net: -8000 },
+        {
+          key: "demo.marketing",
+          label: "Marketing",
+          inflows: 0,
+          outflows: 29000,
+          net: -29000,
+          categoryId: "demo.marketing",
+          categoryPath: "demo.marketing",
+          level: 1,
+          group: "COMERCIAL_MKT",
+          acceptsPostings: false,
+          sortOrder: 10,
+          directInflows: 0,
+          directOutflows: 0,
+          children: [
+            {
+              key: "demo.marketing.digital",
+              label: "Digital",
+              inflows: 0,
+              outflows: 21000,
+              net: -21000,
+              categoryId: "demo.marketing.digital",
+              categoryPath: "demo.marketing.digital",
+              level: 2,
+              group: "COMERCIAL_MKT",
+              acceptsPostings: false,
+              sortOrder: 10,
+              directInflows: 0,
+              directOutflows: 0,
+              children: [
+                {
+                  key: "demo.marketing.digital.ads",
+                  label: "Ads",
+                  inflows: 0,
+                  outflows: 12000,
+                  net: -12000,
+                  categoryId: "demo.marketing.digital.ads",
+                  categoryPath: "demo.marketing.digital.ads",
+                  level: 3,
+                  group: "COMERCIAL_MKT",
+                  acceptsPostings: true,
+                  sortOrder: 10,
+                  directInflows: 0,
+                  directOutflows: 12000,
+                  children: [],
+                },
+              ],
+            },
+            {
+              key: "demo.marketing.crm",
+              label: "CRM",
+              inflows: 0,
+              outflows: 9000,
+              net: -9000,
+              categoryId: "demo.marketing.crm",
+              categoryPath: "demo.marketing.crm",
+              level: 2,
+              group: "COMERCIAL_MKT",
+              acceptsPostings: true,
+              sortOrder: 20,
+              directInflows: 0,
+              directOutflows: 9000,
+              children: [],
+            },
+            {
+              key: "demo.marketing.eventos",
+              label: "Eventos",
+              inflows: 0,
+              outflows: 8000,
+              net: -8000,
+              categoryId: "demo.marketing.eventos",
+              categoryPath: "demo.marketing.eventos",
+              level: 2,
+              group: "COMERCIAL_MKT",
+              acceptsPostings: true,
+              sortOrder: 30,
+              directInflows: 0,
+              directOutflows: 8000,
+              children: [],
+            },
+          ],
+        },
       ],
     },
   ],

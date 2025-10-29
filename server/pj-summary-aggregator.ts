@@ -95,12 +95,13 @@ function coerceUniqueAccountIds(ids: Iterable<string | null | undefined>): strin
   return Array.from(unique.values());
 }
 
-async function loadData(clientId: string, bankAccountId: string) {
-  const [transactions, saleLegs] = await Promise.all([
+async function loadData(organizationId: string, clientId: string, bankAccountId: string) {
+  const [transactions, saleLegs, categories] = await Promise.all([
     storage.getBankTransactions(clientId, bankAccountId),
     storage.getSaleLegs(clientId),
+    storage.getPjClientCategories(organizationId, clientId),
   ]);
-  return { transactions, saleLegs };
+  return { transactions, saleLegs, categories };
 }
 
 function buildSnapshotMetadata(
@@ -141,22 +142,23 @@ export async function refreshAccountSnapshots(
   const { organizationId, clientId, bankAccountId } = target;
   const referenceFallback = normalizeDateInput(options.now);
 
-  const { transactions, saleLegs } = await loadData(clientId, bankAccountId);
+  const { transactions, saleLegs, categories } = await loadData(organizationId, clientId, bankAccountId);
   const referenceIso = determineReferenceIsoDate(transactions, referenceFallback);
 
   const snapshots: BankSummarySnapshot[] = [];
 
   for (const windowDays of SNAPSHOT_WINDOWS) {
     const range = computeWindowRange(referenceIso, windowDays);
-    const summary = await pjSummaryService.computeFreshSummaryFromData({
-      clientId,
-      bankAccountId,
-      transactions,
-      saleLegs,
-      from: range.from,
-      to: range.to,
-      windowDays,
-    });
+      const summary = await pjSummaryService.computeFreshSummaryFromData({
+        clientId,
+        bankAccountId,
+        transactions,
+        saleLegs,
+        from: range.from,
+        to: range.to,
+        windowDays,
+        categories,
+      });
 
     const refreshedAt = new Date().toISOString();
     const metadata = buildSnapshotMetadata(summary, windowDays, refreshedAt, range);

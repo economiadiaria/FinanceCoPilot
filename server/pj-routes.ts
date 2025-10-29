@@ -1988,12 +1988,13 @@ export function registerPJRoutes(app: Express) {
           return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
         }
 
-        const [bankTxs, sales] = await Promise.all([
+        const [bankTxs, sales, categories] = await Promise.all([
           storage.getBankTransactions(clientId, bankAccount.id),
           storage.getSales(clientId),
+          bankAccount.orgId ? storage.getPjClientCategories(bankAccount.orgId, clientId) : Promise.resolve([]),
         ]);
 
-        const insights = buildMonthlyInsights(bankTxs, sales, month);
+        const insights = buildMonthlyInsights(bankTxs, sales, month, undefined, categories);
 
         res.json(insights);
       } catch (error: any) {
@@ -2110,12 +2111,13 @@ export function registerPJRoutes(app: Express) {
           return res.status(500).json({ error: "Contexto da conta bancária não carregado" });
         }
 
-        const [bankTxs, sales] = await Promise.all([
+        const [bankTxs, sales, categories] = await Promise.all([
           storage.getBankTransactions(clientId, bankAccount.id),
           storage.getSales(clientId),
+          bankAccount.orgId ? storage.getPjClientCategories(bankAccount.orgId, clientId) : Promise.resolve([]),
         ]);
 
-        const breakdown = buildCostBreakdown(bankTxs, sales, month);
+        const breakdown = buildCostBreakdown(bankTxs, sales, month, categories);
 
         res.json(breakdown);
       } catch (error: any) {
