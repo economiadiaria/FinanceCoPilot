@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,6 +58,8 @@ type RequestOptions = {
   body?: BodyInit | null;
 };
 
+const requestDurations: number[] = [];
+
 async function request(baseUrl: string, endpoint: string, options: RequestOptions = {}) {
   const method = options.method ?? "GET";
   const url = new URL(endpoint, baseUrl).toString();
@@ -66,15 +69,23 @@ async function request(baseUrl: string, endpoint: string, options: RequestOption
     headers.set("cookie", cookieHeader);
   }
 
+  const startTime = performance.now();
   const response = await fetch(url, {
     method,
     headers,
     body: options.body ?? null,
     redirect: "manual",
   });
+  const endTime = performance.now();
+  const durationMs = endTime - startTime;
+  requestDurations.push(durationMs);
 
   const requestId = response.headers.get("x-request-id");
-  console.log(`${method} ${endpoint} -> ${response.status} (X-Request-Id: ${requestId ?? "n/a"})`);
+  console.log(
+    `${method} ${endpoint} -> ${response.status} (X-Request-Id: ${requestId ?? "n/a"}, ${durationMs.toFixed(
+      2,
+    )} ms)`,
+  );
 
   const getSetCookie = (response.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
   if (typeof getSetCookie === "function") {
@@ -98,6 +109,22 @@ async function request(baseUrl: string, endpoint: string, options: RequestOption
   }
 
   return response;
+}
+
+function printRequestLatencySummary() {
+  if (requestDurations.length === 0) {
+    return;
+  }
+
+  const sortedDurations = [...requestDurations].sort((a, b) => a - b);
+  const total = sortedDurations.reduce((sum, duration) => sum + duration, 0);
+  const average = total / sortedDurations.length;
+  const p95Index = Math.max(0, Math.ceil(sortedDurations.length * 0.95) - 1);
+  const p95 = sortedDurations[p95Index];
+
+  console.log(
+    `Request latency summary (${sortedDurations.length} requests): avg=${average.toFixed(2)} ms, p95=${p95.toFixed(2)} ms`,
+  );
 }
 
 async function main() {
@@ -140,8 +167,12 @@ async function main() {
   console.log("Smoke test completed successfully.");
 }
 
-main().catch(error => {
-  console.error("Smoke test failed.");
-  console.error(error instanceof Error ? error.stack ?? error.message : error);
-  process.exitCode = 1;
-});
+main()
+  .catch(error => {
+    console.error("Smoke test failed.");
+    console.error(error instanceof Error ? error.stack ?? error.message : error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    printRequestLatencySummary();
+  });
