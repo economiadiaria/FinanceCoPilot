@@ -450,6 +450,28 @@ export const bankAccountSchema = z.object({
 export type BankAccount = z.infer<typeof bankAccountSchema>;
 export type UpsertBankAccount = z.infer<typeof bankAccountSchema>;
 
+const summarySnapshotValueSchema = z.union([
+  z.number(),
+  z.string(),
+  z.boolean(),
+  z.null(),
+  z.array(z.unknown()),
+  z.record(z.string(), z.unknown()),
+]);
+
+export const bankSummarySnapshotSchema = z.object({
+  organizationId: z.string().min(1, "Organização é obrigatória"),
+  clientId: z.string().min(1, "Cliente é obrigatório"),
+  bankAccountId: z.string().min(1, "Conta bancária é obrigatória"),
+  window: z.string().min(1, "Janela de tempo é obrigatória"),
+  totals: z.record(z.string(), summarySnapshotValueSchema).default({}),
+  kpis: z.record(z.string(), summarySnapshotValueSchema).default({}),
+  refreshedAt: z.string().min(1, "Timestamp de atualização é obrigatório"),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type BankSummarySnapshot = z.infer<typeof bankSummarySnapshotSchema>;
+
 // Categorization Rule (aprendizado) - PJ
 export const matchTypes = ["exact", "contains", "startsWith"] as const;
 export const categorizationActionTypes = ["link_to_sale", "categorize_as_expense"] as const;
