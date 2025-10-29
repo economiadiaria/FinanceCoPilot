@@ -1,4 +1,5 @@
 import {
+  boolean,
   foreignKey,
   index,
   integer,
@@ -27,10 +28,13 @@ export const pjClientCategories = pgTable(
     orgId: uuid("org_id").notNull(),
     clientId: uuid("client_id").notNull(),
     baseCategoryId: uuid("base_category_id"),
+    name: text("name").notNull(),
+    description: text("description"),
     parentId: uuid("parent_id"),
     level: integer("level").notNull().default(0),
     path: text("path").notNull(),
     sortOrder: integer("sort_order").notNull().default(0),
+    acceptsPostings: boolean("accepts_postings").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .notNull()
       .defaultNow(),

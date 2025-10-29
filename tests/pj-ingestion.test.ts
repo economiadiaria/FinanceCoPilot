@@ -223,6 +223,8 @@ test("applyCategorizationRules tags only matching transactions", () => {
   assert.deepEqual(transactions[0].categorizedAs, {
     group: "COMERCIAL_MKT",
     subcategory: "Assinaturas",
+    categoryId: undefined,
+    categoryPath: undefined,
     auto: true,
   });
   assert.equal(transactions[0].categorizedBy, "rule");

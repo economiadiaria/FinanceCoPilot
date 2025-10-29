@@ -19,4 +19,8 @@ export type BankTransactionCategorizedAs = {
   group?: string | null;
   /** @nullable */
   subcategory?: string | null;
+  /** @nullable */
+  categoryId?: string | null;
+  /** @nullable */
+  categoryPath?: string | null;
 } | null;
