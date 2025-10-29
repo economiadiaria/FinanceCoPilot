@@ -202,6 +202,7 @@ async function seedStorage(storage: IStorage) {
 
 describe("PJ summary endpoint", () => {
   let appServer: import("http").Server;
+  let storageProvider: MemStorage;
 
   before(async () => {
     const app = express();
@@ -215,9 +216,9 @@ describe("PJ summary endpoint", () => {
       })
     );
 
-    const storage = new MemStorage();
-    setStorageProvider(storage);
-    await seedStorage(storage);
+    storageProvider = new MemStorage();
+    setStorageProvider(storageProvider);
+    await seedStorage(storageProvider);
 
     appServer = await registerRoutes(app);
   });
@@ -231,9 +232,9 @@ describe("PJ summary endpoint", () => {
   });
 
   beforeEach(async () => {
-    const storage = new MemStorage();
-    setStorageProvider(storage);
-    await seedStorage(storage);
+    storageProvider = new MemStorage();
+    setStorageProvider(storageProvider);
+    await seedStorage(storageProvider);
   });
 
   it("returns KPI summary for the requested period", async () => {
@@ -322,6 +323,18 @@ describe("PJ summary endpoint", () => {
       .expect(404);
 
     assert.deepEqual(forbidden.body, missing.body);
+
+    const auditLogs = await storageProvider.getAuditLogs(ORG_ONE);
+    const deniedEvent = auditLogs.find(
+      entry => entry.eventType === "security.access_denied.bank_account" && entry.targetId === BANK_ACCOUNT_OTHER
+    );
+    assert.ok(deniedEvent, "expected bank-account denial to be audited");
+    assert.equal(deniedEvent?.targetType, "bank_account");
+    assert.equal(deniedEvent?.targetId, BANK_ACCOUNT_OTHER);
+    const metadata = deniedEvent?.metadata as Record<string, unknown> | undefined;
+    assert.equal(metadata?.clientId, CLIENT_MAIN);
+    assert.equal(metadata?.bankAccountId, BANK_ACCOUNT_OTHER);
+    assert.equal(metadata?.reason, "bank_account_not_linked");
   });
 
   it("returns 404 when the bank account does not exist", async () => {
@@ -342,6 +355,18 @@ describe("PJ summary endpoint", () => {
       .expect(404);
 
     assert.match(response.body.error, /conta bancária não encontrada/i);
+
+    const auditLogs = await storageProvider.getAuditLogs(ORG_ONE);
+    const deniedEvent = auditLogs.find(
+      entry => entry.eventType === "security.access_denied.bank_account" && entry.targetId === "missing-account"
+    );
+    assert.ok(deniedEvent, "expected missing bank account to be audited");
+    assert.equal(deniedEvent?.targetType, "bank_account");
+    assert.equal(deniedEvent?.targetId, "missing-account");
+    const metadata = deniedEvent?.metadata as Record<string, unknown> | undefined;
+    assert.equal(metadata?.clientId, CLIENT_MAIN);
+    assert.equal(metadata?.bankAccountId, "missing-account");
+    assert.equal(metadata?.reason, "bank_account_not_found");
   });
 
   it("denies access for users from another organization", async () => {

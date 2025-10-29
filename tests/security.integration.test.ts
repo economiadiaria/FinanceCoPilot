@@ -116,6 +116,7 @@ async function seedStorage(storage: IStorage) {
 
 describe("RBAC and organization boundaries", () => {
   let appServer: import("http").Server;
+  let storageProvider: MemStorage;
 
   before(async () => {
     const app = express();
@@ -127,9 +128,9 @@ describe("RBAC and organization boundaries", () => {
       saveUninitialized: false,
     }));
 
-    const storage = new MemStorage();
-    setStorageProvider(storage);
-    await seedStorage(storage);
+    storageProvider = new MemStorage();
+    setStorageProvider(storageProvider);
+    await seedStorage(storageProvider);
 
     appServer = await registerRoutes(app);
   });
@@ -143,9 +144,9 @@ describe("RBAC and organization boundaries", () => {
   });
 
   beforeEach(async () => {
-    const storage = new MemStorage();
-    await seedStorage(storage);
-    setStorageProvider(storage);
+    storageProvider = new MemStorage();
+    setStorageProvider(storageProvider);
+    await seedStorage(storageProvider);
     metricsRegistry.resetMetrics();
   });
 
@@ -167,6 +168,15 @@ describe("RBAC and organization boundaries", () => {
       .expect(404);
 
     assert.deepEqual(forbidden.body, missing.body);
+
+    const auditLogs = await storageProvider.getAuditLogs("org-1");
+    const deniedEvent = auditLogs.find(entry => entry.eventType === "security.access_denied.organization");
+    assert.ok(deniedEvent, "expected organization access denial to be audited");
+    assert.equal(deniedEvent?.targetType, "client");
+    assert.equal(deniedEvent?.targetId, "client-org-2");
+    const metadata = deniedEvent?.metadata as Record<string, unknown> | undefined;
+    assert.equal(metadata?.clientId, "client-org-2");
+    assert.equal(metadata?.reason, "organization_mismatch");
   });
 
   it("limits clients listing to the authenticated organization", async () => {
