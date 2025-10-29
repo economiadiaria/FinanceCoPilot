@@ -8,7 +8,7 @@ import crypto from "crypto";
 
 import { registerRoutes } from "../server/routes";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
-import type { BankTransaction, Client, OFXImport, SaleLeg, User } from "@shared/schema";
+import type { BankAccount, BankTransaction, Client, OFXImport, SaleLeg, User } from "@shared/schema";
 import type { SummaryResponse } from "../server/pj-summary-service";
 import { maskPIIValue } from "@shared/utils";
 import * as metrics from "../server/observability/metrics";
@@ -483,10 +483,60 @@ describe("OFX ingestion robustness", () => {
     assert.equal(firstImport.body.imported, 2);
     assert.equal(firstImport.body.reconciliation.accounts.length, 2);
 
-    const accountATxs = await currentStorage.getBankTransactions(CLIENT_ID, SAMPLE_ACCOUNT_ID);
-    const accountBTxs = await currentStorage.getBankTransactions(CLIENT_ID, SECOND_ACCOUNT_ID);
-    assert.equal(accountATxs.length, 1);
-    assert.equal(accountBTxs.length, 1);
+    const accountsResponse = await agent
+      .get("/api/pj/accounts")
+      .query({ clientId: CLIENT_ID })
+      .expect(200);
+
+    const accountsBefore = accountsResponse.body.accounts as BankAccount[];
+    assert.equal(accountsBefore.length, 2);
+
+    const expectedAccountIds = [SAMPLE_ACCOUNT_ID, SECOND_ACCOUNT_ID];
+    const sortedAccountIds = [...accountsBefore].map(account => account.id).sort();
+    assert.deepEqual(sortedAccountIds, expectedAccountIds.sort());
+
+    for (const account of accountsBefore) {
+      assert.equal(account.isActive, true);
+      assert.equal(account.currency, "BRL");
+      assert.ok(expectedAccountIds.includes(account.id));
+      assert.equal(account.bankName, "001");
+    }
+
+    const transactionsByAccountBefore: Record<string, BankTransaction[]> = {};
+
+    const expectedTransactions: Record<string, { fitid: string; amount: number; desc: string }> = {
+      [SAMPLE_ACCOUNT_ID]: {
+        fitid: "MULTI-A-1",
+        amount: 500,
+        desc: "Recebimento Conta A",
+      },
+      [SECOND_ACCOUNT_ID]: {
+        fitid: "MULTI-B-1",
+        amount: -200,
+        desc: "Despesa Conta B",
+      },
+    };
+
+    for (const accountId of expectedAccountIds) {
+      const transactionsResponse = await agent
+        .get("/api/pj/transactions")
+        .query({ clientId: CLIENT_ID, bankAccountId: accountId, page: 1, limit: 50, sort: "asc" })
+        .expect(200);
+
+      const transactions = transactionsResponse.body.items as BankTransaction[];
+      assert.equal(transactions.length, 1);
+
+      const [transaction] = transactions;
+      assert.ok(transaction);
+      assert.equal(transaction.bankAccountId, accountId);
+      assert.equal(transaction.fitid, expectedTransactions[accountId].fitid);
+      assert.equal(transaction.amount, expectedTransactions[accountId].amount);
+      assert.equal(transaction.desc, expectedTransactions[accountId].desc);
+
+      transactionsByAccountBefore[accountId] = (JSON.parse(JSON.stringify(transactions)) as BankTransaction[]).sort((a, b) =>
+        a.bankTxId.localeCompare(b.bankTxId)
+      );
+    }
 
     const accountAImport = await currentStorage.getOFXImport(CLIENT_ID, SAMPLE_ACCOUNT_ID, multiHash);
     const accountBImport = await currentStorage.getOFXImport(CLIENT_ID, SECOND_ACCOUNT_ID, multiHash);
@@ -505,10 +555,34 @@ describe("OFX ingestion robustness", () => {
     assert.equal(secondImport.body.alreadyImported, true);
     assert.equal(secondImport.body.reconciliation.accounts.length, 2);
 
-    const accountATxsAfter = await currentStorage.getBankTransactions(CLIENT_ID, SAMPLE_ACCOUNT_ID);
-    const accountBTxsAfter = await currentStorage.getBankTransactions(CLIENT_ID, SECOND_ACCOUNT_ID);
-    assert.equal(accountATxsAfter.length, 1);
-    assert.equal(accountBTxsAfter.length, 1);
+    const accountsAfterResponse = await agent
+      .get("/api/pj/accounts")
+      .query({ clientId: CLIENT_ID })
+      .expect(200);
+
+    const accountsAfter = accountsAfterResponse.body.accounts as BankAccount[];
+    const sortedAccountsBefore = (JSON.parse(JSON.stringify(accountsBefore)) as BankAccount[]).sort((a, b) =>
+      a.id.localeCompare(b.id)
+    );
+    const sortedAccountsAfter = (JSON.parse(JSON.stringify(accountsAfter)) as BankAccount[]).sort((a, b) =>
+      a.id.localeCompare(b.id)
+    );
+    assert.deepEqual(sortedAccountsAfter, sortedAccountsBefore);
+
+    for (const accountId of expectedAccountIds) {
+      const transactionsResponse = await agent
+        .get("/api/pj/transactions")
+        .query({ clientId: CLIENT_ID, bankAccountId: accountId, page: 1, limit: 50, sort: "asc" })
+        .expect(200);
+
+      const transactions = transactionsResponse.body.items as BankTransaction[];
+      assert.equal(transactions.length, 1);
+
+      const normalizedTransactions = (JSON.parse(JSON.stringify(transactions)) as BankTransaction[]).sort((a, b) =>
+        a.bankTxId.localeCompare(b.bankTxId)
+      );
+      assert.deepEqual(normalizedTransactions, transactionsByAccountBefore[accountId]);
+    }
   });
 
   it("records bank metadata when confirming reconciliation", async () => {
