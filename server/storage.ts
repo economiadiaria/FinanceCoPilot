@@ -22,6 +22,9 @@ import type {
 import Database from "@replit/database";
 
 export interface IStorage {
+  // Health
+  checkHealth(): Promise<void>;
+
   // Users
   getUsers(): Promise<User[]>;
   getUserById(userId: string): Promise<User | undefined>;
@@ -159,6 +162,10 @@ export class MemStorage implements IStorage {
     this.pjBankTransactions = new Map();
     this.pjCategorizationRules = new Map();
     this.auditLogs = new Map();
+  }
+
+  async checkHealth(): Promise<void> {
+    // In-memory storage is always available when the process is alive.
   }
 
   // Users
@@ -600,6 +607,25 @@ export class ReplitDbStorage implements IStorage {
   constructor() {
     this.db = new Database();
     this.migrationsReady = this.normalizeLegacyOFXImports();
+  }
+
+  async checkHealth(): Promise<void> {
+    await this.migrationsReady;
+
+    const probeKey = `healthcheck:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    const setResult = await this.db.set(probeKey, "ok");
+    if (!setResult.ok) {
+      throw new Error(
+        `Database error setting healthcheck key: ${setResult.error?.message || JSON.stringify(setResult.error)}`
+      );
+    }
+
+    const deleteResult = await this.db.delete(probeKey);
+    if (!deleteResult.ok) {
+      throw new Error(
+        `Database error deleting healthcheck key: ${deleteResult.error?.message || JSON.stringify(deleteResult.error)}`
+      );
+    }
   }
 
   private getOfxImportKey(
