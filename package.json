@@ -14,6 +14,7 @@
     "lint": "npm run check",
     "check": "tsc",
     "test": "tsx --test tests/**/*.test.ts",
+    "test:node": "node --test --import tsx",
     "db:push": "drizzle-kit push",
     "openapi:validate": "openapi validate docs/openapi/pj-banking.yaml",
     "openapi:sdk": "openapi-generator-cli generate -i docs/openapi/pj-banking.yaml -g typescript-axios -o client/sdk/pj --additional-properties=supportsES6=true,withSeparateModelsAndApi=true,modelPackage=models,apiPackage=apis,enumPropertyNaming=original,typescriptThreePlus=true",

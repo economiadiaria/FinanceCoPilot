@@ -11,3 +11,8 @@ Quick links to operational and product documentation for FinanceCoPilot.
 - [Smoke Test Checklist](./SMOKE.md)
 - [PJ Ingestion Test Plan](./pj-ingestion-test-plan.md)
 - [PJ MVP Priority Roadmap](./pj-mvp-priority-roadmap.md)
+
+## Developer Notes
+
+- Run the full automated suite with `npm test` (powered by `tsx`).
+- To execute a single integration test with the Node.js test runner on Node 20+, prefer `node --test --import tsx tests/<file>.test.ts` (the legacy `--loader` flag now errors out).
