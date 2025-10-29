@@ -426,7 +426,7 @@ export const bankTransactionSchema = z.object({
 export type BankTransaction = z.infer<typeof bankTransactionSchema>;
 
 // Bank Accounts
-export const bankAccountProviders = ["manual", "ofx", "pluggy"] as const;
+export const bankAccountProviders = ["manual", "ofx", "pluggy", "manual-ofx"] as const;
 
 export const bankAccountSchema = z.object({
   id: z.string().min(1, "ID da conta bancária é obrigatório"),

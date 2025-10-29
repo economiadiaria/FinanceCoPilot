@@ -182,6 +182,29 @@ describe("OFX ingestion robustness", () => {
     const storedTransactions = await currentStorage.getBankTransactions(CLIENT_ID);
     assert.equal(storedTransactions.length, 2);
 
+    const accounts = await currentStorage.getBankAccounts(ORGANIZATION_ID, CLIENT_ID);
+    assert.equal(accounts.length, 1);
+    const [account] = accounts;
+    assert.ok(account, "bank account should be created during OFX import");
+    assert.equal(account.id, SAMPLE_ACCOUNT_ID);
+    assert.equal(account.provider, "manual-ofx");
+    assert.equal(account.bankName, "341");
+    assert.equal(account.isActive, true);
+    assert.equal(account.accountNumberMask, maskAccountNumber(SAMPLE_ACCOUNT_ID));
+    assert.equal(account.currency, "BRL");
+    const expectedFingerprint = crypto
+      .createHash("sha256")
+      .update(`${ORGANIZATION_ID}:${SAMPLE_ACCOUNT_ID}`)
+      .digest("hex");
+    assert.equal(account.accountFingerprint, expectedFingerprint);
+
+    const summaryResponse = await agent
+      .get(`/api/pj/summary?clientId=${CLIENT_ID}&bankAccountId=${SAMPLE_ACCOUNT_ID}`)
+      .expect(200);
+
+    assert.equal(summaryResponse.body.clientId, CLIENT_ID);
+    assert.equal(summaryResponse.body.bankAccountId, SAMPLE_ACCOUNT_ID);
+
     const fileHash = crypto.createHash("sha256").update(sampleBuffer).digest("hex");
     const importRecord = await currentStorage.getOFXImport(CLIENT_ID, SAMPLE_ACCOUNT_ID, fileHash);
     assert.ok(importRecord, "ofx import record should be stored");

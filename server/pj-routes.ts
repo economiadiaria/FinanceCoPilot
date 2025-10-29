@@ -104,6 +104,42 @@ function maskBankLabel(value: unknown): string {
   return typeof masked === "string" ? masked : String(masked);
 }
 
+function extractBankNameDetailsFromStatement(statement: any, fallbackBankName?: unknown) {
+  const candidates = [
+    statement?.BANKACCTFROM?.BANKNAME,
+    statement?.BANKACCTFROM?.BANKID,
+    statement?.BANKACCTFROM?.BRANCHID,
+    statement?.CCACCTFROM?.BANKNAME,
+    statement?.CCACCTFROM?.BANKID,
+    statement?.CCACCTFROM?.BRANCHID,
+    fallbackBankName,
+  ];
+
+  let firstValidLabel: string | undefined;
+  let rawBankName: string | undefined;
+
+  for (const candidate of candidates) {
+    const normalized = coerceBankLabel(candidate);
+    if (!normalized) {
+      continue;
+    }
+    if (!firstValidLabel) {
+      firstValidLabel = normalized;
+    }
+    if (normalized.toLowerCase() !== UNKNOWN_BANK_LABEL) {
+      rawBankName = normalized;
+      break;
+    }
+  }
+
+  const labelForMask = rawBankName ?? firstValidLabel ?? UNKNOWN_BANK_LABEL;
+
+  return {
+    rawBankName,
+    maskedBankName: maskBankLabel(labelForMask),
+  };
+}
+
 function maskAccountNumber(accountId: unknown): string {
   const normalized = coerceBankLabel(accountId);
   if (!normalized) {
@@ -926,6 +962,20 @@ export function registerPJRoutes(app: Express) {
       const signonFi = ofxData?.OFX?.SIGNONMSGSRSV1?.SONRS?.FI;
       const fallbackBankNameRaw = signonFi?.ORG || signonFi?.FID;
 
+      const accountMetadataById = new Map<
+        string,
+        {
+          maskedBankName: string;
+          rawBankName?: string;
+          bankOrg?: string | null;
+          bankFid?: string | null;
+          bankCode?: string | null;
+          branch?: string | null;
+          currency?: string;
+          accountType?: string;
+        }
+      >();
+
       for (const account of accountsArray) {
         const parsedAccount = ofxStatementSchema.parse(account);
         const statement = parsedAccount.STMTRS;
@@ -935,13 +985,35 @@ export function registerPJRoutes(app: Express) {
           statement.BANKACCTFROM?.BANKID ||
           `conta_${accountSummaries.length + 1}`;
 
-        const maskedBankName = extractMaskedBankNameFromStatement(statement, fallbackBankNameRaw);
+        const { rawBankName, maskedBankName } = extractBankNameDetailsFromStatement(
+          statement,
+          fallbackBankNameRaw
+        );
         const accountLogger = ingestionLogger.child({
           bankAccountId: accountId,
           bankName: maskedBankName,
         });
 
         bankNameByAccount.set(accountId, maskedBankName);
+        accountMetadataById.set(accountId, {
+          maskedBankName,
+          rawBankName,
+          bankOrg: coerceBankLabel(signonFi?.ORG) || null,
+          bankFid: coerceBankLabel(signonFi?.FID) || null,
+          bankCode:
+            coerceBankLabel(statement.BANKACCTFROM?.BANKID) ||
+            coerceBankLabel(statement.CCACCTFROM?.BANKID) ||
+            null,
+          branch:
+            coerceBankLabel(statement.BANKACCTFROM?.BRANCHID) ||
+            coerceBankLabel(statement.CCACCTFROM?.BRANCHID) ||
+            null,
+          currency: coerceBankLabel(statement.CURDEF) || undefined,
+          accountType:
+            coerceBankLabel((statement as any)?.BANKACCTFROM?.ACCTTYPE) ||
+            coerceBankLabel((statement as any)?.CCACCTFROM?.ACCTTYPE) ||
+            undefined,
+        });
 
         accountLogger.info("Iniciando processamento de extrato bancário", {
           event: "pj.ofx.import.account.start",
@@ -1162,9 +1234,60 @@ export function registerPJRoutes(app: Express) {
         await storage.addBankTransactions(resolvedClientId, newTransactions);
       }
 
-      if (accountSummaries.length > 0 && req.authUser?.organizationId) {
+      const clientContext = req.clientContext;
+      if (!clientContext) {
+        throw new Error("Contexto do cliente não carregado");
+      }
+      if (clientContext.clientId !== resolvedClientId) {
+        throw new Error("Cliente do contexto não corresponde ao clientId informado");
+      }
+
+      if (accountSummaries.length > 0) {
+        const timestamp = new Date().toISOString();
+        const accountUpserts = accountSummaries.map(summary => {
+          const metadata = accountMetadataById.get(summary.accountId);
+          const normalizedAccountType = (() => {
+            const rawType = metadata?.accountType;
+            if (typeof rawType === "string" && rawType.trim() !== "") {
+              return rawType.trim().toLowerCase();
+            }
+            return "checking";
+          })();
+
+          const bankName =
+            (metadata?.rawBankName && metadata.rawBankName.toLowerCase() !== UNKNOWN_BANK_LABEL
+              ? metadata.rawBankName
+              : undefined) ?? metadata?.maskedBankName ?? summary.accountId;
+
+          const fingerprint = crypto
+            .createHash("sha256")
+            .update(`${clientContext.organizationId}:${summary.accountId}`)
+            .digest("hex");
+
+          return storage.upsertBankAccount({
+            id: summary.accountId,
+            orgId: clientContext.organizationId,
+            clientId: clientContext.clientId,
+            provider: "manual-ofx",
+            bankOrg: metadata?.bankOrg ?? null,
+            bankFid: metadata?.bankFid ?? null,
+            bankName,
+            bankCode: metadata?.bankCode ?? null,
+            branch: metadata?.branch ?? null,
+            accountNumberMask: maskAccountNumber(summary.accountId),
+            accountType: normalizedAccountType,
+            currency: metadata?.currency ?? "BRL",
+            accountFingerprint: fingerprint,
+            isActive: true,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+        });
+
+        await Promise.all(accountUpserts);
+
         await refreshSnapshotsForAccounts({
-          organizationId: req.authUser.organizationId,
+          organizationId: clientContext.organizationId,
           clientId: resolvedClientId,
           bankAccountIds: accountSummaries.map(summary => summary.accountId),
           logger: ingestionLogger,
