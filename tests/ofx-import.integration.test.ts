@@ -9,6 +9,7 @@ import crypto from "crypto";
 import { registerRoutes } from "../server/routes";
 import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
 import type { BankTransaction, Client, OFXImport, SaleLeg, User } from "@shared/schema";
+import type { SummaryResponse } from "../server/pj-summary-service";
 import { maskPIIValue } from "@shared/utils";
 import * as metrics from "../server/observability/metrics";
 
@@ -179,31 +180,74 @@ describe("OFX ingestion robustness", () => {
       "expected debit sign warning"
     );
 
-    const storedTransactions = await currentStorage.getBankTransactions(CLIENT_ID);
-    assert.equal(storedTransactions.length, 2);
+    const accountsResponse = await agent
+      .get("/api/pj/accounts")
+      .query({ clientId: CLIENT_ID })
+      .expect(200);
 
-    const accounts = await currentStorage.getBankAccounts(ORGANIZATION_ID, CLIENT_ID);
-    assert.equal(accounts.length, 1);
-    const [account] = accounts;
+    assert.ok(Array.isArray(accountsResponse.body.accounts));
+    assert.equal(accountsResponse.body.accounts.length, 1);
+
+    const [account] = accountsResponse.body.accounts;
     assert.ok(account, "bank account should be created during OFX import");
     assert.equal(account.id, SAMPLE_ACCOUNT_ID);
-    assert.equal(account.provider, "manual-ofx");
     assert.equal(account.bankName, "341");
     assert.equal(account.isActive, true);
     assert.equal(account.accountNumberMask, maskAccountNumber(SAMPLE_ACCOUNT_ID));
     assert.equal(account.currency, "BRL");
-    const expectedFingerprint = crypto
-      .createHash("sha256")
-      .update(`${ORGANIZATION_ID}:${SAMPLE_ACCOUNT_ID}`)
-      .digest("hex");
-    assert.equal(account.accountFingerprint, expectedFingerprint);
+    assert.equal(account.accountType, "checking");
 
-    const summaryResponse = await agent
-      .get(`/api/pj/summary?clientId=${CLIENT_ID}&bankAccountId=${SAMPLE_ACCOUNT_ID}`)
+    const transactionsResponse = await agent
+      .get("/api/pj/transactions")
+      .query({ clientId: CLIENT_ID, bankAccountId: SAMPLE_ACCOUNT_ID, page: 1, limit: 50, sort: "asc" })
       .expect(200);
 
-    assert.equal(summaryResponse.body.clientId, CLIENT_ID);
-    assert.equal(summaryResponse.body.bankAccountId, SAMPLE_ACCOUNT_ID);
+    const transactionsBefore = transactionsResponse.body.items as BankTransaction[];
+    assert.equal(transactionsBefore.length, 2);
+
+    const transactionIdsBefore = transactionsBefore.map(tx => tx.bankTxId).sort();
+    assert.equal(new Set(transactionIdsBefore).size, transactionsBefore.length);
+
+    const fitIdsBefore = transactionsBefore
+      .map(tx => tx.fitid)
+      .filter((fitid): fitid is string => typeof fitid === "string")
+      .sort();
+    assert.deepEqual(fitIdsBefore, ["ABC123", "DEF456"].sort());
+
+    const positiveTransactions = transactionsBefore.filter(tx => tx.amount > 0);
+    const negativeTransactions = transactionsBefore.filter(tx => tx.amount < 0);
+
+    const creditTx = transactionsBefore.find(tx => tx.fitid === "ABC123") ?? positiveTransactions[0];
+    const debitTx = transactionsBefore.find(tx => tx.fitid === "DEF456") ?? negativeTransactions[0];
+
+    assert.ok(creditTx, "expected to find a credit transaction from HTTP response");
+    assert.ok(debitTx, "expected to find a debit transaction from HTTP response");
+    assert.equal(creditTx?.amount, 1000);
+    assert.equal(debitTx?.amount, -200);
+    assert.equal(creditTx?.desc, "Venda 1");
+    assert.equal(debitTx?.desc, "Pagamento Fornecedor");
+
+    const totalIn = positiveTransactions.reduce((sum, tx) => sum + tx.amount, 0);
+    const totalOut = negativeTransactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+
+    const summaryResponse = await agent
+      .get("/api/pj/summary")
+      .query({ clientId: CLIENT_ID, bankAccountId: SAMPLE_ACCOUNT_ID })
+      .expect(200);
+
+    const summary = summaryResponse.body as SummaryResponse;
+    assert.equal(summary.clientId, CLIENT_ID);
+    assert.equal(summary.bankAccountId, SAMPLE_ACCOUNT_ID);
+    assert.equal(summary.totals.totalIn, totalIn);
+    assert.equal(summary.totals.totalOut, totalOut);
+    assert.equal(summary.totals.balance, totalIn - totalOut);
+    assert.equal(summary.metadata.transactionCount, transactionsBefore.length);
+    assert.equal(summary.kpis.inflowCount, positiveTransactions.length);
+    assert.equal(summary.kpis.outflowCount, negativeTransactions.length);
+    const largestIn = positiveTransactions.length > 0 ? Math.max(...positiveTransactions.map(tx => tx.amount)) : 0;
+    const largestOut = negativeTransactions.length > 0 ? Math.max(...negativeTransactions.map(tx => Math.abs(tx.amount))) : 0;
+    assert.equal(summary.kpis.largestIn, largestIn);
+    assert.equal(summary.kpis.largestOut, largestOut);
 
     const fileHash = crypto.createHash("sha256").update(sampleBuffer).digest("hex");
     const importRecord = await currentStorage.getOFXImport(CLIENT_ID, SAMPLE_ACCOUNT_ID, fileHash);
@@ -223,8 +267,60 @@ describe("OFX ingestion robustness", () => {
     assert.equal(secondImport.body.deduped, 2);
     assert.equal(secondImport.body.alreadyImported, true);
 
-    const storedAfterDedup = await currentStorage.getBankTransactions(CLIENT_ID);
-    assert.equal(storedAfterDedup.length, 2, "re-import should not duplicate transactions");
+    const accountsAfterResponse = await agent
+      .get("/api/pj/accounts")
+      .query({ clientId: CLIENT_ID })
+      .expect(200);
+
+    const accountsAfter = accountsAfterResponse.body.accounts;
+    assert.equal(accountsAfter.length, accountsResponse.body.accounts.length);
+    const sortedInitialAccounts = [...accountsResponse.body.accounts].sort((a: any, b: any) => a.id.localeCompare(b.id));
+    const sortedAccountsAfter = [...accountsAfter].sort((a: any, b: any) => a.id.localeCompare(b.id));
+    assert.deepEqual(sortedAccountsAfter, sortedInitialAccounts);
+
+    const transactionsAfterResponse = await agent
+      .get("/api/pj/transactions")
+      .query({ clientId: CLIENT_ID, bankAccountId: SAMPLE_ACCOUNT_ID, page: 1, limit: 50, sort: "asc" })
+      .expect(200);
+
+    const transactionsAfter = transactionsAfterResponse.body.items as BankTransaction[];
+    assert.equal(
+      transactionsAfter.length,
+      transactionsBefore.length,
+      "re-import should not change the number of transactions"
+    );
+
+    const transactionsBeforeMap = new Map(transactionsBefore.map(tx => [tx.bankTxId, tx]));
+    const transactionIdsAfter = transactionsAfter.map(tx => tx.bankTxId).sort();
+    assert.deepEqual(transactionIdsAfter, transactionIdsBefore);
+
+    const fitIdsAfter = transactionsAfter
+      .map(tx => tx.fitid)
+      .filter((fitid): fitid is string => typeof fitid === "string")
+      .sort();
+    assert.deepEqual(fitIdsAfter, fitIdsBefore);
+
+    for (const tx of transactionsAfter) {
+      const original = transactionsBeforeMap.get(tx.bankTxId);
+      assert.ok(original, `Unexpected transaction ${tx.bankTxId} returned after re-import`);
+      assert.equal(tx.amount, original.amount, `Transaction amount mismatch for ${tx.bankTxId}`);
+      assert.equal(tx.desc, original.desc, `Transaction description mismatch for ${tx.bankTxId}`);
+    }
+
+    const summaryAfterResponse = await agent
+      .get("/api/pj/summary")
+      .query({ clientId: CLIENT_ID, bankAccountId: SAMPLE_ACCOUNT_ID })
+      .expect(200);
+
+    const summaryAfter = summaryAfterResponse.body as SummaryResponse;
+    assert.equal(summaryAfter.clientId, summary.clientId);
+    assert.equal(summaryAfter.bankAccountId, summary.bankAccountId);
+    assert.deepEqual(summaryAfter.totals, summary.totals);
+    assert.equal(summaryAfter.metadata.transactionCount, summary.metadata.transactionCount);
+    assert.equal(summaryAfter.kpis.inflowCount, summary.kpis.inflowCount);
+    assert.equal(summaryAfter.kpis.outflowCount, summary.kpis.outflowCount);
+    assert.equal(summaryAfter.kpis.largestIn, summary.kpis.largestIn);
+    assert.equal(summaryAfter.kpis.largestOut, summary.kpis.largestOut);
   });
 
   it("records bank metadata in audit logs for OFX imports", async () => {
