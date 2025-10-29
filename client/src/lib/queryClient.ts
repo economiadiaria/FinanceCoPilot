@@ -1,12 +1,12 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import {
+  getAccounts,
   getSummary as fetchSummary,
-  listAccounts,
-  listTransactions,
-  type SummaryQuery,
-  type TransactionsQuery,
-} from "@financecopilot/pj-banking-sdk";
+  getTransactions,
+  type PJSummaryParams,
+  type PJTransactionsParams,
+} from "@/services/pj";
 import { getApiHeaders } from "./api";
 
 async function throwIfResNotOk(res: Response) {
@@ -42,11 +42,11 @@ type UnauthorizedBehavior = "returnNull" | "throw";
 type SdkQueryExecutor = (params: unknown) => Promise<unknown>;
 
 const pjBankingExecutors: Record<string, SdkQueryExecutor> = {
-  "/api/pj/accounts": async () => listAccounts(),
+  "/api/pj/accounts": async () => getAccounts(),
   "/api/pj/transactions": async (params) =>
-    listTransactions((params ?? {}) as TransactionsQuery),
+    getTransactions((params ?? {}) as PJTransactionsParams),
   "/api/pj/summary": async (params) =>
-    fetchSummary((params ?? {}) as SummaryQuery),
+    fetchSummary((params ?? {}) as PJSummaryParams),
 };
 
 function formatAxiosError(error: unknown): Error {

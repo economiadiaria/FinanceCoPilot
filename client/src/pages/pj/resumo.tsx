@@ -8,11 +8,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Separator } from "@/components/ui/separator";
 import { TrendingUp, TrendingDown, Wallet, PieChart, FileBarChart } from "lucide-react";
 import { usePJService } from "@/contexts/PJServiceContext";
-import type {
-  PJSummary,
-  PJTrend,
-  PJRevenueSplitItem,
-  PJTopCostItem,
+import {
+  getSummary,
+  type PJSummary,
+  type PJTrend,
+  type PJRevenueSplitItem,
+  type PJTopCostItem,
 } from "@/services/pj";
 
 interface ResumoPJProps {
@@ -52,7 +53,7 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
     queryKey: ["pj:summary", { clientId, bankAccountId, from, to }],
     enabled: Boolean(clientId && bankAccountId && isPJClient),
     queryFn: () =>
-      pjService.getSummary({
+      getSummary({
         clientId: clientId!,
         bankAccountId: bankAccountId!,
         from,

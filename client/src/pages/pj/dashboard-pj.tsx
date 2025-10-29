@@ -7,12 +7,13 @@ import { DollarSign, TrendingDown, Wallet, CreditCard, BarChart3, FileBarChart }
 import { useEffect, useState, useRef } from "react";
 import { Link } from "wouter";
 import { usePJService } from "@/contexts/PJServiceContext";
-import type {
-  PJSummary,
-  PJTrend,
-  PJTopCostItem,
-  PJRevenueSplitItem,
-  PJSalesKpis,
+import {
+  getSummary,
+  type PJSummary,
+  type PJTrend,
+  type PJTopCostItem,
+  type PJRevenueSplitItem,
+  type PJSalesKpis,
 } from "@/services/pj";
 
 interface DashboardPJProps {
@@ -53,7 +54,7 @@ export default function DashboardPJ({ clientId, clientType, bankAccountId }: Das
     enabled: !!clientId && !!bankAccountId && isPJClient,
     queryFn: () => {
       const { from, to } = getMonthRange();
-      return pjService.getSummary({
+      return getSummary({
         clientId: clientId!,
         bankAccountId: bankAccountId!,
         from,

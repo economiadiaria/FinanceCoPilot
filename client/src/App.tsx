@@ -35,8 +35,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PJServiceProvider, usePJService } from "@/contexts/PJServiceContext";
-import type { PJBankAccount } from "@/services/pj";
+import { PJServiceProvider } from "@/contexts/PJServiceContext";
+import { getAccounts, type PJBankAccount } from "@/services/pj";
 
 type PJPageProps = {
   clientId: string | null;
@@ -74,8 +74,6 @@ function AuthenticatedApp() {
   const [selectedBankAccountId, setSelectedBankAccountId] = useState<string | null>(null);
   const [newClientDialogOpen, setNewClientDialogOpen] = useState(false);
   const { user } = useAuth();
-  const pjService = usePJService();
-
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
   });
@@ -110,7 +108,7 @@ function AuthenticatedApp() {
   const { data: availableBankAccounts = [] } = useQuery<PJBankAccount[]>({
     queryKey: ["pj:bank-accounts", { clientId: selectedClient }],
     enabled: isPJClient && !!selectedClient,
-    queryFn: () => pjService.listBankAccounts({ clientId: selectedClient }),
+    queryFn: () => getAccounts(),
   });
 
   useEffect(() => {
