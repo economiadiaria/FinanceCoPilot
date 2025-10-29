@@ -24,6 +24,17 @@ import Database from "@replit/database";
 
 const PROCESSED_WEBHOOK_RETENTION_MS = 15 * 60 * 1000;
 
+export interface PjClientCategoryRecord {
+  id: string;
+  orgId: string;
+  clientId: string;
+  baseCategoryId: string;
+  parentId: string | null;
+  level: number;
+  path: string;
+  sortOrder: number;
+}
+
 export interface IStorage {
   // Health
   checkHealth(): Promise<void>;
@@ -129,12 +140,20 @@ export interface IStorage {
   ): Promise<void>;
   addBankTransactions(clientId: string, transactions: BankTransaction[]): Promise<void>;
   updateBankTransaction(clientId: string, bankTxId: string, updates: Partial<BankTransaction>): Promise<void>;
-  
+
   // PJ - Categorization Rules
   getCategorizationRules(clientId: string): Promise<CategorizationRule[]>;
   setCategorizationRules(clientId: string, rules: CategorizationRule[]): Promise<void>;
   addCategorizationRule(clientId: string, rule: CategorizationRule): Promise<void>;
   updateCategorizationRule(clientId: string, ruleId: string, updates: Partial<CategorizationRule>): Promise<void>;
+
+  // PJ - Client Categories
+  getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategoryRecord[]>;
+  setPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategoryRecord[],
+  ): Promise<void>;
 
   // Audit trail
   recordAudit(entry: AuditLogEntry): Promise<void>;
@@ -167,6 +186,7 @@ export class MemStorage implements IStorage {
   private pjLedgerEntries: Map<string, LedgerEntry[]>;
   private pjBankTransactions: Map<string, Map<string, BankTransaction[]> | BankTransaction[]>;
   private pjCategorizationRules: Map<string, CategorizationRule[]>;
+  private pjClientCategories: Map<string, PjClientCategoryRecord[]>;
   private auditLogs: Map<string, AuditLogEntry[]>;
   private processedWebhooks: Map<string, string>;
 
@@ -191,6 +211,7 @@ export class MemStorage implements IStorage {
     this.pjLedgerEntries = new Map();
     this.pjBankTransactions = new Map();
     this.pjCategorizationRules = new Map();
+    this.pjClientCategories = new Map();
     this.auditLogs = new Map();
     this.processedWebhooks = new Map();
   }
@@ -456,6 +477,10 @@ export class MemStorage implements IStorage {
     return `${orgId}:${clientId}:${bankAccountId}`;
   }
 
+  private getPjClientCategoryKey(orgId: string, clientId: string): string {
+    return `pj_client_categories:${orgId}:${clientId}`;
+  }
+
   async getBankSummarySnapshots(
     orgId: string,
     clientId: string,
@@ -706,6 +731,24 @@ export class MemStorage implements IStorage {
     }
   }
 
+  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategoryRecord[]> {
+    const key = this.getPjClientCategoryKey(orgId, clientId);
+    const categories = this.pjClientCategories.get(key);
+    return categories ? categories.map(category => ({ ...category })) : [];
+  }
+
+  async setPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategoryRecord[],
+  ): Promise<void> {
+    const key = this.getPjClientCategoryKey(orgId, clientId);
+    this.pjClientCategories.set(
+      key,
+      categories.map(category => ({ ...category })),
+    );
+  }
+
   async recordAudit(entry: AuditLogEntry): Promise<void> {
     const existing = this.auditLogs.get(entry.organizationId) ?? [];
     this.auditLogs.set(entry.organizationId, [...existing, entry].slice(-500));
@@ -812,6 +855,10 @@ export class ReplitDbStorage implements IStorage {
 
   private getBankTransactionIndexKey(clientId: string): string {
     return `pj_bank_tx_index:${clientId}`;
+  }
+
+  private getPjClientCategoryKey(orgId: string, clientId: string): string {
+    return `pj_client_categories:${orgId}:${clientId}`;
   }
 
   // Bank summary snapshots are stored under pj_bank_summary:{orgId}:{clientId}:{bankAccountId}
@@ -1895,6 +1942,35 @@ export class ReplitDbStorage implements IStorage {
     if (index !== -1) {
       rules[index] = { ...rules[index], ...updates };
       await this.setCategorizationRules(clientId, rules);
+    }
+  }
+
+  async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategoryRecord[]> {
+    const key = this.getPjClientCategoryKey(orgId, clientId);
+    const result = await this.db.get(key);
+    if (!result.ok && result.error?.statusCode !== 404) {
+      throw new Error(
+        `Database error getting PJ client categories for ${orgId}:${clientId}: ${result.error?.message || JSON.stringify(result.error)}`,
+      );
+    }
+    if (!result.ok || !Array.isArray(result.value)) {
+      return [];
+    }
+    return (result.value as PjClientCategoryRecord[]).map(category => ({ ...category }));
+  }
+
+  async setPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategoryRecord[],
+  ): Promise<void> {
+    const key = this.getPjClientCategoryKey(orgId, clientId);
+    const payload = categories.map(category => ({ ...category }));
+    const result = await this.db.set(key, payload);
+    if (!result.ok) {
+      throw new Error(
+        `Database error setting PJ client categories for ${orgId}:${clientId}: ${result.error?.message || JSON.stringify(result.error)}`,
+      );
     }
   }
 

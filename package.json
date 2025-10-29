@@ -74,9 +74,9 @@
     "input-otp": "^1.4.2",
     "lucide-react": "^0.453.0",
     "memorystore": "^1.6.7",
-    "node-cron": "^3.0.3",
     "multer": "^2.0.2",
     "next-themes": "^0.4.6",
+    "node-cron": "^3.0.3",
     "ofx-js": "^0.2.0",
     "papaparse": "^5.5.3",
     "passport": "^0.7.0",
@@ -102,6 +102,7 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.11",
     "@openapitools/openapi-generator-cli": "^2.25.0",
     "@redocly/openapi-cli": "^0.12.16",
     "@replit/vite-plugin-cartographer": "^0.3.1",

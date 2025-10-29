@@ -201,6 +201,7 @@ export const auditEventTypes = [
   "user.update",
   "client.create",
   "client.update",
+  "pj.client.onboarding.failed",
   "pj.sale.create",
   "pj.sale.update",
   "pj.sale.reconcile",
