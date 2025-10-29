@@ -8,6 +8,7 @@ import {
   type SummaryResponse,
 } from "@financecopilot/pj-banking-sdk";
 import { getApiHeaders } from "@/lib/api";
+import { attachRequestId, logRequestId } from "@/lib/requestId";
 import { mockBankAccounts } from "./mockData";
 
 function headersInitToRecord(headers: HeadersInit): Record<string, string> {
@@ -406,27 +407,53 @@ function mapBankTransactionsResponse(
 }
 
 export async function getAccounts(): Promise<PJBankAccount[]> {
-  const { data } = await pjBankingApi.apiPjAccountsGet();
-  return mapAccountsResponseToPJAccounts(data);
+  const response = await pjBankingApi.apiPjAccountsGet();
+  const requestId =
+    (response.headers?.["x-request-id"] as string | undefined) ??
+    (response.headers?.["X-Request-Id"] as string | undefined) ??
+    null;
+
+  logRequestId(
+    "pjBanking",
+    response.config?.method,
+    response.config?.url,
+    requestId,
+  );
+
+  const accounts = mapAccountsResponseToPJAccounts(response.data);
+  return attachRequestId(accounts, requestId);
 }
 
 export async function getSummary(params: PJSummaryParams): Promise<PJSummary> {
   const { clientId, bankAccountId, from, to } = params;
-  const { data } = await pjBankingApi.apiPjSummaryGet(
+  const response = await pjBankingApi.apiPjSummaryGet(
     clientId,
     bankAccountId,
     toApiDate(from),
     toApiDate(to),
   );
 
-  return mapSummaryResponseToPJSummary(data, params);
+  const requestId =
+    (response.headers?.["x-request-id"] as string | undefined) ??
+    (response.headers?.["X-Request-Id"] as string | undefined) ??
+    null;
+
+  logRequestId(
+    "pjBanking",
+    response.config?.method,
+    response.config?.url,
+    requestId,
+  );
+
+  const summary = mapSummaryResponseToPJSummary(response.data, params);
+  return attachRequestId(summary, requestId);
 }
 
 export async function getTransactions(
   params: PJTransactionsParams,
 ): Promise<PJBankTransactionsResponse> {
   const { clientId, bankAccountId, from, to, page, limit, sort } = params;
-  const { data } = await pjBankingApi.apiPjTransactionsGet(
+  const response = await pjBankingApi.apiPjTransactionsGet(
     clientId,
     bankAccountId,
     toApiDate(from),
@@ -436,7 +463,20 @@ export async function getTransactions(
     sort,
   );
 
-  return mapBankTransactionsResponse(data);
+  const requestId =
+    (response.headers?.["x-request-id"] as string | undefined) ??
+    (response.headers?.["X-Request-Id"] as string | undefined) ??
+    null;
+
+  logRequestId(
+    "pjBanking",
+    response.config?.method,
+    response.config?.url,
+    requestId,
+  );
+
+  const transactions = mapBankTransactionsResponse(response.data);
+  return attachRequestId(transactions, requestId);
 }
 
 const mockSummary: PJSummary = {
