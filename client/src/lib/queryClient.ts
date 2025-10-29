@@ -8,6 +8,11 @@ import {
   type PJTransactionsParams,
 } from "@/services/pj";
 import { getApiHeaders } from "./api";
+import { attachRequestId, logRequestId } from "./requestId";
+
+export interface ApiResponse extends Response {
+  requestId?: string | null;
+}
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -20,7 +25,7 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
-): Promise<Response> {
+): Promise<ApiResponse> {
   const headers: HeadersInit = {
     ...getApiHeaders(),
     ...(data ? { "Content-Type": "application/json" } : {}),
@@ -33,8 +38,12 @@ export async function apiRequest(
     credentials: "include",
   });
 
-  await throwIfResNotOk(res);
-  return res;
+  const requestId = res.headers.get("X-Request-Id");
+  logRequestId("apiRequest", method, url, requestId);
+  const responseWithId = attachRequestId(res, requestId);
+
+  await throwIfResNotOk(responseWithId);
+  return responseWithId;
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
@@ -129,12 +138,16 @@ export const getQueryFn =
       credentials: "include",
     });
 
+    const requestId = res.headers.get("X-Request-Id");
+    logRequestId("getQueryFn", "GET", url, requestId);
+
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
     }
 
     await throwIfResNotOk(res);
-    return await res.json();
+    const data = await res.json();
+    return attachRequestId(data, requestId);
   };
 
 export const queryClient = new QueryClient({
