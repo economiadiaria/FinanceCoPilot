@@ -30,8 +30,11 @@ function normalizeClientCategory(
     id: category.id,
     orgId: category.orgId,
     clientId: category.clientId,
-    baseCategoryId: category.baseCategoryId,
+    baseCategoryId: category.baseCategoryId ?? null,
     parentId: category.parentId ?? null,
+    name: category.name,
+    description: category.description ?? null,
+    acceptsPostings: category.acceptsPostings ?? true,
     level: category.level,
     path: category.path,
     sortOrder: category.sortOrder,
@@ -66,7 +69,6 @@ export async function onboardPjClientCategories({
   }
 
   const baseCategories = await transaction.query.pjCategories.findMany({
-    where: eq(pjCategories.isActive, true),
     orderBy: [
       asc(pjCategories.level),
       asc(pjCategories.sortOrder),
@@ -107,8 +109,11 @@ export async function onboardPjClientCategories({
       id,
       orgId,
       clientId,
-      baseCategoryId: base.id,
+      baseCategoryId: base.id ?? null,
       parentId,
+      name: base.name,
+      description: base.description ?? null,
+      acceptsPostings: base.acceptsPostings ?? true,
       level,
       path,
       sortOrder: base.sortOrder,
