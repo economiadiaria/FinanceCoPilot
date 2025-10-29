@@ -1,10 +1,13 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import cron from "node-cron";
+
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic } from "./vite";
 import type { User } from "@shared/schema";
 import { scrubPII } from "@shared/utils";
 import { requestLoggingMiddleware, getLogger, logger } from "./observability/logger";
+import { refreshAllActiveAccountSnapshots } from "./pj-summary-aggregator";
 
 const app = express();
 
@@ -76,6 +79,17 @@ app.use((req, res, next) => {
 
 (async () => {
   const server = await registerRoutes(app);
+
+  cron.schedule("0 * * * *", async () => {
+    const jobLogger = logger.child({ event: "pj.snapshot.scheduler" });
+    jobLogger.info("Scheduled PJ snapshot refresh started");
+    try {
+      await refreshAllActiveAccountSnapshots({ logger: jobLogger });
+      jobLogger.info("Scheduled PJ snapshot refresh completed");
+    } catch (error) {
+      jobLogger.error("Scheduled PJ snapshot refresh failed", undefined, error);
+    }
+  });
 
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

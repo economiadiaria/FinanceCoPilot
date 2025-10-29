@@ -351,6 +351,52 @@ class PJSummaryService {
     });
   }
 
+  async computeFreshSummaryFromData(options: {
+    clientId: string;
+    bankAccountId: string;
+    transactions: BankTransaction[];
+    saleLegs: SaleLeg[];
+    from?: string;
+    to?: string;
+    windowDays?: number;
+  }): Promise<SummaryResponse> {
+    const { clientId, bankAccountId, transactions, saleLegs, from, to, windowDays } = options;
+
+    if (from && to) {
+      ensureValidRange(from, to);
+    }
+
+    const transactionPartial = this.computeTransactionMetrics(transactions, {
+      rangeStart: from,
+      rangeEnd: to,
+    });
+
+    const receivablePartial = this.computeReceivableMetrics(saleLegs, {
+      rangeStart: from,
+      rangeEnd: to,
+    });
+
+    const combined = this.combinePartials([transactionPartial, receivablePartial]);
+
+    const finalCoverage = this.resolveCoverageDays(
+      combined.partial.metadata,
+      combined.partial.from ?? from,
+      combined.partial.to ?? to,
+      windowDays
+    );
+
+    return this.finalizeSummary({
+      clientId,
+      bankAccountId,
+      partial: combined.partial,
+      provided: combined.provided,
+      coverageDays: finalCoverage,
+      snapshotUsed: false,
+      fallbackUsed: true,
+      snapshotWindowDays: windowDays,
+    });
+  }
+
   private selectSnapshot(
     snapshots: BankSummarySnapshot[],
     targetCoverage?: number
