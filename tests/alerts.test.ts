@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { recordOfxImportOutcome, resetOfxAlertState } from "../server/observability/alerts";
-import { logger } from "../server/observability/logger";
+import { StructuredLogger, type RequestLogger } from "../server/observability/logger";
 
 type CapturedLog = {
   level: "info" | "warn" | "error";
@@ -11,35 +11,37 @@ type CapturedLog = {
   error?: unknown;
 };
 
-function stubLogger() {
-  const originalInfo = logger.info;
-  const originalWarn = logger.warn;
-  const originalError = logger.error;
+function createStubLogger(baseContext: Record<string, unknown> = {}) {
   const logs: CapturedLog[] = [];
 
-  (logger as any).info = (message: string, context?: any) => {
-    logs.push({ level: "info", message, context });
+  const factory = (context: Record<string, unknown>): RequestLogger => {
+    const instance = new StructuredLogger(context);
+    const emit = (level: CapturedLog["level"], message: string, payload?: any, error?: unknown) => {
+      const combinedContext = payload ? { ...context, ...payload } : { ...context };
+      logs.push({ level, message, context: combinedContext, error });
+    };
+
+    (instance as any).debug = () => {};
+    (instance as any).info = (message: string, payload?: any) => {
+      emit("info", message, payload);
+    };
+    (instance as any).warn = (message: string, payload?: any, error?: unknown) => {
+      emit("warn", message, payload, error);
+    };
+    (instance as any).error = (message: string, payload?: any, error?: unknown) => {
+      emit("error", message, payload, error);
+    };
+    (instance as any).child = (childContext: Record<string, unknown> = {}) =>
+      factory({ ...context, ...childContext });
+
+    return instance as RequestLogger;
   };
 
-  (logger as any).warn = (message: string, context?: any, error?: unknown) => {
-    logs.push({ level: "warn", message, context, error });
-  };
-
-  (logger as any).error = (message: string, context?: any, error?: unknown) => {
-    logs.push({ level: "error", message, context, error });
-  };
-
-  const restore = () => {
-    (logger as any).info = originalInfo;
-    (logger as any).warn = originalWarn;
-    (logger as any).error = originalError;
-  };
-
-  return { logs, restore };
+  return { logs, logger: factory(baseContext) };
 }
 
 test("recordOfxImportOutcome tracks errors per bank account", () => {
-  const { logs, restore } = stubLogger();
+  const { logs, logger } = createStubLogger();
   resetOfxAlertState();
 
   try {
@@ -55,6 +57,7 @@ test("recordOfxImportOutcome tracks errors per bank account", () => {
       durationMs: 1500,
       warnings: 1,
       error: new Error("erro 1"),
+      logger,
     });
 
     recordOfxImportOutcome({
@@ -66,6 +69,7 @@ test("recordOfxImportOutcome tracks errors per bank account", () => {
       durationMs: 1400,
       warnings: 2,
       error: new Error("erro 2"),
+      logger,
     });
 
     recordOfxImportOutcome({
@@ -77,6 +81,7 @@ test("recordOfxImportOutcome tracks errors per bank account", () => {
       durationMs: 1600,
       warnings: 0,
       error: new Error("erro b"),
+      logger,
     });
 
     recordOfxImportOutcome({
@@ -88,6 +93,7 @@ test("recordOfxImportOutcome tracks errors per bank account", () => {
       durationMs: 1700,
       warnings: 3,
       error: new Error("erro 3"),
+      logger,
     });
 
     const failureLogs = logs.filter(log => log.context?.event === "alert.ofx.failure");
@@ -109,13 +115,12 @@ test("recordOfxImportOutcome tracks errors per bank account", () => {
     assert.equal(sustainedLog?.context?.bankName, maskedBankA);
     assert.equal(sustainedLog?.context?.context?.consecutiveErrors, 3);
   } finally {
-    restore();
     resetOfxAlertState();
   }
 });
 
 test("recordOfxImportOutcome logs recovery per account with masked identifiers", () => {
-  const { logs, restore } = stubLogger();
+  const { logs, logger } = createStubLogger();
   resetOfxAlertState();
 
   try {
@@ -131,6 +136,7 @@ test("recordOfxImportOutcome logs recovery per account with masked identifiers",
       durationMs: 2000,
       warnings: 0,
       error: new Error("erro a"),
+      logger,
     });
 
     recordOfxImportOutcome({
@@ -142,6 +148,7 @@ test("recordOfxImportOutcome logs recovery per account with masked identifiers",
       durationMs: 2200,
       warnings: 1,
       error: new Error("erro a2"),
+      logger,
     });
 
     logs.length = 0;
@@ -154,6 +161,7 @@ test("recordOfxImportOutcome logs recovery per account with masked identifiers",
       success: true,
       durationMs: 500,
       warnings: 0,
+      logger,
     });
 
     recordOfxImportOutcome({
@@ -164,6 +172,7 @@ test("recordOfxImportOutcome logs recovery per account with masked identifiers",
       success: true,
       durationMs: 400,
       warnings: 0,
+      logger,
     });
 
     const recoveryLogs = logs.filter(log => log.context?.event === "alert.ofx.recovered");
@@ -182,6 +191,7 @@ test("recordOfxImportOutcome logs recovery per account with masked identifiers",
       durationMs: 800,
       warnings: 0,
       error: new Error("erro a3"),
+      logger,
     });
 
     const latestFailure = logs
@@ -189,7 +199,6 @@ test("recordOfxImportOutcome logs recovery per account with masked identifiers",
       .find(log => log.context?.bankAccountId === "acc-a");
     assert.equal(latestFailure?.context?.context?.consecutiveErrors, 1);
   } finally {
-    restore();
     resetOfxAlertState();
   }
 });

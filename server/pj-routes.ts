@@ -1369,6 +1369,7 @@ export function registerPJRoutes(app: Express) {
           success: true,
           durationMs,
           warnings: perAccountWarnings.length,
+          logger: ingestionLogger.child({ bankAccountId: summary.accountId }),
         });
       });
 
@@ -1437,6 +1438,7 @@ export function registerPJRoutes(app: Express) {
               durationMs,
               warnings: warnings.length,
               error,
+              logger: ingestionLogger.child({ bankAccountId: timer.bankAccountId }),
             });
           });
         } else {
@@ -1449,8 +1451,9 @@ export function registerPJRoutes(app: Express) {
             durationMs,
             warnings: warnings.length,
             error,
+            logger: ingestionLogger.child({ bankAccountId: UNKNOWN_BANK_LABEL }),
           });
-      }
+        }
       }
 
       ingestionLogger.error("Erro ao importar OFX PJ", {
