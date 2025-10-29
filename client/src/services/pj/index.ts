@@ -1,4 +1,76 @@
+import axios, { type AxiosInstance } from "axios";
+import {
+  Configuration,
+  PJBankingApi,
+  type AccountsResponse,
+  type BankTransaction,
+  type BankTransactionListResponse,
+  type SummaryResponse,
+} from "@financecopilot/pj-banking-sdk";
+import { getApiHeaders } from "@/lib/api";
 import { mockBankAccounts } from "./mockData";
+
+function headersInitToRecord(headers: HeadersInit): Record<string, string> {
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+
+  return { ...(headers as Record<string, string>) };
+}
+
+const pjAxios: AxiosInstance = axios.create({ withCredentials: true });
+
+pjAxios.interceptors.request.use((config) => {
+  const baseHeaders = headersInitToRecord(getApiHeaders());
+  const currentHeaders = (config.headers ?? {}) as Record<string, string>;
+
+  config.headers = { ...baseHeaders, ...currentHeaders };
+  return config;
+});
+
+const pjBankingApi = new PJBankingApi(
+  new Configuration({ basePath: "" }),
+  undefined,
+  pjAxios,
+);
+
+function toApiDate(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (value.includes("/")) {
+    return value;
+  }
+
+  const [year, month, day] = value.split("-");
+  if (!year || !month || !day) {
+    return value;
+  }
+
+  return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`;
+}
+
+function toIsoDate(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (value.includes("-")) {
+    return value;
+  }
+
+  const [day, month, year] = value.split("/");
+  if (!day || !month || !year) {
+    return value;
+  }
+
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
 
 export interface PJBankAccount {
   id: string;
@@ -227,6 +299,16 @@ export interface PJSummaryParams {
   to: string;
 }
 
+export interface PJTransactionsParams {
+  clientId: string;
+  bankAccountId: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+  sort?: "asc" | "desc";
+}
+
 export interface PJPeriodParams {
   clientId: string;
   bankAccountId: string;
@@ -258,6 +340,103 @@ export interface PJService {
   }): Promise<{ imported: number }>;
   getMonthlyInsights(params: PJPeriodParams): Promise<PJMonthlyInsightsResponse>;
   getCostBreakdown(params: PJPeriodParams): Promise<PJCostBreakdownResponse>;
+}
+
+function mapAccountsResponseToPJAccounts(response: AccountsResponse): PJBankAccount[] {
+  return response.accounts.map((account) => ({
+    id: account.id,
+    bankName: account.bankName,
+    accountNumberMask: account.accountNumberMask,
+    accountType: account.accountType,
+    currency: account.currency,
+    isActive: account.isActive,
+    clientIds: undefined,
+  }));
+}
+
+function deriveSummaryMonth(params: PJSummaryParams, summary: SummaryResponse): string {
+  const isoFrom = toIsoDate(summary.from) ?? params.from;
+  if (isoFrom) {
+    return isoFrom.slice(0, 7);
+  }
+
+  return new Date().toISOString().slice(0, 7);
+}
+
+function mapSummaryResponseToPJSummary(
+  summary: SummaryResponse,
+  params: PJSummaryParams,
+): PJSummary {
+  const receitas = summary.totals.totalIn;
+  const despesas = summary.totals.totalOut;
+  const saldo = summary.totals.balance;
+  const lucroBruto = receitas - despesas;
+  const lucroLiquido = summary.kpis.projectedBalance ?? saldo;
+  const margemLiquida = receitas === 0 ? 0 : (lucroLiquido / receitas) * 100;
+
+  return {
+    month: deriveSummaryMonth(params, summary),
+    receitas,
+    despesas,
+    saldo,
+    contasReceber: summary.kpis.receivableAmount,
+    lucroBruto,
+    lucroLiquido,
+    margemLiquida,
+  };
+}
+
+function mapBankTransaction(transaction: BankTransaction): PJBankTransaction {
+  return {
+    bankTxId: transaction.bankTxId,
+    date: toIsoDate(transaction.date) ?? transaction.date,
+    desc: transaction.desc,
+    amount: transaction.amount,
+    reconciled: transaction.reconciled,
+  };
+}
+
+function mapBankTransactionsResponse(
+  response: BankTransactionListResponse,
+): PJBankTransactionsResponse {
+  return {
+    items: response.items.map(mapBankTransaction),
+    pagination: response.pagination,
+  };
+}
+
+export async function getAccounts(): Promise<PJBankAccount[]> {
+  const { data } = await pjBankingApi.apiPjAccountsGet();
+  return mapAccountsResponseToPJAccounts(data);
+}
+
+export async function getSummary(params: PJSummaryParams): Promise<PJSummary> {
+  const { clientId, bankAccountId, from, to } = params;
+  const { data } = await pjBankingApi.apiPjSummaryGet(
+    clientId,
+    bankAccountId,
+    toApiDate(from),
+    toApiDate(to),
+  );
+
+  return mapSummaryResponseToPJSummary(data, params);
+}
+
+export async function getTransactions(
+  params: PJTransactionsParams,
+): Promise<PJBankTransactionsResponse> {
+  const { clientId, bankAccountId, from, to, page, limit, sort } = params;
+  const { data } = await pjBankingApi.apiPjTransactionsGet(
+    clientId,
+    bankAccountId,
+    toApiDate(from),
+    toApiDate(to),
+    page,
+    limit,
+    sort,
+  );
+
+  return mapBankTransactionsResponse(data);
 }
 
 const mockSummary: PJSummary = {
