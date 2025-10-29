@@ -13,6 +13,7 @@ import { requireRole } from "./middleware/rbac";
 import { validateClientAccess } from "./middleware/scope";
 import { registerOpenFinanceRoutes } from "./openfinance-routes";
 import { registerPJRoutes } from "./pj-routes";
+import { registerPjPlanRoutes } from "./pj-plan-routes";
 import {
   clientSchema,
   categorizeSchema,
@@ -1544,6 +1545,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Register PJ routes
   registerPJRoutes(app);
+  registerPjPlanRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;

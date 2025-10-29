@@ -207,6 +207,8 @@ export const auditEventTypes = [
   "pj.sale.reconcile",
   "pj.ofx.import",
   "pj.transaction.update",
+  "pj.plan.global.update",
+  "pj.plan.client.update",
   "policy.update",
   "report.generate",
   "lgpd.anonymize",

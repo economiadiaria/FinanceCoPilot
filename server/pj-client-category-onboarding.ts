@@ -21,20 +21,34 @@ interface OnboardResult {
 
 function normalizeClientCategory(
   category: typeof pjClientCategories.$inferSelect,
+  baseLookup: Map<string, PjClientCategoryRecord>,
 ): PjClientCategoryRecord {
   if (!category.baseCategoryId) {
     throw new Error(`Categoria PJ do cliente ${category.id} sem vínculo com base`);
   }
+
+  const base = baseLookup.get(category.baseCategoryId);
+  const name = (category as any).name ?? base?.name ?? category.id;
+  const description = (category as any).description ?? base?.description ?? null;
+  const acceptsPostings =
+    (category as any).acceptsPostings ?? base?.acceptsPostings ?? true;
+  const createdAt = (category as any).createdAt ?? new Date().toISOString();
+  const updatedAt = (category as any).updatedAt ?? createdAt;
 
   return {
     id: category.id,
     orgId: category.orgId,
     clientId: category.clientId,
     baseCategoryId: category.baseCategoryId,
+    name,
+    description,
     parentId: category.parentId ?? null,
+    acceptsPostings,
     level: category.level,
     path: category.path,
     sortOrder: category.sortOrder,
+    createdAt,
+    updatedAt,
   };
 }
 
@@ -45,6 +59,25 @@ export async function onboardPjClientCategories({
   transaction,
   logger,
 }: OnboardParams): Promise<OnboardResult> {
+  const baseTemplates = await storage.getPjCategories();
+  const baseTemplateLookup = new Map(
+    baseTemplates.map(template => [template.id, {
+      id: template.id,
+      orgId,
+      clientId,
+      baseCategoryId: template.id,
+      name: template.name,
+      description: template.description ?? null,
+      parentId: template.parentId ?? null,
+      acceptsPostings: template.acceptsPostings,
+      level: template.level,
+      path: template.path,
+      sortOrder: template.sortOrder,
+      createdAt: template.createdAt,
+      updatedAt: template.updatedAt,
+    } satisfies PjClientCategoryRecord]),
+  );
+
   const existing = await transaction.query.pjClientCategories.findMany({
     where: and(eq(pjClientCategories.orgId, orgId), eq(pjClientCategories.clientId, clientId)),
     orderBy: [
@@ -55,7 +88,9 @@ export async function onboardPjClientCategories({
   });
 
   if (existing.length > 0) {
-    const normalized = existing.map(normalizeClientCategory);
+    const normalized = existing.map(category =>
+      normalizeClientCategory(category, baseTemplateLookup)
+    );
     await storage.setPjClientCategories(orgId, clientId, normalized);
     logger?.info("PJ client categories already provisioned", {
       event: "pj.client.onboarding",
@@ -102,16 +137,23 @@ export async function onboardPjClientCategories({
 
     const id = randomUUID();
     const path = parentPath ? `${parentPath}.${id}` : id;
+    const template = baseTemplateLookup.get(base.id);
+    const now = new Date().toISOString();
 
     const clone: PjClientCategoryRecord = {
       id,
       orgId,
       clientId,
       baseCategoryId: base.id,
+      name: template?.name ?? base.code ?? base.id,
+      description: template?.description ?? null,
       parentId,
+      acceptsPostings: template?.acceptsPostings ?? true,
       level,
       path,
       sortOrder: base.sortOrder,
+      createdAt: now,
+      updatedAt: now,
     };
 
     clones.push(clone);

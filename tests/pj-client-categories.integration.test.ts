@@ -9,7 +9,12 @@ import { drizzle } from "drizzle-orm/pglite";
 import { asc, eq } from "drizzle-orm";
 
 import { registerRoutes } from "../server/routes";
-import { MemStorage, setStorageProvider, type IStorage } from "../server/storage";
+import {
+  MemStorage,
+  setStorageProvider,
+  type IStorage,
+  type PjClientCategoryRecord,
+} from "../server/storage";
 import { setDbProvider, type Database } from "../server/db/client";
 import { pjCategories, pjClientCategories } from "../server/db/schema";
 import { onboardPjClientCategories } from "../server/pj-client-category-onboarding";
@@ -117,6 +122,8 @@ function selectClientCategories(db: Database, clientId: string) {
       level: pjClientCategories.level,
       path: pjClientCategories.path,
       sortOrder: pjClientCategories.sortOrder,
+      createdAt: pjClientCategories.createdAt,
+      updatedAt: pjClientCategories.updatedAt,
     })
     .from(pjClientCategories)
     .where(eq(pjClientCategories.clientId, clientId))
@@ -125,6 +132,28 @@ function selectClientCategories(db: Database, clientId: string) {
       asc(pjClientCategories.sortOrder),
       asc(pjClientCategories.id),
     );
+}
+
+function stripCategoryExtras(
+  category: PjClientCategoryRecord,
+): Omit<PjClientCategoryRecord, "name" | "description" | "acceptsPostings"> {
+  const { name: _name, description: _description, acceptsPostings: _acceptsPostings, ...rest } =
+    category;
+  return {
+    ...rest,
+    createdAt: new Date(rest.createdAt).toISOString(),
+    updatedAt: new Date(rest.updatedAt).toISOString(),
+  };
+}
+
+function normalizeDbCategory<T extends { createdAt: string; updatedAt: string }>(
+  category: T,
+): T {
+  return {
+    ...category,
+    createdAt: new Date(category.createdAt).toISOString(),
+    updatedAt: new Date(category.updatedAt).toISOString(),
+  };
 }
 
 describe("PJ client category onboarding", () => {
@@ -211,7 +240,11 @@ const ctx: TestContext = {
     assert.equal(child!.path, `${root!.id}.${child!.id}`);
 
     const stored = await ctx.storage.getPjClientCategories(ORG_ID, clientId);
-    assert.deepEqual(stored, inserted);
+    assert.equal(stored.length, inserted.length);
+    assert.deepEqual(
+      stored.map(stripCategoryExtras),
+      inserted.map(normalizeDbCategory),
+    );
   });
 
   it("is idempotent when categories already exist for a new client", async () => {
@@ -255,7 +288,11 @@ const ctx: TestContext = {
     assert.equal(duplicates.size, categories.length, "base categories should not be duplicated");
 
     const stored = await ctx.storage.getPjClientCategories(ORG_ID, clientId);
-    assert.deepEqual(stored, categories);
+    assert.equal(stored.length, categories.length);
+    assert.deepEqual(
+      stored.map(stripCategoryExtras),
+      categories.map(normalizeDbCategory),
+    );
   });
 
   it("skips onboarding for non-PJ clients", async () => {
