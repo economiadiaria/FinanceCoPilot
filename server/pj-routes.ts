@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { pjSummaryService } from "./pj-summary-service";
+import { refreshSnapshotsForAccounts } from "./pj-summary-aggregator";
 import { scopeRequired, ensureBankAccountAccess } from "./middleware/scope";
 import multer from "multer";
 import crypto from "crypto";
@@ -1161,6 +1162,15 @@ export function registerPJRoutes(app: Express) {
         await storage.addBankTransactions(resolvedClientId, newTransactions);
       }
 
+      if (accountSummaries.length > 0 && req.authUser?.organizationId) {
+        await refreshSnapshotsForAccounts({
+          organizationId: req.authUser.organizationId,
+          clientId: resolvedClientId,
+          bankAccountIds: accountSummaries.map(summary => summary.accountId),
+          logger: ingestionLogger,
+        });
+      }
+
       errorStage = "persist";
       const importedAt = new Date().toISOString();
       await Promise.all(
@@ -1480,6 +1490,15 @@ export function registerPJRoutes(app: Express) {
       await storage.setSaleLegs(clientId, legs);
       await storage.setBankTransactions(clientId, bankTxs);
 
+      if (matchedAccountIds.size > 0 && req.authUser?.organizationId) {
+        await refreshSnapshotsForAccounts({
+          organizationId: req.authUser.organizationId,
+          clientId,
+          bankAccountIds: matchedAccountIds,
+          logger: getLogger(req),
+        });
+      }
+
       const reconciliationAccountMetadata = buildAccountAuditMetadata(matchedAccountIds);
       const reconciliationSingleAccount =
         reconciliationAccountMetadata.length === 1 ? reconciliationAccountMetadata[0] : null;
@@ -1606,6 +1625,15 @@ export function registerPJRoutes(app: Express) {
         }
 
         await storage.setBankTransactions(data.clientId, bankTxs);
+
+        if (affectedAccounts.size > 0 && req.authUser?.organizationId) {
+          await refreshSnapshotsForAccounts({
+            organizationId: req.authUser.organizationId,
+            clientId: data.clientId,
+            bankAccountIds: affectedAccounts,
+            logger: getLogger(req),
+          });
+        }
       }
 
       const retroactiveAccountMetadata = buildAccountAuditMetadata(affectedAccounts);
@@ -1735,6 +1763,15 @@ export function registerPJRoutes(app: Express) {
         }
 
         await storage.setBankTransactions(data.clientId, bankTxs);
+      }
+
+      if (affectedAccounts.size > 0 && req.authUser?.organizationId) {
+        await refreshSnapshotsForAccounts({
+          organizationId: req.authUser.organizationId,
+          clientId: data.clientId,
+          bankAccountIds: affectedAccounts,
+          logger: getLogger(req),
+        });
       }
 
       const manualAccountMetadata = buildAccountAuditMetadata(affectedAccounts);
