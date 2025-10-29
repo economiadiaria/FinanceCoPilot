@@ -1,4 +1,4 @@
-import { logger } from "./logger";
+import { logger, StructuredLogger, type LoggerContext, type RequestLogger } from "./logger";
 
 const ERROR_THRESHOLD = 3;
 const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -18,6 +18,12 @@ function getTrackerKey(clientId: string, bankAccountId?: string) {
   return `${clientId}:${accountId}`;
 }
 
+type LoggerOverride =
+  | RequestLogger
+  | (LoggerContext & {
+      requestId: string;
+    });
+
 export function recordOfxImportOutcome(options: {
   clientId: string;
   importId: string;
@@ -27,16 +33,40 @@ export function recordOfxImportOutcome(options: {
   durationMs: number;
   warnings: number;
   error?: unknown;
+  logger?: LoggerOverride;
 }) {
-  const { clientId, importId, bankAccountId, bankName, success, durationMs, warnings, error } = options;
+  const {
+    clientId,
+    importId,
+    bankAccountId,
+    bankName,
+    success,
+    durationMs,
+    warnings,
+    error,
+    logger: providedLogger,
+  } = options;
   const normalizedAccountId = bankAccountId?.trim() || UNKNOWN_LABEL;
   const normalizedBankName = bankName?.trim() || UNKNOWN_LABEL;
   const trackerKey = getTrackerKey(clientId, bankAccountId);
   const state = errorTracker.get(trackerKey) ?? { consecutiveErrors: 0 };
 
+  const emitter = (() => {
+    if (!providedLogger) {
+      return logger;
+    }
+    if (providedLogger instanceof StructuredLogger) {
+      return providedLogger;
+    }
+    if (providedLogger.requestId) {
+      return logger.child(providedLogger);
+    }
+    return logger;
+  })();
+
   if (success) {
     if (state.consecutiveErrors > 0) {
-      logger.info("Erro sustentado de importação OFX resolvido", {
+      emitter.info("Erro sustentado de importação OFX resolvido", {
         event: "alert.ofx.recovered",
         clientId,
         importId,
@@ -51,7 +81,7 @@ export function recordOfxImportOutcome(options: {
     state.consecutiveErrors += 1;
     errorTracker.set(trackerKey, state);
 
-    logger.warn("Falha na importação OFX", {
+    emitter.warn("Falha na importação OFX", {
       event: "alert.ofx.failure",
       clientId,
       importId,
@@ -68,7 +98,7 @@ export function recordOfxImportOutcome(options: {
       state.consecutiveErrors >= ERROR_THRESHOLD &&
       (!state.lastAlertAt || Date.now() - state.lastAlertAt > ALERT_COOLDOWN_MS)
     ) {
-      logger.error("Alerta: erros sustentados em importação OFX", {
+      emitter.error("Alerta: erros sustentados em importação OFX", {
         event: "alert.ofx.sustained",
         clientId,
         importId,
@@ -86,7 +116,7 @@ export function recordOfxImportOutcome(options: {
   }
 
   if (durationMs > SLOW_THRESHOLD_MS) {
-    logger.warn("Importação OFX lenta", {
+    emitter.warn("Importação OFX lenta", {
       event: "alert.ofx.slow",
       clientId,
       importId,
