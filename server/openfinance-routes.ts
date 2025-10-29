@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
@@ -7,6 +7,51 @@ import { pluggyClient, hasPluggyCredentials } from "./pluggy";
 import { getLogger } from "./observability/logger";
 import type { OFItem, OFAccount, Transaction, Position } from "@shared/schema";
 import { v4 as uuidv4 } from "uuid";
+
+type RawBodyRequest = Request & { rawBody?: Buffer | string };
+
+function getRawBodyBuffer(req: Request): Buffer | null {
+  const raw = (req as RawBodyRequest).rawBody;
+
+  if (Buffer.isBuffer(raw)) {
+    return raw;
+  }
+
+  if (typeof raw === "string") {
+    return Buffer.from(raw, "utf8");
+  }
+
+  if (typeof req.body === "string") {
+    return Buffer.from(req.body, "utf8");
+  }
+
+  if (Buffer.isBuffer(req.body)) {
+    (req as RawBodyRequest).rawBody = req.body;
+    return req.body;
+  }
+
+  if (req.body && typeof req.body === "object") {
+    try {
+      return Buffer.from(JSON.stringify(req.body));
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function extractEventPayload(req: Request, rawBody: Buffer): any {
+  if (req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
+    return req.body;
+  }
+
+  try {
+    return JSON.parse(rawBody.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+}
 
 // Helper to format date from ISO to DD/MM/YYYY
 function formatDateBR(isoDate: string): string {
@@ -96,7 +141,7 @@ export function registerOpenFinanceRoutes(app: Express) {
         return res.status(500).json({ error: "Segredo do webhook não configurado" });
       }
 
-      const providedSignature = req.get("x-pluggy-signature") ?? req.get("x-webhook-secret");
+      const providedSignature = req.get("x-pluggy-signature");
 
       if (!providedSignature) {
         logger.warn("Missing Pluggy webhook signature", {
@@ -105,20 +150,34 @@ export function registerOpenFinanceRoutes(app: Express) {
         return res.status(401).json({ error: "Assinatura obrigatória" });
       }
 
-      const secretBuffer = Buffer.from(webhookSecret, "utf8");
-      const signatureBuffer = Buffer.from(providedSignature, "utf8");
-      const signaturesMatch =
-        secretBuffer.length === signatureBuffer.length &&
-        crypto.timingSafeEqual(secretBuffer, signatureBuffer);
+      const rawBody = getRawBodyBuffer(req);
 
-      if (!signaturesMatch) {
+      if (!rawBody) {
+        logger.warn("Missing raw body for Pluggy webhook", {
+          event: "openfinance.webhook.auth",
+        });
+        return res.status(400).json({ error: "Payload inválido" });
+      }
+
+      const computedSignature = crypto
+        .createHmac("sha256", webhookSecret)
+        .update(rawBody)
+        .digest("hex");
+
+      const providedSignatureBuffer = Buffer.from(providedSignature, "utf8");
+      const computedSignatureBuffer = Buffer.from(computedSignature, "utf8");
+      const signatureMatches =
+        providedSignatureBuffer.length === computedSignatureBuffer.length &&
+        crypto.timingSafeEqual(providedSignatureBuffer, computedSignatureBuffer);
+
+      if (!signatureMatches) {
         logger.warn("Invalid Pluggy webhook signature", {
           event: "openfinance.webhook.auth",
         });
         return res.status(403).json({ error: "Assinatura inválida" });
       }
 
-      const event = req.body;
+      const event = extractEventPayload(req, rawBody);
 
       if (!event || !event.data) {
         return res.status(400).json({ error: "Payload inválido" });
