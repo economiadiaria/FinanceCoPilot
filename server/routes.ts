@@ -6,7 +6,6 @@ import multer from "multer";
 import Ofx from "ofx-js";
 import crypto from "crypto";
 import bcrypt from "bcrypt";
-import swaggerUi from "swagger-ui-express";
 import yaml from "yaml";
 import { storage } from "./storage";
 import { authMiddleware } from "./middleware/auth";
@@ -33,6 +32,24 @@ import { z } from "zod";
 import { recordAuditEvent, listAuditLogs } from "./security/audit";
 import { getLogger, updateRequestLoggerContext } from "./observability/logger";
 import { metricsRegistry } from "./observability/metrics";
+
+type SwaggerUiModule = typeof import("swagger-ui-express");
+
+let swaggerUiModulePromise: Promise<SwaggerUiModule | null> | null = null;
+
+const resolveSwaggerUi = async (): Promise<SwaggerUiModule | null> => {
+  if (!swaggerUiModulePromise) {
+    swaggerUiModulePromise = import("swagger-ui-express")
+      .then((module) => (module.default ?? module) as SwaggerUiModule)
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`Swagger UI desabilitado: ${message}`);
+        return null;
+      });
+  }
+
+  return swaggerUiModulePromise;
+};
 
 const openApiSpecPath = path.resolve(process.cwd(), "docs/openapi/pj-banking.yaml");
 const openApiSpec = yaml.parse(fs.readFileSync(openApiSpecPath, "utf8")) as Record<string, unknown>;
@@ -1409,16 +1426,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // API Documentation endpoint
-  app.use(
-    "/api/docs",
-    (_req: Request, res: Response, next: NextFunction) => {
-      res.setHeader("Cache-Control", "private, max-age=60");
-      next();
-    },
-    swaggerUi.serve,
-    swaggerUi.setup(openApiSpec, { explorer: false })
-  );
+  const swaggerUi = await resolveSwaggerUi();
+
+  if (swaggerUi) {
+    // API Documentation endpoint
+    app.use(
+      "/api/docs",
+      (_req: Request, res: Response, next: NextFunction) => {
+        res.setHeader("Cache-Control", "private, max-age=60");
+        next();
+      },
+      swaggerUi.serve,
+      swaggerUi.setup(openApiSpec, { explorer: false })
+    );
+  } else {
+    console.warn("Swagger UI não carregado; rota /api/docs desabilitada");
+  }
 
   app.get("/api/openapi.json", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "private, max-age=60");
