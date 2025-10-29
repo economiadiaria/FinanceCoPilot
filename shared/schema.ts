@@ -215,6 +215,8 @@ export const auditEventTypes = [
   "security.access_denied.organization",
   "security.access_denied.client_link",
   "security.access_denied.bank_account",
+  "security.access_denied.pj_plan_global",
+  "security.access_denied.pj_plan_client",
 ] as const;
 
 export const auditLogEntrySchema = z.object({
