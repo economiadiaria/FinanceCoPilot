@@ -8,8 +8,8 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
-import type { BankTransaction } from "./bankTransaction";
-import type { Pagination } from "./pagination";
+import type { BankTransaction } from './bankTransaction';
+import type { Pagination } from './pagination';
 
 export interface BankTransactionListResponse {
   items: BankTransaction[];

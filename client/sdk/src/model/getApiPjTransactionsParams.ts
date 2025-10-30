@@ -8,41 +8,41 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
-import type { ClientIdQueryParameter } from "./clientIdQueryParameter";
-import type { BankAccountIdQueryParameter } from "./bankAccountIdQueryParameter";
-import type { FromDateQueryParameter } from "./fromDateQueryParameter";
-import type { ToDateQueryParameter } from "./toDateQueryParameter";
-import type { PageQueryParameter } from "./pageQueryParameter";
-import type { LimitQueryParameter } from "./limitQueryParameter";
-import type { SortQueryParameter } from "./sortQueryParameter";
+import type { ClientIdQueryParameter } from './clientIdQueryParameter';
+import type { BankAccountIdQueryParameter } from './bankAccountIdQueryParameter';
+import type { FromDateQueryParameter } from './fromDateQueryParameter';
+import type { ToDateQueryParameter } from './toDateQueryParameter';
+import type { PageQueryParameter } from './pageQueryParameter';
+import type { LimitQueryParameter } from './limitQueryParameter';
+import type { SortQueryParameter } from './sortQueryParameter';
 
 export type GetApiPjTransactionsParams = {
-  /**
-   * Unique identifier for the PJ client
-   */
-  clientId: ClientIdQueryParameter;
-  /**
-   * Unique identifier for the bank account that must be accessible by the authenticated user
-   */
-  bankAccountId: BankAccountIdQueryParameter;
-  /**
-   * Start of the reporting window in DD/MM/YYYY format
-   */
-  from?: FromDateQueryParameter;
-  /**
-   * End of the reporting window in DD/MM/YYYY format
-   */
-  to?: ToDateQueryParameter;
-  /**
-   * Results page to return (defaults to 1)
-   */
-  page?: PageQueryParameter;
-  /**
-   * Number of items per page (defaults to 50, capped at 200)
-   */
-  limit?: LimitQueryParameter;
-  /**
-   * Sort direction for the transaction date
-   */
-  sort?: SortQueryParameter;
+/**
+ * Unique identifier for the PJ client
+ */
+clientId: ClientIdQueryParameter;
+/**
+ * Unique identifier for the bank account that must be accessible by the authenticated user
+ */
+bankAccountId: BankAccountIdQueryParameter;
+/**
+ * Start of the reporting window in DD/MM/YYYY format
+ */
+from?: FromDateQueryParameter;
+/**
+ * End of the reporting window in DD/MM/YYYY format
+ */
+to?: ToDateQueryParameter;
+/**
+ * Results page to return (defaults to 1)
+ */
+page?: PageQueryParameter;
+/**
+ * Number of items per page (defaults to 50, capped at 200)
+ */
+limit?: LimitQueryParameter;
+/**
+ * Sort direction for the transaction date
+ */
+sort?: SortQueryParameter;
 };

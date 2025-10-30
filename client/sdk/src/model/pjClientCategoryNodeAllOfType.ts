@@ -9,11 +9,10 @@ transaction browsing and financial summaries for PJ clients.
  * OpenAPI spec version: 1.0.0
  */
 
-export type SortQueryParameter = typeof SortQueryParameter[keyof typeof SortQueryParameter];
+export type PjClientCategoryNodeAllOfType = typeof PjClientCategoryNodeAllOfType[keyof typeof PjClientCategoryNodeAllOfType];
 
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
-export const SortQueryParameter = {
-  asc: 'asc',
-  desc: 'desc',
+export const PjClientCategoryNodeAllOfType = {
+  client: 'client',
 } as const;

@@ -8,10 +8,10 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
-import type { SummaryResponseKpis } from "./summaryResponseKpis";
-import type { SummaryResponseMetadata } from "./summaryResponseMetadata";
-import type { SummaryResponseSeries } from "./summaryResponseSeries";
-import type { SummaryResponseTotals } from "./summaryResponseTotals";
+import type { SummaryResponseKpis } from './summaryResponseKpis';
+import type { SummaryResponseMetadata } from './summaryResponseMetadata';
+import type { SummaryResponseSeries } from './summaryResponseSeries';
+import type { SummaryResponseTotals } from './summaryResponseTotals';
 
 export interface SummaryResponse {
   bankAccountId: string;

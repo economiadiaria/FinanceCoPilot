@@ -11,43 +11,61 @@ transaction browsing and financial summaries for PJ clients.
 import type {
   AccountsResponse,
   BankTransactionListResponse,
+  GetApiPjClientIdCategoriesParams,
+  GetApiPjGlobalCategoriesParams,
   GetApiPjSummaryParams,
   GetApiPjTransactionsParams,
-  SummaryResponse,
-} from "./model";
-import { sdkClient } from "./httpClient";
+  PatchApiPjClientIdCategoriesCategoryId200,
+  PatchApiPjGlobalCategoriesCategoryId200,
+  PjCategoryTreeResponse,
+  PjClientCategoryCreate,
+  PjClientCategoryUpdate,
+  PjGlobalCategoryCreate,
+  PjGlobalCategoryUpdate,
+  PostApiPjClientIdCategories201,
+  PostApiPjGlobalCategories201,
+  SummaryResponse
+} from './model'
+import { sdkClient } from './httpClient';
 
-export const getPJBankingAPI = () => {
-  /**
+
+
+
+  export const getPJBankingAPI = () => {
+/**
  * Returns the bank accounts that are available to the authenticated PJ
 client. Only a subset of bank account fields is exposed to avoid
 leaking sensitive identifiers.
 
  * @summary List bank accounts available for the authenticated PJ client
  */
-  const getApiPjAccounts = () => {
-    return sdkClient<AccountsResponse>({
-      url: `/api/pj/accounts`,
-      method: "GET",
-    });
-  };
-
-  /**
+const getApiPjAccounts = (
+    
+ ) => {
+      return sdkClient<AccountsResponse>(
+      {url: `/api/pj/accounts`, method: 'GET'
+    },
+      );
+    }
+  
+/**
  * Returns the paginated bank transactions imported for a specific PJ
 bank account. Transactions are filtered by the optional period and
 sorted by posting date.
 
  * @summary List paginated bank transactions for a PJ client account
  */
-  const getApiPjTransactions = (params: GetApiPjTransactionsParams) => {
-    return sdkClient<BankTransactionListResponse>({
-      url: `/api/pj/transactions`,
-      method: "GET",
-      params,
-    });
-  };
-
-  /**
+const getApiPjTransactions = (
+    params: GetApiPjTransactionsParams,
+ ) => {
+      return sdkClient<BankTransactionListResponse>(
+      {url: `/api/pj/transactions`, method: 'GET',
+        params
+    },
+      );
+    }
+  
+/**
  * Calculates aggregated totals, KPIs and daily net flow series for a PJ
 bank account inside the requested date range. When the date range is
 omitted the backend automatically expands it to the available
@@ -55,24 +73,153 @@ transaction history.
 
  * @summary Retrieve aggregated cash-flow summary for a PJ client account
  */
-  const getApiPjSummary = (params: GetApiPjSummaryParams) => {
-    return sdkClient<SummaryResponse>({
-      url: `/api/pj/summary`,
-      method: "GET",
-      params,
-    });
-  };
+const getApiPjSummary = (
+    params: GetApiPjSummaryParams,
+ ) => {
+      return sdkClient<SummaryResponse>(
+      {url: `/api/pj/summary`, method: 'GET',
+        params
+    },
+      );
+    }
+  
+/**
+ * Returns the catalog of global PJ plan categories. When the `tree`
+parameter is enabled the response is structured as a hierarchical tree
+sorted by `sortOrder` and name. Otherwise the categories are returned
+as a flat list with empty `children` arrays.
 
-  return { getApiPjAccounts, getApiPjTransactions, getApiPjSummary };
-};
-export type GetApiPjAccountsResult = NonNullable<
-  Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>["getApiPjAccounts"]>>
->;
-export type GetApiPjTransactionsResult = NonNullable<
-  Awaited<
-    ReturnType<ReturnType<typeof getPJBankingAPI>["getApiPjTransactions"]>
-  >
->;
-export type GetApiPjSummaryResult = NonNullable<
-  Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>["getApiPjSummary"]>>
->;
+ * @summary List PJ global categories
+ */
+const getApiPjGlobalCategories = (
+    params?: GetApiPjGlobalCategoriesParams,
+ ) => {
+      return sdkClient<PjCategoryTreeResponse>(
+      {url: `/api/pj/global-categories`, method: 'GET',
+        params
+    },
+      );
+    }
+  
+/**
+ * Creates a new global PJ plan category under the optional parent.
+ * @summary Create a PJ global category
+ */
+const postApiPjGlobalCategories = (
+    pjGlobalCategoryCreate: PjGlobalCategoryCreate,
+ ) => {
+      return sdkClient<PostApiPjGlobalCategories201>(
+      {url: `/api/pj/global-categories`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: pjGlobalCategoryCreate
+    },
+      );
+    }
+  
+/**
+ * Updates mutable fields of a global PJ category. Core categories cannot be changed.
+ * @summary Update a PJ global category
+ */
+const patchApiPjGlobalCategoriesCategoryId = (
+    categoryId: string,
+    pjGlobalCategoryUpdate: PjGlobalCategoryUpdate,
+ ) => {
+      return sdkClient<PatchApiPjGlobalCategoriesCategoryId200>(
+      {url: `/api/pj/global-categories/${categoryId}`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: pjGlobalCategoryUpdate
+    },
+      );
+    }
+  
+/**
+ * Removes a non-core global category without children.
+ * @summary Delete a PJ global category
+ */
+const deleteApiPjGlobalCategoriesCategoryId = (
+    categoryId: string,
+ ) => {
+      return sdkClient<void>(
+      {url: `/api/pj/global-categories/${categoryId}`, method: 'DELETE'
+    },
+      );
+    }
+  
+/**
+ * Returns the PJ client categories associated with the given client. When
+`tree=true` the response is structured as a hierarchical tree sorted by
+`sortOrder` and name, otherwise the categories are returned as a flat
+list with empty `children` arrays.
+
+ * @summary List PJ client categories
+ */
+const getApiPjClientIdCategories = (
+    clientId: string,
+    params?: GetApiPjClientIdCategoriesParams,
+ ) => {
+      return sdkClient<PjCategoryTreeResponse>(
+      {url: `/api/pj/${clientId}/categories`, method: 'GET',
+        params
+    },
+      );
+    }
+  
+/**
+ * Creates a new PJ client category optionally linked to a base global category.
+ * @summary Create a PJ client category
+ */
+const postApiPjClientIdCategories = (
+    clientId: string,
+    pjClientCategoryCreate: PjClientCategoryCreate,
+ ) => {
+      return sdkClient<PostApiPjClientIdCategories201>(
+      {url: `/api/pj/${clientId}/categories`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: pjClientCategoryCreate
+    },
+      );
+    }
+  
+/**
+ * Updates mutable fields of a client category. Categories linked to core global categories cannot be changed.
+ * @summary Update a PJ client category
+ */
+const patchApiPjClientIdCategoriesCategoryId = (
+    clientId: string,
+    categoryId: string,
+    pjClientCategoryUpdate: PjClientCategoryUpdate,
+ ) => {
+      return sdkClient<PatchApiPjClientIdCategoriesCategoryId200>(
+      {url: `/api/pj/${clientId}/categories/${categoryId}`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: pjClientCategoryUpdate
+    },
+      );
+    }
+  
+/**
+ * Removes a non-core PJ client category that has no children.
+ * @summary Delete a PJ client category
+ */
+const deleteApiPjClientIdCategoriesCategoryId = (
+    clientId: string,
+    categoryId: string,
+ ) => {
+      return sdkClient<void>(
+      {url: `/api/pj/${clientId}/categories/${categoryId}`, method: 'DELETE'
+    },
+      );
+    }
+  
+return {getApiPjAccounts,getApiPjTransactions,getApiPjSummary,getApiPjGlobalCategories,postApiPjGlobalCategories,patchApiPjGlobalCategoriesCategoryId,deleteApiPjGlobalCategoriesCategoryId,getApiPjClientIdCategories,postApiPjClientIdCategories,patchApiPjClientIdCategoriesCategoryId,deleteApiPjClientIdCategoriesCategoryId}};
+export type GetApiPjAccountsResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['getApiPjAccounts']>>>
+export type GetApiPjTransactionsResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['getApiPjTransactions']>>>
+export type GetApiPjSummaryResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['getApiPjSummary']>>>
+export type GetApiPjGlobalCategoriesResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['getApiPjGlobalCategories']>>>
+export type PostApiPjGlobalCategoriesResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['postApiPjGlobalCategories']>>>
+export type PatchApiPjGlobalCategoriesCategoryIdResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['patchApiPjGlobalCategoriesCategoryId']>>>
+export type DeleteApiPjGlobalCategoriesCategoryIdResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['deleteApiPjGlobalCategoriesCategoryId']>>>
+export type GetApiPjClientIdCategoriesResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['getApiPjClientIdCategories']>>>
+export type PostApiPjClientIdCategoriesResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['postApiPjClientIdCategories']>>>
+export type PatchApiPjClientIdCategoriesCategoryIdResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['patchApiPjClientIdCategoriesCategoryId']>>>
+export type DeleteApiPjClientIdCategoriesCategoryIdResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getPJBankingAPI>['deleteApiPjClientIdCategoriesCategoryId']>>>

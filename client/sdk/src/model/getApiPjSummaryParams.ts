@@ -8,26 +8,26 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
-import type { ClientIdQueryParameter } from "./clientIdQueryParameter";
-import type { BankAccountIdQueryParameter } from "./bankAccountIdQueryParameter";
-import type { FromDateQueryParameter } from "./fromDateQueryParameter";
-import type { ToDateQueryParameter } from "./toDateQueryParameter";
+import type { ClientIdQueryParameter } from './clientIdQueryParameter';
+import type { BankAccountIdQueryParameter } from './bankAccountIdQueryParameter';
+import type { FromDateQueryParameter } from './fromDateQueryParameter';
+import type { ToDateQueryParameter } from './toDateQueryParameter';
 
 export type GetApiPjSummaryParams = {
-  /**
-   * Unique identifier for the PJ client
-   */
-  clientId: ClientIdQueryParameter;
-  /**
-   * Unique identifier for the bank account that must be accessible by the authenticated user
-   */
-  bankAccountId: BankAccountIdQueryParameter;
-  /**
-   * Start of the reporting window in DD/MM/YYYY format
-   */
-  from?: FromDateQueryParameter;
-  /**
-   * End of the reporting window in DD/MM/YYYY format
-   */
-  to?: ToDateQueryParameter;
+/**
+ * Unique identifier for the PJ client
+ */
+clientId: ClientIdQueryParameter;
+/**
+ * Unique identifier for the bank account that must be accessible by the authenticated user
+ */
+bankAccountId: BankAccountIdQueryParameter;
+/**
+ * Start of the reporting window in DD/MM/YYYY format
+ */
+from?: FromDateQueryParameter;
+/**
+ * End of the reporting window in DD/MM/YYYY format
+ */
+to?: ToDateQueryParameter;
 };

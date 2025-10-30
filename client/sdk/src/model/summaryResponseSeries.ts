@@ -8,7 +8,7 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
-import type { DailyNetFlow } from "./dailyNetFlow";
+import type { DailyNetFlow } from './dailyNetFlow';
 
 export type SummaryResponseSeries = {
   dailyNetFlows: DailyNetFlow[];

@@ -8,7 +8,7 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
-import type { BankAccountSummary } from "./bankAccountSummary";
+import type { BankAccountSummary } from './bankAccountSummary';
 
 export interface AccountsResponse {
   accounts: BankAccountSummary[];

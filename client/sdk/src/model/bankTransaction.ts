@@ -8,8 +8,8 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
-import type { BankTransactionCategorizedAs } from "./bankTransactionCategorizedAs";
-import type { BankTransactionLinkedLegsItem } from "./bankTransactionLinkedLegsItem";
+import type { BankTransactionCategorizedAs } from './bankTransactionCategorizedAs';
+import type { BankTransactionLinkedLegsItem } from './bankTransactionLinkedLegsItem';
 
 export interface BankTransaction {
   /**

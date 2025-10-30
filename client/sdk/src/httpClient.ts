@@ -3,7 +3,6 @@ import axios, {
   type AxiosHeaderValue,
   type AxiosInstance,
   type AxiosRequestConfig,
-  type AxiosResponse,
 } from "axios";
 import { getApiHeaders } from "../../src/lib/api";
 
@@ -25,8 +24,9 @@ sdkAxios.interceptors.request.use((config) => {
   return config;
 });
 
-export function sdkClient<TResponse>(
+export async function sdkClient<TResponse>(
   config: AxiosRequestConfig,
-): Promise<AxiosResponse<TResponse>> {
-  return sdkAxios.request<TResponse>(config);
+): Promise<TResponse> {
+  const response = await sdkAxios.request<TResponse>(config);
+  return response.data;
 }
