@@ -35,8 +35,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PJServiceProvider, usePJService } from "@/contexts/PJServiceContext";
-import type { PJBankAccount } from "@/services/pj";
+import { PJFiltersProvider, usePJFilters } from "@/contexts/PJFiltersContext";
+import { PJServiceProvider } from "@/contexts/PJServiceContext";
+import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
 
 type PJPageProps = {
   clientId: string | null;
@@ -70,11 +71,15 @@ function Router() {
 }
 
 function AuthenticatedApp() {
-  const [selectedClient, setSelectedClient] = useState<string | null>(null);
-  const [selectedBankAccountId, setSelectedBankAccountId] = useState<string | null>(null);
   const [newClientDialogOpen, setNewClientDialogOpen] = useState(false);
   const { user } = useAuth();
-  const pjService = usePJService();
+  const {
+    clientId,
+    setClientId,
+    selectedAccountId,
+    setSelectedAccountId,
+    allAccountsOption,
+  } = usePJFilters();
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
   });
@@ -94,69 +99,58 @@ function AuthenticatedApp() {
 
   useEffect(() => {
     if (!filteredClients.length) {
-      setSelectedClient(null);
+      if (clientId !== null) {
+        setClientId(null);
+      }
       return;
     }
 
-    if (!selectedClient || !filteredClients.some((client) => client.clientId === selectedClient)) {
-      setSelectedClient(filteredClients[0].clientId);
+    if (!clientId || !filteredClients.some((client) => client.clientId === clientId)) {
+      setClientId(filteredClients[0].clientId);
     }
-  }, [filteredClients, selectedClient]);
+  }, [filteredClients, clientId, setClientId]);
 
-  const currentClient = filteredClients.find((c) => c.clientId === selectedClient) ?? null;
+  const currentClient = filteredClients.find((c) => c.clientId === clientId) ?? null;
   const isPJClient = currentClient?.type === "PJ" || currentClient?.type === "BOTH";
 
-  const {
-    data: bankAccounts = [],
-    isLoading: isLoadingBankAccounts,
-  } = useQuery<PJBankAccount[]>({
-    queryKey: ["pj:bank-accounts", { clientId: selectedClient }],
-    enabled: isPJClient && !!selectedClient,
-    queryFn: () =>
-      pjService.listBankAccounts({
-        clientId: selectedClient!,
-      }),
+  const { options: bankAccountOptions, isLoading: isLoadingBankAccounts } = usePJBankAccounts({
+    clientId,
+    enabled: isPJClient,
   });
-
-  const availableBankAccounts = useMemo(() => {
-    if (!isPJClient) {
-      return [] as PJBankAccount[];
-    }
-    return bankAccounts;
-  }, [bankAccounts, isPJClient]);
 
   const selectedBankAccount = useMemo(() => {
     return (
-      availableBankAccounts.find((account) => account.id === selectedBankAccountId) ?? null
+      bankAccountOptions.find((account) => account.id === selectedAccountId) ?? null
     );
-  }, [availableBankAccounts, selectedBankAccountId]);
-
-  useEffect(() => {
-    setSelectedBankAccountId(null);
-  }, [selectedClient]);
+  }, [bankAccountOptions, selectedAccountId]);
 
   useEffect(() => {
     if (!isPJClient) {
-      setSelectedBankAccountId(null);
+      setSelectedAccountId(null);
       return;
     }
 
-    if (!availableBankAccounts.length) {
-      setSelectedBankAccountId(null);
+    if (!bankAccountOptions.length) {
+      setSelectedAccountId(null);
       return;
     }
 
-    setSelectedBankAccountId((current) => {
-      if (
-        current &&
-        availableBankAccounts.some((account) => account.id === current)
-      ) {
+    setSelectedAccountId((current) => {
+      if (current && bankAccountOptions.some((account) => account.id === current)) {
         return current;
       }
 
-      return availableBankAccounts[0].id;
+      const aggregateOption = bankAccountOptions.find(
+        (account) => account.id === allAccountsOption.id,
+      );
+
+      if (aggregateOption) {
+        return aggregateOption.id;
+      }
+
+      return bankAccountOptions[0].id;
     });
-  }, [availableBankAccounts, isPJClient]);
+  }, [allAccountsOption.id, bankAccountOptions, isPJClient, setSelectedAccountId]);
 
   return (
     <div className="flex h-screen w-full">
@@ -172,17 +166,17 @@ function AuthenticatedApp() {
           <div className="flex items-center gap-4">
             <ClientSelector
               clients={filteredClients}
-              selectedClient={selectedClient}
-              onSelectClient={setSelectedClient}
+              selectedClient={clientId}
+              onSelectClient={(nextClientId) => setClientId(nextClientId)}
               onNewClient={user?.role === "master" ? () => setNewClientDialogOpen(true) : undefined}
             />
             {isPJClient && (
               <div className="flex flex-col gap-1">
                 <span className="text-[0.65rem] uppercase text-muted-foreground">Conta PJ</span>
                 <Select
-                  value={selectedBankAccountId ?? undefined}
-                  onValueChange={setSelectedBankAccountId}
-                  disabled={isLoadingBankAccounts || !availableBankAccounts.length}
+                  value={selectedAccountId ?? undefined}
+                  onValueChange={setSelectedAccountId}
+                  disabled={isLoadingBankAccounts || !bankAccountOptions.length}
                 >
                   <SelectTrigger className="w-[260px] text-left" data-testid="select-bank-account">
                     <SelectValue placeholder="Selecione uma conta PJ">
@@ -190,15 +184,17 @@ function AuthenticatedApp() {
                         <div className="flex flex-col">
                           <span className="font-medium">{selectedBankAccount.bankName}</span>
                           <span className="text-xs text-muted-foreground">
-                            {selectedBankAccount.accountNumberMask}
+                            {selectedBankAccount.isAggregate
+                              ? selectedBankAccount.accountNumberMask
+                              : `${selectedBankAccount.accountType} • ${selectedBankAccount.accountNumberMask}`}
                           </span>
                         </div>
                       ) : null}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {availableBankAccounts.length ? (
-                      availableBankAccounts.map((account) => (
+                    {bankAccountOptions.length ? (
+                      bankAccountOptions.map((account) => (
                         <SelectItem
                           key={account.id}
                           value={account.id}
@@ -207,7 +203,9 @@ function AuthenticatedApp() {
                           <div className="flex flex-col">
                             <span className="font-medium">{account.bankName}</span>
                             <span className="text-xs text-muted-foreground">
-                              {account.accountType} • {account.accountNumberMask}
+                              {account.isAggregate
+                                ? account.accountNumberMask
+                                : `${account.accountType} • ${account.accountNumberMask}`}
                             </span>
                           </div>
                         </SelectItem>
@@ -229,32 +227,32 @@ function AuthenticatedApp() {
           <div className="max-w-7xl mx-auto">
             <Switch>
               <Route path="/">
-                <Dashboard clientId={selectedClient} />
+                <Dashboard clientId={clientId} />
               </Route>
               <Route path="/transacoes">
-                <Transacoes clientId={selectedClient} />
+                <Transacoes clientId={clientId} />
               </Route>
               <Route path="/investimentos">
-                <Investimentos clientId={selectedClient} />
+                <Investimentos clientId={clientId} />
               </Route>
               <Route path="/relatorios">
-                <Relatorios clientId={selectedClient} />
+                <Relatorios clientId={clientId} />
               </Route>
               <Route path="/open-finance">
                 <OpenFinancePage />
               </Route>
               <Route path="/configuracoes">
                 <Configuracoes
-                  clientId={selectedClient}
+                  clientId={clientId}
                   clientType={currentClient?.type || null}
                 />
               </Route>
               {pjRouteEntries.map(({ path, component: Component }) => (
                 <Route key={path} path={path}>
                   <Component
-                    clientId={selectedClient}
+                    clientId={clientId}
                     clientType={currentClient?.type || null}
-                    bankAccountId={selectedBankAccountId}
+                    bankAccountId={selectedAccountId}
                   />
                 </Route>
               ))}
@@ -272,7 +270,7 @@ function AuthenticatedApp() {
         <NewClientDialog
           open={newClientDialogOpen}
           onOpenChange={setNewClientDialogOpen}
-          onClientCreated={setSelectedClient}
+          onClientCreated={(newClientId) => setClientId(newClientId)}
         />
       )}
     </div>
@@ -287,18 +285,20 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <PJServiceProvider>
-        <AuthProvider>
-          <ThemeProvider defaultTheme="light">
-            <TooltipProvider>
-              <SidebarProvider style={style as React.CSSProperties}>
-                <Router />
-              </SidebarProvider>
-              <Toaster />
-            </TooltipProvider>
-          </ThemeProvider>
-        </AuthProvider>
-      </PJServiceProvider>
+      <PJFiltersProvider>
+        <PJServiceProvider>
+          <AuthProvider>
+            <ThemeProvider defaultTheme="light">
+              <TooltipProvider>
+                <SidebarProvider style={style as React.CSSProperties}>
+                  <Router />
+                </SidebarProvider>
+                <Toaster />
+              </TooltipProvider>
+            </ThemeProvider>
+          </AuthProvider>
+        </PJServiceProvider>
+      </PJFiltersProvider>
     </QueryClientProvider>
   );
 }
