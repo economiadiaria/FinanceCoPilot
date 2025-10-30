@@ -3,14 +3,22 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 
 import { authMiddleware } from "./middleware/auth";
-import { validateClientAccess } from "./middleware/scope";
 import {
   requireConsultantOrMaster,
   requireMasterForGlobalPlan,
-} from "./middleware/rbac";
-import { storage } from "./storage";
-import { recordAuditEvent } from "./security/audit";
+} from "./middleware/pj-plan-permissions";
 import { getLogger } from "./observability/logger";
+import { recordAuditEvent } from "./security/audit";
+import { storage } from "./storage";
+import {
+  assertNoCategoryCycle,
+  buildCategoryTree,
+  computeClientHierarchy,
+  computeGlobalHierarchy,
+  sanitizeClientCategory,
+  sanitizeGlobalCategory,
+  sortCategoriesByOrder,
+} from "./pj-category-service";
 import {
   pjClientCategoryCreateSchema,
   pjClientCategoryUpdateSchema,
@@ -19,26 +27,47 @@ import {
   pjPlanAuditEvents,
   type PjCategory,
 } from "@shared/schema";
-import {
-  assertNoCategoryCycle,
-  buildCategoryTree,
-  computeClientHierarchy,
-  computeGlobalHierarchy,
-  sanitizeClientCategory,
-  sanitizeGlobalCategory,
-} from "./pj-category-service";
 
-export function registerPjPlanRoutes(app: Express): void {
-  const globalPlanRouter = Router();
-  globalPlanRouter.use(authMiddleware, requireMasterForGlobalPlan);
+function shouldReturnTree(req: Request): boolean {
+  const raw = req.query.tree;
+  if (Array.isArray(raw)) {
+    return raw.some(value => String(value).toLowerCase() === "true");
+  }
+  if (typeof raw === "string") {
+    return raw.toLowerCase() === "true";
+  }
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  return false;
+}
 
-  globalPlanRouter.get("/", async (_req, res) => {
-    const categories = await storage.getPjCategories();
-    const tree = buildCategoryTree(categories, sanitizeGlobalCategory);
-    res.json({ type: "global", categories: tree });
+export function registerPjCategoryRoutes(app: Express): void {
+  const globalRouter = Router();
+  globalRouter.use(authMiddleware, (req, res, next) => {
+    requireMasterForGlobalPlan(req, res, next).catch(next);
   });
 
-  globalPlanRouter.post("/", async (req, res) => {
+  globalRouter.get("/", async (req, res) => {
+    const categories = await storage.getPjCategories();
+
+    if (shouldReturnTree(req)) {
+      const tree = buildCategoryTree(categories, sanitizeGlobalCategory);
+      res.json({ type: "global", categories: tree });
+      return;
+    }
+
+    const sanitized = sortCategoriesByOrder(categories).map(category => ({
+      ...sanitizeGlobalCategory(category),
+      children: [],
+    }));
+
+    res.json({ type: "global", categories: sanitized });
+  });
+
+  globalRouter.post("/", async (req, res) => {
+    const logger = getLogger(req);
+
     try {
       const payload = pjGlobalCategoryCreateSchema.parse(req.body);
       const now = new Date().toISOString();
@@ -84,14 +113,16 @@ export function registerPjPlanRoutes(app: Express): void {
       res.status(201).json({ category: sanitizedCategory });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      getLogger(req).error("Erro ao criar categoria global", {
-        event: "pj.plan.global.create",
-      }, error);
+      logger.error(
+        "Erro ao criar categoria global",
+        { event: "pj.categories.global.create" },
+        error,
+      );
       res.status(400).json({ error: message });
     }
   });
 
-  globalPlanRouter.patch("/:categoryId", async (req, res) => {
+  globalRouter.patch("/:categoryId", async (req, res) => {
     const logger = getLogger(req);
     const { categoryId } = req.params;
 
@@ -105,8 +136,8 @@ export function registerPjPlanRoutes(app: Express): void {
       }
 
       if (current.isCore) {
-        logger.warn("Tentativa de mutação em categoria global core bloqueada", {
-          event: "pj.plan.global.blocked",
+        logger.warn("Tentativa de alteração em categoria global núcleo", {
+          event: "pj.categories.global.blocked",
           userId: req.authUser?.userId,
           context: { categoryId },
         });
@@ -137,7 +168,7 @@ export function registerPjPlanRoutes(app: Express): void {
       };
 
       const merged = categories.map(category =>
-        category.id === categoryId ? updatedCategory : category
+        category.id === categoryId ? updatedCategory : category,
       );
 
       await storage.setPjCategories(merged);
@@ -159,15 +190,16 @@ export function registerPjPlanRoutes(app: Express): void {
       res.json({ category: sanitizedAfter });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      getLogger(req).error("Erro ao atualizar categoria global", {
-        event: "pj.plan.global.update_error",
-        context: { categoryId },
-      }, error);
+      logger.error(
+        "Erro ao atualizar categoria global",
+        { event: "pj.categories.global.update", context: { categoryId } },
+        error,
+      );
       res.status(400).json({ error: message });
     }
   });
 
-  globalPlanRouter.delete("/:categoryId", async (req, res) => {
+  globalRouter.delete("/:categoryId", async (req, res) => {
     const logger = getLogger(req);
     const { categoryId } = req.params;
 
@@ -179,8 +211,8 @@ export function registerPjPlanRoutes(app: Express): void {
     }
 
     if (current.isCore) {
-      logger.warn("Tentativa de remoção de categoria core bloqueada", {
-        event: "pj.plan.global.blocked",
+      logger.warn("Tentativa de remoção de categoria global núcleo", {
+        event: "pj.categories.global.blocked",
         userId: req.authUser?.userId,
         context: { categoryId },
       });
@@ -211,23 +243,38 @@ export function registerPjPlanRoutes(app: Express): void {
     res.status(204).send();
   });
 
-  app.use("/api/pj/plan/global", globalPlanRouter);
+  app.use("/api/pj/global-categories", globalRouter);
 
-  const clientPlanRouter = Router({ mergeParams: true });
-  clientPlanRouter.use(authMiddleware, validateClientAccess, requireConsultantOrMaster);
+  const clientRouter = Router({ mergeParams: true });
+  const ensureClientAccess = requireConsultantOrMaster(req => req.params.clientId);
+  clientRouter.use(authMiddleware, (req, res, next) => {
+    ensureClientAccess(req, res, next).catch(next);
+  });
 
-  clientPlanRouter.get("/", async (req, res) => {
+  clientRouter.get("/", async (req, res) => {
     const client = req.clientContext!;
     const categories = (await storage.getPjClientCategories(
       client.organizationId,
       client.clientId,
     )) as import("./storage").PjClientCategoryRecord[];
-    const tree = buildCategoryTree(categories, sanitizeClientCategory);
-    res.json({ type: "client", categories: tree });
+
+    if (shouldReturnTree(req)) {
+      const tree = buildCategoryTree(categories, sanitizeClientCategory);
+      res.json({ type: "client", categories: tree });
+      return;
+    }
+
+    const sanitized = sortCategoriesByOrder(categories).map(category => ({
+      ...sanitizeClientCategory(category),
+      children: [],
+    }));
+
+    res.json({ type: "client", categories: sanitized });
   });
 
-  clientPlanRouter.post("/", async (req, res) => {
+  clientRouter.post("/", async (req, res) => {
     const client = req.clientContext!;
+    const logger = getLogger(req);
 
     try {
       const payload = pjClientCategoryCreateSchema.parse(req.body);
@@ -241,7 +288,7 @@ export function registerPjPlanRoutes(app: Express): void {
       const { level, path } = computeClientHierarchy(categories, payload.parentId ?? null);
       const basePath = path ? `${path}.${id}` : id;
 
-      const category = {
+      const category: import("./storage").PjClientCategoryRecord = {
         id,
         orgId: client.organizationId,
         clientId: client.clientId,
@@ -255,7 +302,7 @@ export function registerPjPlanRoutes(app: Express): void {
         sortOrder: payload.sortOrder ?? (categories.length + 1) * 10,
         createdAt: now,
         updatedAt: now,
-      } satisfies import("./storage").PjClientCategoryRecord;
+      };
 
       await storage.setPjClientCategories(client.organizationId, client.clientId, [
         ...categories,
@@ -279,15 +326,16 @@ export function registerPjPlanRoutes(app: Express): void {
       res.status(201).json({ category: sanitizedCategory });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      getLogger(req).error("Erro ao criar categoria do cliente", {
-        event: "pj.plan.client.create",
-        clientId: req.clientContext?.clientId,
-      }, error);
+      logger.error(
+        "Erro ao criar categoria do cliente",
+        { event: "pj.categories.client.create", clientId: req.clientContext?.clientId },
+        error,
+      );
       res.status(400).json({ error: message });
     }
   });
 
-  clientPlanRouter.patch("/:categoryId", async (req: Request, res: Response) => {
+  clientRouter.patch("/:categoryId", async (req: Request, res: Response) => {
     const client = req.clientContext!;
     const { categoryId } = req.params;
     const logger = getLogger(req);
@@ -308,13 +356,15 @@ export function registerPjPlanRoutes(app: Express): void {
         const baseCategories = await storage.getPjCategories();
         const base = baseCategories.find(category => category.id === current.baseCategoryId);
         if (base?.isCore) {
-          logger.warn("Tentativa de mutação em categoria cliente núcleo bloqueada", {
-            event: "pj.plan.client.blocked",
+          logger.warn("Tentativa de alteração em categoria cliente núcleo", {
+            event: "pj.categories.client.blocked",
             clientId: client.clientId,
             userId: req.authUser?.userId,
             context: { categoryId },
           });
-          return res.status(403).json({ error: "Categorias núcleo não podem ser alteradas" });
+          return res
+            .status(403)
+            .json({ error: "Categorias núcleo não podem ser alteradas" });
         }
       }
 
@@ -343,7 +393,7 @@ export function registerPjPlanRoutes(app: Express): void {
       };
 
       const merged = categories.map(category =>
-        category.id === categoryId ? updatedCategory : category
+        category.id === categoryId ? updatedCategory : category,
       );
 
       await storage.setPjClientCategories(client.organizationId, client.clientId, merged);
@@ -366,16 +416,20 @@ export function registerPjPlanRoutes(app: Express): void {
       res.json({ category: sanitizedAfter });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      getLogger(req).error("Erro ao atualizar categoria do cliente", {
-        event: "pj.plan.client.update_error",
-        clientId: req.clientContext?.clientId,
-        context: { categoryId },
-      }, error);
+      logger.error(
+        "Erro ao atualizar categoria do cliente",
+        {
+          event: "pj.categories.client.update",
+          clientId: req.clientContext?.clientId,
+          context: { categoryId },
+        },
+        error,
+      );
       res.status(400).json({ error: message });
     }
   });
 
-  clientPlanRouter.delete("/:categoryId", async (req, res) => {
+  clientRouter.delete("/:categoryId", async (req, res) => {
     const client = req.clientContext!;
     const { categoryId } = req.params;
     const logger = getLogger(req);
@@ -394,13 +448,15 @@ export function registerPjPlanRoutes(app: Express): void {
       const baseCategories = await storage.getPjCategories();
       const base = baseCategories.find(category => category.id === current.baseCategoryId);
       if (base?.isCore) {
-        logger.warn("Tentativa de remoção de categoria cliente núcleo bloqueada", {
-          event: "pj.plan.client.blocked",
+        logger.warn("Tentativa de remoção de categoria cliente núcleo", {
+          event: "pj.categories.client.blocked",
           clientId: client.clientId,
           userId: req.authUser?.userId,
           context: { categoryId },
         });
-        return res.status(403).json({ error: "Categorias núcleo não podem ser removidas" });
+        return res
+          .status(403)
+          .json({ error: "Categorias núcleo não podem ser removidas" });
       }
     }
 
@@ -429,5 +485,5 @@ export function registerPjPlanRoutes(app: Express): void {
     res.status(204).send();
   });
 
-  app.use("/api/pj/plan/client/:clientId", clientPlanRouter);
+  app.use("/api/pj/:clientId/categories", clientRouter);
 }

@@ -39,6 +39,7 @@ import {
   incrementOfxError,
 } from "./observability/metrics";
 import { recordOfxImportOutcome } from "./observability/alerts";
+import { registerPjCategoryRoutes } from "./pj-categories-routes";
 
 const ofxTransactionSchema = z.object({
   DTPOSTED: z.string().min(1, "Transação OFX sem DTPOSTED"),
@@ -234,6 +235,7 @@ function extractMaskedBankNameFromStatement(statement: any, fallbackBankName?: u
 }
 
 export function registerPJRoutes(app: Express) {
+  registerPjCategoryRoutes(app);
   // ===== VENDAS PJ =====
 
   /**
