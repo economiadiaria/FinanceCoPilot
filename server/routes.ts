@@ -37,7 +37,7 @@ import {
   evaluateReadinessDependencies,
   type DependencyStatus,
 } from "./observability/readiness";
-import { getDb } from "./db/client";
+import { getDb, type Database } from "./db/client";
 import { onboardPjClientCategories } from "./pj-client-category-onboarding";
 
 type SwaggerUiModule = typeof import("swagger-ui-express");
@@ -72,7 +72,16 @@ function sanitizeUser(user: User): UserProfile {
   return safeUser;
 }
 
-export async function registerRoutes(app: Express): Promise<Server> {
+type RouteDependencies = {
+  db?: Database;
+};
+
+export async function registerRoutes(
+  app: Express,
+  dependencies: RouteDependencies = {},
+): Promise<Server> {
+  const database = dependencies.db ?? getDb();
+
   app.get("/healthz", (_req, res) => {
     res.status(200).json({
       status: "ok",
@@ -384,8 +393,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
 
         try {
-          const db = getDb();
-          await db.transaction(async transaction => {
+          await database.transaction(async transaction => {
             await onboardPjClientCategories({
               orgId: organizationId,
               clientId: clientPayload.clientId,

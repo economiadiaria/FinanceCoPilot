@@ -15,7 +15,7 @@ import {
   type IStorage,
   type PjClientCategoryRecord,
 } from "../server/storage";
-import { setDbProvider, type Database } from "../server/db/client";
+import type { Database } from "../server/db/client";
 import { pjCategories, pjClientCategories } from "../server/db/schema";
 import { onboardPjClientCategories } from "../server/pj-client-category-onboarding";
 import type { User } from "@shared/schema";
@@ -146,22 +146,23 @@ function selectClientCategories(db: Database, clientId: string) {
     );
 }
 
-function stripCategoryExtras(category: PjClientCategoryRecord): PjClientCategoryRecord {
-  return {
-    ...category,
-    createdAt: new Date(category.createdAt).toISOString(),
-    updatedAt: new Date(category.updatedAt).toISOString(),
-  };
-}
+function stripCategoryExtras<T extends { createdAt: Date | string; updatedAt: Date | string }>(
+  category: T & { name?: unknown; description?: unknown; acceptsPostings?: unknown },
+): Omit<T, "name" | "description" | "acceptsPostings"> & { createdAt: string; updatedAt: string } {
+  const {
+    name: _name,
+    description: _description,
+    acceptsPostings: _acceptsPostings,
+    createdAt,
+    updatedAt,
+    ...rest
+  } = category;
 
-function normalizeDbCategory<T extends { createdAt: string; updatedAt: string }>(
-  category: T,
-): T {
   return {
-    ...category,
-    createdAt: new Date(category.createdAt).toISOString(),
-    updatedAt: new Date(category.updatedAt).toISOString(),
-  };
+    ...(rest as Omit<T, "name" | "description" | "acceptsPostings" | "createdAt" | "updatedAt">),
+    createdAt: new Date(createdAt as string | number | Date).toISOString(),
+    updatedAt: new Date(updatedAt as string | number | Date).toISOString(),
+  } as Omit<T, "name" | "description" | "acceptsPostings"> & { createdAt: string; updatedAt: string };
 }
 
 describe("PJ client category onboarding", () => {
@@ -175,7 +176,6 @@ const ctx: TestContext = {
     ctx.pg = new PGlite();
     await ensureTestTables(ctx.pg);
     ctx.db = drizzle(ctx.pg, { schema: { pjCategories, pjClientCategories } }) as unknown as Database;
-    setDbProvider(ctx.db);
 
     ctx.storage = new MemStorage();
     setStorageProvider(ctx.storage);
@@ -193,7 +193,7 @@ const ctx: TestContext = {
       }),
     );
 
-    ctx.appServer = await registerRoutes(app);
+    ctx.appServer = await registerRoutes(app, { db: ctx.db });
   });
 
   after(async () => {
@@ -202,7 +202,6 @@ const ctx: TestContext = {
         ctx.appServer!.close(err => (err ? reject(err) : resolve()));
       });
     }
-    setDbProvider(undefined);
     await ctx.pg.close();
   });
 
@@ -211,7 +210,6 @@ const ctx: TestContext = {
     setStorageProvider(ctx.storage);
     await seedStorage(ctx.storage);
     await resetDatabase(ctx.db);
-    setDbProvider(ctx.db);
   });
 
   it("clones base categories when creating a new PJ client", async () => {
@@ -251,7 +249,7 @@ const ctx: TestContext = {
     assert.equal(stored.length, inserted.length);
     assert.deepEqual(
       stored.map(stripCategoryExtras),
-      inserted.map(normalizeDbCategory),
+      inserted.map(stripCategoryExtras),
     );
   });
 
@@ -270,7 +268,6 @@ const ctx: TestContext = {
     ctx.storage = new MemStorage();
     setStorageProvider(ctx.storage);
     await seedStorage(ctx.storage);
-    setDbProvider(ctx.db);
 
     const agent = request.agent(ctx.appServer!);
     await agent
@@ -299,7 +296,7 @@ const ctx: TestContext = {
     assert.equal(stored.length, categories.length);
     assert.deepEqual(
       stored.map(stripCategoryExtras),
-      categories.map(normalizeDbCategory),
+      categories.map(stripCategoryExtras),
     );
   });
 
