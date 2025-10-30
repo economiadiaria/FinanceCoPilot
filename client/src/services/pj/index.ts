@@ -309,6 +309,7 @@ export interface PJCostBreakdownNode extends WithRequestId {
   categoryId: string | null;
   categoryPath: string;
   level: number;
+  path: string[];
   group: string;
   acceptsPostings: boolean;
   sortOrder: number;
@@ -320,11 +321,15 @@ export interface PJCostBreakdownNode extends WithRequestId {
 export interface PJCostBreakdownGroup extends WithRequestId {
   key: string;
   label: string;
+  path: string[];
+  level: number;
   inflows: number;
   outflows: number;
   net: number;
   group: string;
+  acceptsPostings: false;
   items: PJCostBreakdownNode[];
+  children: PJCostBreakdownNode[];
 }
 
 export interface PJCostBreakdownResponse extends WithRequestId {
@@ -336,10 +341,68 @@ export interface PJCostBreakdownResponse extends WithRequestId {
     net: number;
   };
   groups: PJCostBreakdownGroup[];
+  tree: PJCostBreakdownGroup[];
   uncategorized: {
     total: number;
     count: number;
     items: PJUncategorisedExpenseItem[];
+  };
+}
+
+function cloneNodeWithMetadata(
+  node: PJCostBreakdownNode,
+  parentPath: string[],
+  defaultLevel: number,
+): PJCostBreakdownNode {
+  const path = node.path?.length ? [...node.path] : [...parentPath, node.key];
+  const level = typeof node.level === "number" ? node.level : defaultLevel;
+  const normalizedChildren = (node.children ?? [])
+    .map((child) => cloneNodeWithMetadata(child, path, level + 1))
+    .sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) {
+        return a.sortOrder - b.sortOrder;
+      }
+      return a.label.localeCompare(b.label);
+    });
+
+  return {
+    ...node,
+    path,
+    level,
+    children: normalizedChildren,
+  };
+}
+
+function normalizeGroup(group: PJCostBreakdownGroup): PJCostBreakdownGroup {
+  const path = group.path?.length ? [...group.path] : [group.key];
+  const normalizedChildren = (group.items ?? group.children ?? [])
+    .map((child) => cloneNodeWithMetadata(child, path, 1))
+    .sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) {
+        return a.sortOrder - b.sortOrder;
+      }
+      return a.label.localeCompare(b.label);
+    });
+
+  return {
+    ...group,
+    path,
+    level: typeof group.level === "number" ? group.level : 0,
+    acceptsPostings: false,
+    items: normalizedChildren,
+    children: normalizedChildren,
+  };
+}
+
+export function normalizeCostBreakdownResponse(
+  response: PJCostBreakdownResponse,
+): PJCostBreakdownResponse {
+  const normalizedGroups = response.groups.map((group) => normalizeGroup(group));
+
+  return {
+    ...response,
+    groups: normalizedGroups,
+    tree: response.tree?.length ? response.tree.map((group) => normalizeGroup(group)) : normalizedGroups,
   };
 }
 
@@ -871,7 +934,7 @@ const mockInsights: PJMonthlyInsightsResponse = {
   },
 };
 
-const mockCostBreakdown: PJCostBreakdownResponse = {
+const mockCostBreakdownRaw: PJCostBreakdownResponse = {
   month: "2024-05",
   availableMonths: ["2024-03", "2024-04", "2024-05"],
   totals: {
@@ -883,14 +946,18 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
     {
       key: "RECEITA",
       label: "Receitas",
+      path: [],
+      level: 0,
       inflows: 182000,
       outflows: 0,
       net: 182000,
       group: "RECEITA",
+      acceptsPostings: false,
       items: [
         {
           key: "demo.receita",
           label: "Receita",
+          path: [],
           inflows: 182000,
           outflows: 0,
           net: 182000,
@@ -906,6 +973,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.receita.ecommerce",
               label: "E-commerce",
+              path: [],
               inflows: 82000,
               outflows: 0,
               net: 82000,
@@ -922,6 +990,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.receita.marketplace",
               label: "Marketplace",
+              path: [],
               inflows: 52000,
               outflows: 0,
               net: 52000,
@@ -938,6 +1007,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.receita.b2b",
               label: "B2B",
+              path: [],
               inflows: 48000,
               outflows: 0,
               net: 48000,
@@ -954,18 +1024,23 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
           ],
         },
       ],
+      children: [],
     },
     {
       key: "GEA",
       label: "Despesas Gerais",
+      path: [],
+      level: 0,
       inflows: 0,
       outflows: 64000,
       net: -64000,
       group: "GEA",
+      acceptsPostings: false,
       items: [
         {
           key: "demo.gea",
           label: "Despesas Gerais",
+          path: [],
           inflows: 0,
           outflows: 64000,
           net: -64000,
@@ -981,6 +1056,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.gea.folha",
               label: "Folha",
+              path: [],
               inflows: 0,
               outflows: 32000,
               net: -32000,
@@ -997,6 +1073,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.gea.operacional",
               label: "Operacional",
+              path: [],
               inflows: 0,
               outflows: 21000,
               net: -21000,
@@ -1013,6 +1090,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.gea.aluguel",
               label: "Aluguel",
+              path: [],
               inflows: 0,
               outflows: 11000,
               net: -11000,
@@ -1029,18 +1107,23 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
           ],
         },
       ],
+      children: [],
     },
     {
       key: "COMERCIAL_MKT",
       label: "Comercial e Marketing",
+      path: [],
+      level: 0,
       inflows: 0,
       outflows: 29000,
       net: -29000,
       group: "COMERCIAL_MKT",
+      acceptsPostings: false,
       items: [
         {
           key: "demo.marketing",
           label: "Marketing",
+          path: [],
           inflows: 0,
           outflows: 29000,
           net: -29000,
@@ -1056,6 +1139,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.marketing.digital",
               label: "Digital",
+              path: [],
               inflows: 0,
               outflows: 21000,
               net: -21000,
@@ -1071,6 +1155,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
                 {
                   key: "demo.marketing.digital.ads",
                   label: "Ads",
+                  path: [],
                   inflows: 0,
                   outflows: 12000,
                   net: -12000,
@@ -1089,6 +1174,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.marketing.crm",
               label: "CRM",
+              path: [],
               inflows: 0,
               outflows: 9000,
               net: -9000,
@@ -1105,6 +1191,7 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
             {
               key: "demo.marketing.eventos",
               label: "Eventos",
+              path: [],
               inflows: 0,
               outflows: 8000,
               net: -8000,
@@ -1121,14 +1208,18 @@ const mockCostBreakdown: PJCostBreakdownResponse = {
           ],
         },
       ],
+      children: [],
     },
   ],
+  tree: [],
   uncategorized: {
     total: 4200,
     count: 3,
     items: mockInsights.highlights.despesasNaoCategorizadas.items,
   },
 };
+
+const mockCostBreakdown = normalizeCostBreakdownResponse(mockCostBreakdownRaw);
 
 function resolveAfter<T>(value: T, delay = 120): Promise<T> {
   return new Promise((resolve) => {

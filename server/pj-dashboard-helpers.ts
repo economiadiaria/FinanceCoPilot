@@ -371,6 +371,7 @@ interface CostBreakdownNode {
   categoryId: string | null;
   categoryPath: string;
   level: number;
+  path: string[];
   group: LedgerGroup;
   acceptsPostings: boolean;
   sortOrder: number;
@@ -380,6 +381,7 @@ interface CostBreakdownNode {
 }
 
 function convertHierarchyToBreakdown(node: CategoryHierarchyNode): CostBreakdownNode {
+  const pathSegments = node.path.split(".").filter(Boolean);
   return {
     key: node.path,
     label: node.label,
@@ -389,6 +391,7 @@ function convertHierarchyToBreakdown(node: CategoryHierarchyNode): CostBreakdown
     categoryId: node.id,
     categoryPath: node.path,
     level: node.level,
+    path: pathSegments,
     group: node.group,
     acceptsPostings: node.acceptsPostings,
     sortOrder: node.sortOrder,
@@ -398,6 +401,26 @@ function convertHierarchyToBreakdown(node: CategoryHierarchyNode): CostBreakdown
       .filter((child) => child.inflows !== 0 || child.outflows !== 0 || child.children.length > 0)
       .map(convertHierarchyToBreakdown),
   };
+}
+
+function flattenLedgerGroupChildren(node: CostBreakdownNode): CostBreakdownNode[] {
+  const flattened: CostBreakdownNode[] = [];
+
+  for (const child of node.children) {
+    const normalizedChild: CostBreakdownNode = {
+      ...child,
+      children: flattenLedgerGroupChildren(child),
+    };
+
+    if (!child.acceptsPostings && child.level === 1) {
+      flattened.push(...normalizedChild.children);
+      continue;
+    }
+
+    flattened.push(normalizedChild);
+  }
+
+  return flattened;
 }
 
 export function buildCostBreakdown(
@@ -415,6 +438,7 @@ export function buildCostBreakdown(
       availableMonths,
       totals: { inflows: 0, outflows: 0, net: 0 },
       groups: [],
+      tree: [],
       uncategorized: { total: 0, count: 0, items: [] },
     } as const;
   }
@@ -429,6 +453,7 @@ export function buildCostBreakdown(
     net: number;
     group: LedgerGroup;
     items: CostBreakdownNode[];
+    tree: CostBreakdownNode;
   }> = [];
 
   for (const group of Object.keys(ledgerGroupLabels) as LedgerGroup[]) {
@@ -454,7 +479,8 @@ export function buildCostBreakdown(
       outflows: breakdownNode.outflows,
       net: breakdownNode.net,
       group,
-      items: breakdownNode.children,
+      items: flattenLedgerGroupChildren(breakdownNode),
+      tree: breakdownNode,
     });
   }
 
@@ -492,11 +518,26 @@ export function buildCostBreakdown(
       })),
   };
 
+  const breakdownGroups = groups.map((group) => ({
+    key: group.key,
+    label: group.label,
+    inflows: group.inflows,
+    outflows: group.outflows,
+    net: group.net,
+    group: group.group,
+    items: group.items,
+    path: [group.key],
+    level: 0,
+    acceptsPostings: false as const,
+    children: group.tree.children,
+  }));
+
   return {
     month: targetMonth,
     availableMonths,
     totals,
-    groups,
+    groups: breakdownGroups,
+    tree: breakdownGroups,
     uncategorized,
   };
 }
