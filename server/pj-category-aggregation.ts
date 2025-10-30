@@ -266,6 +266,13 @@ export function aggregateTransactionsByCategory(
       }
     }
 
+    if (targetPath) {
+      const definition = definitions.byPath.get(targetPath);
+      if (definition && !definition.acceptsPostings) {
+        targetPath = undefined;
+      }
+    }
+
     if (!targetPath) {
       const ledgerDefinition = definitions.ledgerByGroup.get(ledgerGroup);
       targetPath = ledgerDefinition?.path;
