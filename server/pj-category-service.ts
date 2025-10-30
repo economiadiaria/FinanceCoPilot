@@ -132,7 +132,9 @@ export function computeClientHierarchy(
   } as const;
 }
 
-export function assertNoCategoryCycle<T extends { id: string; parentId: string | null }>(
+export function assertNoCategoryCycle<
+  T extends { id: string; parentId: string | null | undefined },
+>(
   categories: readonly T[],
   categoryId: string,
   candidateParentId: string | null | undefined,

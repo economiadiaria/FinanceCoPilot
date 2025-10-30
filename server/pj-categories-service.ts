@@ -559,7 +559,7 @@ export class PjCategoriesService {
 
     const existing = await transaction.query.pjCategories.findFirst({
       where: and(...conditions),
-      columns: { id: pjCategories.id },
+      columns: { id: true },
     });
 
     if (existing) {
@@ -592,7 +592,7 @@ export class PjCategoriesService {
 
     const existing = await transaction.query.pjClientCategories.findFirst({
       where: and(...conditions),
-      columns: { id: pjClientCategories.id },
+      columns: { id: true },
     });
 
     if (existing) {
@@ -614,7 +614,7 @@ export class PjCategoriesService {
         ? eq(pjCategories.parentId, parentId)
         : isNull(pjCategories.parentId),
       orderBy: [desc(pjCategories.sortOrder)],
-      columns: { sortOrder: pjCategories.sortOrder },
+      columns: { sortOrder: true },
     });
 
     return (lastSibling?.sortOrder ?? 0) + 10;
@@ -644,7 +644,7 @@ export class PjCategoriesService {
     const lastSibling = await transaction.query.pjClientCategories.findFirst({
       where: and(...conditions),
       orderBy: [desc(pjClientCategories.sortOrder)],
-      columns: { sortOrder: pjClientCategories.sortOrder },
+      columns: { sortOrder: true },
     });
 
     return (lastSibling?.sortOrder ?? 0) + 10;
@@ -655,7 +655,7 @@ export class PjCategoriesService {
     categoryId: string,
   ): Promise<boolean> {
     const child = await executor.query.pjCategories.findFirst({
-      columns: { id: pjCategories.id },
+      columns: { id: true },
       where: eq(pjCategories.parentId, categoryId),
     });
     return Boolean(child);
@@ -667,7 +667,7 @@ export class PjCategoriesService {
     categoryId: string,
   ): Promise<boolean> {
     const child = await executor.query.pjClientCategories.findFirst({
-      columns: { id: pjClientCategories.id },
+      columns: { id: true },
       where: and(
         eq(pjClientCategories.orgId, scope.orgId),
         eq(pjClientCategories.clientId, scope.clientId),

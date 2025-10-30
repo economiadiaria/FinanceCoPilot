@@ -216,7 +216,7 @@ function normalizeDailyNetFlows(entries: unknown): DailyNetFlowEntry[] | undefin
   return normalized;
 }
 
-function serializeCategoryNode(node: CategoryHierarchyNode) {
+function serializeCategoryNode(node: CategoryHierarchyNode): CategoryHierarchyNode {
   return {
     id: node.id,
     label: node.label,

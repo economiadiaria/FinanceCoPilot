@@ -12,7 +12,7 @@ import {
   type SummaryResponse,
 } from "@financecopilot/pj-banking-sdk";
 import { getApiHeaders } from "@/lib/api";
-import { attachRequestId, logRequestId } from "@/lib/requestId";
+import { logRequestId, type RequestIdentifier } from "@/lib/requestId";
 import { mockBankAccounts } from "./mockData";
 
 function headersInitToRecord(headers: HeadersInit): Record<string, string> {
@@ -78,7 +78,32 @@ function toIsoDate(value?: string): string | undefined {
   return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
-export interface PJBankAccount {
+function withRequestId<T>(value: T, requestId: RequestIdentifier): T {
+  if (!requestId) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => withRequestId(item, requestId)) as unknown as T;
+  }
+
+  if (value !== null && typeof value === "object") {
+    const base = value as Record<string, unknown>;
+    const clonedEntries = Object.fromEntries(
+      Object.entries(base).map(([key, nested]) => [key, withRequestId(nested, requestId)]),
+    );
+
+    return { ...clonedEntries, requestId } as T;
+  }
+
+  return value;
+}
+
+export interface WithRequestId {
+  requestId?: string | null;
+}
+
+export interface PJBankAccount extends WithRequestId {
   id: string;
   clientIds?: string[];
   bankName: string;
@@ -88,7 +113,7 @@ export interface PJBankAccount {
   isActive: boolean;
 }
 
-export interface PJSummary {
+export interface PJSummary extends WithRequestId {
   month: string;
   receitas: number;
   despesas: number;
@@ -99,31 +124,31 @@ export interface PJSummary {
   margemLiquida: number;
 }
 
-export interface PJTrend {
+export interface PJTrend extends WithRequestId {
   month: string;
   receitas: number;
   despesas: number;
 }
 
-export interface PJRevenueSplitItem {
+export interface PJRevenueSplitItem extends WithRequestId {
   channel: string;
   amount: number;
 }
 
-export interface PJTopCostItem {
+export interface PJTopCostItem extends WithRequestId {
   category: string;
   item: string;
   total: number;
 }
 
-export interface PJSalesKpis {
+export interface PJSalesKpis extends WithRequestId {
   totalSales: number;
   totalRevenue: number;
   ticketMedio: number;
   topClientes: { customer: string; amount: number }[];
 }
 
-export interface PJSaleLeg {
+export interface PJSaleLeg extends WithRequestId {
   saleLegId: string;
   saleId: string;
   paymentMethod: string;
@@ -141,14 +166,14 @@ export interface PJSaleLeg {
   };
 }
 
-export interface PJCustomerDetails {
+export interface PJCustomerDetails extends WithRequestId {
   name: string;
   doc?: string;
   email?: string;
   telefone?: string;
 }
 
-export interface PJSale {
+export interface PJSale extends WithRequestId {
   saleId: string;
   date: string;
   invoiceNumber: string;
@@ -166,7 +191,7 @@ export interface PJSale {
   }>;
 }
 
-export interface PJBankTransaction {
+export interface PJBankTransaction extends WithRequestId {
   bankTxId: string;
   date: string;
   desc: string;
@@ -174,26 +199,28 @@ export interface PJBankTransaction {
   reconciled: boolean;
 }
 
-export interface PJBankTransactionsResponse {
-  items: PJBankTransaction[];
-  pagination: {
-    page: number;
-    limit: number;
-    totalItems: number;
-    totalPages: number;
-    hasNextPage: boolean;
-    hasPreviousPage: boolean;
-  };
+export interface PJBankTransactionsPagination extends WithRequestId {
+  page: number;
+  limit: number;
+  totalItems: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
 }
 
-export interface PJRevenueChannelHighlight {
+export interface PJBankTransactionsResponse extends WithRequestId {
+  items: PJBankTransaction[];
+  pagination: PJBankTransactionsPagination;
+}
+
+export interface PJRevenueChannelHighlight extends WithRequestId {
   channel: string;
   total: number;
   count: number;
   percentage: number;
 }
 
-export interface PJTopSaleHighlight {
+export interface PJTopSaleHighlight extends WithRequestId {
   saleId: string;
   date: string;
   amount: number;
@@ -202,7 +229,7 @@ export interface PJTopSaleHighlight {
   channel: string;
 }
 
-export interface PJTopCostHighlight {
+export interface PJTopCostHighlight extends WithRequestId {
   bankTxId: string;
   date: string;
   desc: string;
@@ -215,14 +242,14 @@ export interface PJTopCostHighlight {
   categoryAcceptsPostings: boolean | null;
 }
 
-export interface PJUncategorisedExpenseItem {
+export interface PJUncategorisedExpenseItem extends WithRequestId {
   bankTxId: string;
   date: string;
   desc: string;
   amount: number;
 }
 
-export interface PJDashboardMonthlySummary {
+export interface PJDashboardMonthlySummary extends WithRequestId {
   faturamento: number;
   receita: number;
   despesas: number;
@@ -241,7 +268,7 @@ export interface PJDashboardMonthlySummary {
   outrasOut: number;
 }
 
-export interface PJMonthlyInsightsResponse {
+export interface PJMonthlyInsightsResponse extends WithRequestId {
   month: string | null;
   availableMonths: string[];
   summary: PJDashboardMonthlySummary;
@@ -273,7 +300,7 @@ export interface PJMonthlyInsightsResponse {
   };
 }
 
-export interface PJCostBreakdownNode {
+export interface PJCostBreakdownNode extends WithRequestId {
   key: string;
   label: string;
   inflows: number;
@@ -290,7 +317,7 @@ export interface PJCostBreakdownNode {
   children: PJCostBreakdownNode[];
 }
 
-export interface PJCostBreakdownGroup {
+export interface PJCostBreakdownGroup extends WithRequestId {
   key: string;
   label: string;
   inflows: number;
@@ -300,7 +327,7 @@ export interface PJCostBreakdownGroup {
   items: PJCostBreakdownNode[];
 }
 
-export interface PJCostBreakdownResponse {
+export interface PJCostBreakdownResponse extends WithRequestId {
   month: string | null;
   availableMonths: string[];
   totals: {
@@ -343,7 +370,7 @@ export interface PJPeriodParams {
 }
 
 export interface PJService {
-  listBankAccounts(params?: { clientId?: string | null }): Promise<PJBankAccount[]>;
+  listBankAccounts(params: { clientId: string }): Promise<PJBankAccount[]>;
   getSummary(params: PJSummaryParams): Promise<PJSummary>;
   getTrends(params: PJPeriodParams): Promise<{ trends: PJTrend[] }>;
   getRevenueSplit(params: PJPeriodParams): Promise<{ revenueSplit: PJRevenueSplitItem[] }>;
@@ -429,8 +456,15 @@ function mapBankTransactionsResponse(
   };
 }
 
-export async function getAccounts(): Promise<PJBankAccount[]> {
-  const response = await pjBankingApi.apiPjAccountsGet();
+export async function getAccounts(params: { clientId: string }): Promise<PJBankAccount[]> {
+  const { clientId } = params;
+  if (!clientId) {
+    throw new Error("clientId is required to list PJ bank accounts");
+  }
+
+  const response = await pjBankingApi.apiPjAccountsGet({
+    params: { clientId },
+  });
   const requestId =
     (response.headers?.["x-request-id"] as string | undefined) ??
     (response.headers?.["X-Request-Id"] as string | undefined) ??
@@ -444,7 +478,7 @@ export async function getAccounts(): Promise<PJBankAccount[]> {
   );
 
   const accounts = mapAccountsResponseToPJAccounts(response.data);
-  return attachRequestId(accounts, requestId);
+  return withRequestId(accounts, requestId);
 }
 
 export async function getSummary(params: PJSummaryParams): Promise<PJSummary> {
@@ -469,7 +503,7 @@ export async function getSummary(params: PJSummaryParams): Promise<PJSummary> {
   );
 
   const summary = mapSummaryResponseToPJSummary(response.data, params);
-  return attachRequestId(summary, requestId);
+  return withRequestId(summary, requestId);
 }
 
 export async function getTransactions(
@@ -499,8 +533,62 @@ export async function getTransactions(
   );
 
   const transactions = mapBankTransactionsResponse(response.data);
-  return attachRequestId(transactions, requestId);
+  return withRequestId(transactions, requestId);
 }
+
+function createNotImplementedError(method: keyof PJService): Error {
+  return new Error(`PJ API endpoint for ${method} is not implemented yet.`);
+}
+
+export function createApiPJService(): PJService {
+  return {
+    listBankAccounts: (params) => getAccounts(params),
+    getSummary: (params) => getSummary(params),
+    getTrends: async (params) => {
+      void params;
+      throw createNotImplementedError("getTrends");
+    },
+    getRevenueSplit: async (params) => {
+      void params;
+      throw createNotImplementedError("getRevenueSplit");
+    },
+    getTopCosts: async (params) => {
+      void params;
+      throw createNotImplementedError("getTopCosts");
+    },
+    getSalesKpis: async (params) => {
+      void params;
+      throw createNotImplementedError("getSalesKpis");
+    },
+    getSales: async (params) => {
+      void params;
+      throw createNotImplementedError("getSales");
+    },
+    getSalesLegs: async (params) => {
+      void params;
+      throw createNotImplementedError("getSalesLegs");
+    },
+    getBankTransactions: (params) => getTransactions(params),
+    importSalesCsv: async (params) => {
+      void params;
+      throw createNotImplementedError("importSalesCsv");
+    },
+    importBankStatement: async (params) => {
+      void params;
+      throw createNotImplementedError("importBankStatement");
+    },
+    getMonthlyInsights: async (params) => {
+      void params;
+      throw createNotImplementedError("getMonthlyInsights");
+    },
+    getCostBreakdown: async (params) => {
+      void params;
+      throw createNotImplementedError("getCostBreakdown");
+    },
+  };
+}
+
+export const apiPJService = createApiPJService();
 
 const mockSummary: PJSummary = {
   month: "2024-05",
@@ -1048,86 +1136,97 @@ function resolveAfter<T>(value: T, delay = 120): Promise<T> {
   });
 }
 
+const MOCK_REQUEST_ID = "mock-request-id";
+
 export function createMockPJService(): PJService {
   return {
-    async listBankAccounts(params) {
-      const clientId = params?.clientId ?? null;
+    async listBankAccounts({ clientId }) {
       if (!clientId) {
-        return resolveAfter(mockBankAccounts);
+        throw new Error("clientId is required to list PJ bank accounts");
       }
-      return resolveAfter(
-        mockBankAccounts.filter((account) => {
-          if (!account.isActive) {
-            return false;
-          }
-          if (!account.clientIds?.length) {
-            return true;
-          }
-          return account.clientIds.includes(clientId);
-        }),
-      );
+
+      const filtered = mockBankAccounts.filter((account) => {
+        if (!account.isActive) {
+          return false;
+        }
+        if (!account.clientIds?.length) {
+          return true;
+        }
+        return account.clientIds.includes(clientId);
+      });
+
+      return resolveAfter(withRequestId(filtered, MOCK_REQUEST_ID));
     },
     async getSummary(params) {
       const month = params.from.slice(0, 7);
-      return resolveAfter({ ...mockSummary, month });
+      return resolveAfter(withRequestId({ ...mockSummary, month }, MOCK_REQUEST_ID));
     },
     async getTrends(params) {
       void params;
-      return resolveAfter({ trends: mockTrends });
+      return resolveAfter(withRequestId({ trends: mockTrends }, MOCK_REQUEST_ID));
     },
     async getRevenueSplit(params) {
       void params;
-      return resolveAfter({ revenueSplit: mockRevenueSplit });
+      return resolveAfter(withRequestId({ revenueSplit: mockRevenueSplit }, MOCK_REQUEST_ID));
     },
     async getTopCosts(params) {
       void params;
-      return resolveAfter({ topCosts: mockTopCosts });
+      return resolveAfter(withRequestId({ topCosts: mockTopCosts }, MOCK_REQUEST_ID));
     },
     async getSalesKpis(params) {
       void params;
-      return resolveAfter(mockSalesKpis);
+      return resolveAfter(withRequestId(mockSalesKpis, MOCK_REQUEST_ID));
     },
     async getSales(params) {
       void params;
-      return resolveAfter({ sales: mockSales });
+      return resolveAfter(withRequestId({ sales: mockSales }, MOCK_REQUEST_ID));
     },
     async getSalesLegs(params) {
       void params;
-      return resolveAfter({ legs: mockLegs });
+      return resolveAfter(withRequestId({ legs: mockLegs }, MOCK_REQUEST_ID));
     },
     async getBankTransactions(params) {
       void params;
-      return resolveAfter({
-        items: mockBankTransactions,
-        pagination: {
-          page: 1,
-          limit: 50,
-          totalItems: mockBankTransactions.length,
-          totalPages: 1,
-          hasNextPage: false,
-          hasPreviousPage: false,
-        },
-      });
+      return resolveAfter(
+        withRequestId(
+          {
+            items: mockBankTransactions,
+            pagination: {
+              page: 1,
+              limit: 50,
+              totalItems: mockBankTransactions.length,
+              totalPages: 1,
+              hasNextPage: false,
+              hasPreviousPage: false,
+            },
+          },
+          MOCK_REQUEST_ID,
+        ),
+      );
     },
     async importSalesCsv(params) {
       void params;
-      return resolveAfter({ imported: 12, skipped: 1 });
+      return resolveAfter(withRequestId({ imported: 12, skipped: 1 }, MOCK_REQUEST_ID));
     },
     async importBankStatement(params) {
       void params;
-      return resolveAfter({ imported: 32 });
+      return resolveAfter(withRequestId({ imported: 32 }, MOCK_REQUEST_ID));
     },
     async getMonthlyInsights(params) {
       if (params.month) {
-        return resolveAfter({ ...mockInsights, month: params.month });
+        return resolveAfter(
+          withRequestId({ ...mockInsights, month: params.month }, MOCK_REQUEST_ID),
+        );
       }
-      return resolveAfter(mockInsights);
+      return resolveAfter(withRequestId(mockInsights, MOCK_REQUEST_ID));
     },
     async getCostBreakdown(params) {
       if (params.month) {
-        return resolveAfter({ ...mockCostBreakdown, month: params.month });
+        return resolveAfter(
+          withRequestId({ ...mockCostBreakdown, month: params.month }, MOCK_REQUEST_ID),
+        );
       }
-      return resolveAfter(mockCostBreakdown);
+      return resolveAfter(withRequestId(mockCostBreakdown, MOCK_REQUEST_ID));
     },
   };
 }
