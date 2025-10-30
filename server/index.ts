@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 
+import { closeDb, initDb } from "./db/client";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic } from "./vite";
 import type { User } from "@shared/schema";
@@ -9,6 +10,26 @@ import { requestLoggingMiddleware, getLogger, logger } from "./observability/log
 import { refreshAllActiveAccountSnapshots } from "./pj-summary-aggregator";
 
 const app = express();
+
+initDb();
+
+const shutdownSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
+for (const signal of shutdownSignals) {
+  process.once(signal, () => {
+    logger.info("Shutdown signal received", {
+      event: "server.shutdown",
+      context: { signal },
+    });
+
+    closeDb()
+      .catch(error => {
+        logger.error("Failed to close database connection", undefined, error);
+      })
+      .finally(() => {
+        process.exit(0);
+      });
+  });
+}
 
 declare module 'http' {
   interface IncomingMessage {
