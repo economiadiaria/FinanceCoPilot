@@ -163,6 +163,371 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/pj/global-categories:
+    get:
+      tags: [PJ Banking]
+      summary: List PJ global categories
+      description: |
+        Returns the catalog of global PJ plan categories. When the `tree`
+        parameter is enabled the response is structured as a hierarchical tree
+        sorted by `sortOrder` and name. Otherwise the categories are returned
+        as a flat list with empty `children` arrays.
+      parameters:
+        - $ref: '#/components/parameters/TreeQuery'
+      responses:
+        '200':
+          description: Global categories successfully retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PjCategoryTreeResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Only master users may access the global catalog
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while fetching categories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [PJ Banking]
+      summary: Create a PJ global category
+      description: Creates a new global PJ plan category under the optional parent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PjGlobalCategoryCreate'
+      responses:
+        '201':
+          description: Global category successfully created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [category]
+                properties:
+                  category:
+                    $ref: '#/components/schemas/PjGlobalCategoryNode'
+        '400':
+          description: Invalid payload supplied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Only master users may manage the global catalog
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: A category with the same code already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while creating the category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/pj/global-categories/{categoryId}:
+    parameters:
+      - $ref: '#/components/parameters/CategoryIdPath'
+    patch:
+      tags: [PJ Banking]
+      summary: Update a PJ global category
+      description: Updates mutable fields of a global PJ category. Core categories cannot be changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PjGlobalCategoryUpdate'
+      responses:
+        '200':
+          description: Category successfully updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [category]
+                properties:
+                  category:
+                    $ref: '#/components/schemas/PjGlobalCategoryNode'
+        '400':
+          description: Invalid payload or hierarchy change would create a cycle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Core categories cannot be edited or the user lacks permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Category not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while updating the category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [PJ Banking]
+      summary: Delete a PJ global category
+      description: Removes a non-core global category without children.
+      responses:
+        '204':
+          description: Category successfully removed
+        '400':
+          description: Category still has dependent children
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Core categories cannot be removed or the user lacks permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Category not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while deleting the category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/pj/{clientId}/categories:
+    parameters:
+      - $ref: '#/components/parameters/ClientIdPath'
+    get:
+      tags: [PJ Banking]
+      summary: List PJ client categories
+      description: |
+        Returns the PJ client categories associated with the given client. When
+        `tree=true` the response is structured as a hierarchical tree sorted by
+        `sortOrder` and name, otherwise the categories are returned as a flat
+        list with empty `children` arrays.
+      parameters:
+        - $ref: '#/components/parameters/TreeQuery'
+      responses:
+        '200':
+          description: Client categories successfully retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PjCategoryTreeResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: User is not allowed to access the client categories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Client not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while fetching categories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [PJ Banking]
+      summary: Create a PJ client category
+      description: Creates a new PJ client category optionally linked to a base global category.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PjClientCategoryCreate'
+      responses:
+        '201':
+          description: Client category successfully created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [category]
+                properties:
+                  category:
+                    $ref: '#/components/schemas/PjClientCategoryNode'
+        '400':
+          description: Invalid payload supplied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: User is not allowed to manage the client categories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Client not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while creating the category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/pj/{clientId}/categories/{categoryId}:
+    parameters:
+      - $ref: '#/components/parameters/ClientIdPath'
+      - $ref: '#/components/parameters/CategoryIdPath'
+    patch:
+      tags: [PJ Banking]
+      summary: Update a PJ client category
+      description: Updates mutable fields of a client category. Categories linked to core global categories cannot be changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PjClientCategoryUpdate'
+      responses:
+        '200':
+          description: Client category successfully updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [category]
+                properties:
+                  category:
+                    $ref: '#/components/schemas/PjClientCategoryNode'
+        '400':
+          description: Invalid payload or hierarchy change would create a cycle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Category linked to a core template or user lacks permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Category or client not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while updating the category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [PJ Banking]
+      summary: Delete a PJ client category
+      description: Removes a non-core PJ client category that has no children.
+      responses:
+        '204':
+          description: Client category successfully removed
+        '400':
+          description: Category still has dependent children
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Category linked to a core template or user lacks permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Category or client not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected error while deleting the category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   parameters:
     ClientIdQuery:
@@ -223,6 +588,30 @@ components:
         type: string
         enum: [asc, desc]
         default: desc
+    TreeQuery:
+      name: tree
+      in: query
+      required: false
+      description: When set to true returns categories structured as a hierarchy
+      schema:
+        type: boolean
+        default: false
+    ClientIdPath:
+      name: clientId
+      in: path
+      required: true
+      description: Unique identifier for the PJ client
+      schema:
+        type: string
+        minLength: 1
+    CategoryIdPath:
+      name: categoryId
+      in: path
+      required: true
+      description: Unique identifier of the category being manipulated
+      schema:
+        type: string
+        minLength: 1
   schemas:
     ErrorResponse:
       type: object
@@ -501,3 +890,157 @@ components:
             generatedAt:
               type: string
               format: date-time
+    PjCategoryTreeResponse:
+      type: object
+      required: [type, categories]
+      properties:
+        type:
+          type: string
+          enum: [global, client]
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/PjCategoryTreeNode'
+    PjCategoryTreeNode:
+      type: object
+      required:
+        - id
+        - name
+        - parentId
+        - acceptsPostings
+        - level
+        - path
+        - sortOrder
+        - children
+        - type
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        parentId:
+          type: string
+          nullable: true
+        acceptsPostings:
+          type: boolean
+        level:
+          type: integer
+        path:
+          type: string
+        sortOrder:
+          type: integer
+        type:
+          type: string
+          enum: [global, client]
+        code:
+          type: string
+          nullable: true
+        isCore:
+          type: boolean
+          nullable: true
+        baseCategoryId:
+          type: string
+          nullable: true
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/PjCategoryTreeNode'
+    PjGlobalCategoryNode:
+      allOf:
+        - $ref: '#/components/schemas/PjCategoryTreeNode'
+        - type: object
+          properties:
+            type:
+              type: string
+              enum: [global]
+            code:
+              type: string
+              nullable: false
+            isCore:
+              type: boolean
+    PjClientCategoryNode:
+      allOf:
+        - $ref: '#/components/schemas/PjCategoryTreeNode'
+        - type: object
+          properties:
+            type:
+              type: string
+              enum: [client]
+            baseCategoryId:
+              type: string
+              nullable: true
+    PjGlobalCategoryCreate:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          nullable: true
+        parentId:
+          type: string
+          nullable: true
+        acceptsPostings:
+          type: boolean
+        sortOrder:
+          type: integer
+    PjGlobalCategoryUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          nullable: true
+        parentId:
+          type: string
+          nullable: true
+        acceptsPostings:
+          type: boolean
+        sortOrder:
+          type: integer
+    PjClientCategoryCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          nullable: true
+        parentId:
+          type: string
+          nullable: true
+        baseCategoryId:
+          type: string
+          nullable: true
+        acceptsPostings:
+          type: boolean
+        sortOrder:
+          type: integer
+    PjClientCategoryUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          nullable: true
+        parentId:
+          type: string
+          nullable: true
+        acceptsPostings:
+          type: boolean
+        sortOrder:
+          type: integer
