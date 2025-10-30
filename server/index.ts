@@ -1,6 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
-import cron from "node-cron";
 
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic } from "./vite";
@@ -80,7 +79,7 @@ app.use((req, res, next) => {
 (async () => {
   const server = await registerRoutes(app);
 
-  cron.schedule("0 * * * *", async () => {
+  const runScheduledSnapshotRefresh = async () => {
     const jobLogger = logger.child({ event: "pj.snapshot.scheduler" });
     jobLogger.info("Scheduled PJ snapshot refresh started");
     try {
@@ -89,7 +88,22 @@ app.use((req, res, next) => {
     } catch (error) {
       jobLogger.error("Scheduled PJ snapshot refresh failed", undefined, error);
     }
-  });
+  };
+
+  const scheduleHourlySnapshotRefresh = () => {
+    const now = new Date();
+    const nextHour = new Date(now);
+    nextHour.setMinutes(0, 0, 0);
+    nextHour.setHours(nextHour.getHours() + 1);
+    const delay = nextHour.getTime() - now.getTime();
+
+    setTimeout(async () => {
+      await runScheduledSnapshotRefresh();
+      scheduleHourlySnapshotRefresh();
+    }, delay);
+  };
+
+  scheduleHourlySnapshotRefresh();
 
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
