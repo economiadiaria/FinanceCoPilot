@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, Dirent } from "node:fs";
 import path from "node:path";
 
+function isTestFile(name: string): boolean {
+  return name.endsWith(".test.ts") || name.endsWith(".e2e.ts");
+}
+
 function collectTestFiles(root: string, fragment: string): string[] {
   const matches: string[] = [];
   const stack: string[] = [root];
@@ -17,7 +21,7 @@ function collectTestFiles(root: string, fragment: string): string[] {
         continue;
       }
 
-      if (!entry.name.endsWith(".test.ts")) {
+      if (!isTestFile(entry.name)) {
         continue;
       }
 
@@ -32,7 +36,7 @@ function collectTestFiles(root: string, fragment: string): string[] {
 
 function resolveTargets(args: string[]): string[] {
   if (args.length === 0) {
-    return ["tests/**/*.test.ts"];
+    return ["tests/**/*.test.ts", "tests/**/*.e2e.ts"];
   }
 
   const targets = new Set<string>();
@@ -53,9 +57,15 @@ function resolveTargets(args: string[]): string[] {
       }
     }
 
-    const direct = path.join("tests", `${trimmed}.test.ts`);
-    if (existsSync(direct)) {
-      targets.add(direct);
+    const directTest = path.join("tests", `${trimmed}.test.ts`);
+    if (existsSync(directTest)) {
+      targets.add(directTest);
+      continue;
+    }
+
+    const directE2E = path.join("tests", `${trimmed}.e2e.ts`);
+    if (existsSync(directE2E)) {
+      targets.add(directE2E);
       continue;
     }
 
