@@ -146,15 +146,11 @@ function selectClientCategories(db: Database, clientId: string) {
     );
 }
 
-function stripCategoryExtras(
-  category: PjClientCategoryRecord,
-): Omit<PjClientCategoryRecord, "name" | "description" | "acceptsPostings"> {
-  const { name: _name, description: _description, acceptsPostings: _acceptsPostings, ...rest } =
-    category;
+function stripCategoryExtras(category: PjClientCategoryRecord): PjClientCategoryRecord {
   return {
-    ...rest,
-    createdAt: new Date(rest.createdAt).toISOString(),
-    updatedAt: new Date(rest.updatedAt).toISOString(),
+    ...category,
+    createdAt: new Date(category.createdAt).toISOString(),
+    updatedAt: new Date(category.updatedAt).toISOString(),
   };
 }
 

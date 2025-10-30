@@ -104,6 +104,7 @@ function createEmptyCostBreakdown(): PJCostBreakdownResponse {
       net: 0,
     },
     groups: [],
+    tree: [],
     uncategorized: {
       total: 0,
       count: 0,

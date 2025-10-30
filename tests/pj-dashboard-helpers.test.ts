@@ -145,16 +145,23 @@ const bankTransactions: BankTransaction[] = [
     categorizedAs: { group: "RECEITA", auto: true },
   },
   {
-    bankTxId: "sep-gea",
-    date: "16/09/2023",
+    bankTxId: "oct-gea-utilities",
+    date: "10/10/2023",
     desc: "Energia escritório",
     amount: -100,
+    bankAccountId: "001",
     accountId: "001",
     fitid: "fit-10",
-    sourceHash: "hash-2",
+    sourceHash: "hash-1",
     linkedLegs: [],
     reconciled: false,
-    categorizedAs: { group: "GEA", subcategory: "Energia", auto: true },
+    categorizedAs: {
+      group: "GEA",
+      subcategory: "Energia",
+      auto: true,
+      categoryId: "cat-gea-utilities",
+      categoryPath: "client.cat-root-gea.cat-gea-utilities",
+    },
   },
 ];
 
@@ -309,10 +316,10 @@ test("buildMonthlyInsights aggregates PJ metrics with imported data", () => {
   assert.equal(insights.summary.faturamento, 2000);
   assert.equal(insights.summary.receita, 1200);
   assert.equal(insights.summary.lucroBruto, 1050);
-  assert.equal(insights.summary.lucroLiquido, 560);
+  assert.equal(insights.summary.lucroLiquido, 460);
   assert.equal(insights.summary.quantidadeVendas, 2);
   assert.equal(insights.summary.ticketMedio, 1000);
-  assert.equal(insights.summary.saldo, 560);
+  assert.equal(insights.summary.saldo, 460);
 
   assert.equal(insights.highlights.topVendas.length, 2);
   assert.equal(insights.highlights.topVendas[0]?.amount, 1500);
@@ -329,7 +336,7 @@ test("buildMonthlyInsights aggregates PJ metrics with imported data", () => {
   const lastIndex = insights.charts.faturamentoVsReceita.labels.length - 1;
   assert.equal(insights.charts.faturamentoVsReceita.labels[lastIndex], "2023-10");
   assert.equal(insights.charts.faturamentoVsReceita.faturamento[lastIndex], 2000);
-  assert.equal(insights.charts.lucroEMargem.lucroLiquido[lastIndex], 560);
+  assert.equal(insights.charts.lucroEMargem.lucroLiquido[lastIndex], 460);
   assert.ok(insights.charts.evolucaoCaixa.labels.length > 0);
 });
 
@@ -340,13 +347,13 @@ test("buildCostBreakdown consolidates categories and uncategorized expenses", ()
   const geaGroup = breakdown.groups.find((g) => g.key === "GEA");
   const marketingGroup = breakdown.groups.find((g) => g.key === "COMERCIAL_MKT");
 
-  assert.equal(geaGroup?.outflows, 300);
+  assert.equal(geaGroup?.outflows, 400);
   assert.equal(breakdown.groups.find((g) => g.key === "DEDUCOES_RECEITA")?.outflows, 150);
   assert.equal(marketingGroup?.outflows, 80);
   assert.equal(breakdown.groups.find((g) => g.key === "FINANCEIRAS")?.inflows, 50);
   assert.equal(breakdown.groups.find((g) => g.key === "FINANCEIRAS")?.outflows, 40);
   assert.equal(breakdown.uncategorized.total, 120);
-  assert.equal(breakdown.totals.net, 560);
+  assert.equal(breakdown.totals.net, 460);
 
   assert.ok(geaGroup);
   assert.equal(geaGroup?.items.length, 2);

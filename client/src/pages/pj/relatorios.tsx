@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MetricCard } from "@/components/metric-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -15,11 +14,15 @@ import { formatRequestId } from "@/lib/requestId";
 import {
   type PJMonthlyInsightsResponse,
   type PJCostBreakdownResponse,
+  type PJCostBreakdownGroup,
+  type PJCostBreakdownNode,
   type PJRevenueChannelHighlight,
   type PJTopSaleHighlight,
   type PJTopCostHighlight,
+  normalizeCostBreakdownResponse,
 } from "@/services/pj";
 import { BarChart3, FileBarChart2, Wallet, PieChart } from "lucide-react";
+import { CostBreakdownTree } from "./components/cost-breakdown-tree";
 
 interface RelatoriosPJProps {
   clientType: string | null;
@@ -204,8 +207,10 @@ function aggregateCostBreakdown(
     return null;
   }
 
-  const first = responses[0];
-  const totals = responses.reduce(
+  const normalized = responses.map((response) => normalizeCostBreakdownResponse(response));
+  const first = normalized[0];
+
+  const totals = normalized.reduce(
     (acc, response) => {
       acc.inflows += response.totals.inflows;
       acc.outflows += response.totals.outflows;
@@ -225,41 +230,134 @@ function aggregateCostBreakdown(
     },
   );
 
-  const groupsMap = new Map<
-    string,
-    {
-      key: string;
-      label: string;
-      group: string;
-      inflows: number;
-      outflows: number;
-      net: number;
-    }
-  >();
+  type AggregatedNodeInternal = PJCostBreakdownNode & {
+    childrenMap: Map<string, AggregatedNodeInternal>;
+  };
 
-  responses.forEach((response) => {
-    response.groups.forEach((group) => {
-      const current = groupsMap.get(group.key) ?? {
-        key: group.key,
-        label: group.label,
-        group: group.group,
-        inflows: 0,
-        outflows: 0,
-        net: 0,
+  type AggregatedGroupInternal = PJCostBreakdownGroup & {
+    childrenMap: Map<string, AggregatedNodeInternal>;
+  };
+
+  const groupsMap = new Map<string, AggregatedGroupInternal>();
+
+  const ensureGroup = (group: PJCostBreakdownGroup): AggregatedGroupInternal => {
+    const existing = groupsMap.get(group.key);
+    if (existing) {
+      existing.inflows += group.inflows;
+      existing.outflows += group.outflows;
+      existing.net += group.net;
+      return existing;
+    }
+
+    const created: AggregatedGroupInternal = {
+      ...group,
+      path: [...group.path],
+      level: 0,
+      acceptsPostings: false,
+      items: [],
+      children: [],
+      childrenMap: new Map<string, AggregatedNodeInternal>(),
+    };
+    groupsMap.set(group.key, created);
+    return created;
+  };
+
+  const mergeNode = (
+    map: Map<string, AggregatedNodeInternal>,
+    node: PJCostBreakdownNode,
+  ): AggregatedNodeInternal => {
+    const key = node.path.join("/");
+    const existing = map.get(key);
+    if (!existing) {
+      const created: AggregatedNodeInternal = {
+        ...node,
+        path: [...node.path],
+        children: [],
+        childrenMap: new Map<string, AggregatedNodeInternal>(),
       };
-      current.inflows += group.inflows;
-      current.outflows += group.outflows;
-      current.net += group.net;
-      groupsMap.set(group.key, current);
+      map.set(key, created);
+      node.children.forEach((child: PJCostBreakdownNode) => {
+        mergeNode(created.childrenMap, child);
+      });
+      return created;
+    }
+
+    existing.inflows += node.inflows;
+    existing.outflows += node.outflows;
+    existing.net += node.net;
+    existing.directInflows += node.directInflows;
+    existing.directOutflows += node.directOutflows;
+    existing.sortOrder = Math.min(existing.sortOrder, node.sortOrder);
+    if (!existing.categoryId) {
+      existing.categoryId = node.categoryId;
+    }
+    if (!existing.categoryPath) {
+      existing.categoryPath = node.categoryPath;
+    }
+
+    node.children.forEach((child: PJCostBreakdownNode) => {
+      mergeNode(existing.childrenMap, child);
+    });
+
+    return existing;
+  };
+
+  normalized.forEach((response) => {
+    response.tree.forEach((group) => {
+      const target = ensureGroup(group);
+      group.children.forEach((child) => {
+        mergeNode(target.childrenMap, child);
+      });
     });
   });
 
-  const groups = Array.from(groupsMap.values()).sort((a, b) => b.inflows - a.inflows);
+  const finalizeNodes = (
+    map: Map<string, AggregatedNodeInternal>,
+  ): PJCostBreakdownNode[] => {
+    const nodes = Array.from(map.values()).map((node) => {
+      const { childrenMap, ...rest } = node;
+      const children = finalizeNodes(childrenMap);
+      return {
+        ...rest,
+        children,
+      } satisfies PJCostBreakdownNode;
+    });
+
+    nodes.sort((a, b) => {
+      if (a.level !== b.level) {
+        return a.level - b.level;
+      }
+      if (a.sortOrder !== b.sortOrder) {
+        return a.sortOrder - b.sortOrder;
+      }
+      return a.label.localeCompare(b.label);
+    });
+
+    return nodes;
+  };
+
+  const groups = Array.from(groupsMap.values()).map((group) => {
+    const { childrenMap, ...rest } = group;
+    const children = finalizeNodes(childrenMap);
+    return {
+      ...rest,
+      items: children,
+      children,
+    } satisfies PJCostBreakdownGroup;
+  });
+
+  groups.sort((a, b) => {
+    if (b.inflows !== a.inflows) {
+      return b.inflows - a.inflows;
+    }
+    return a.label.localeCompare(b.label);
+  });
+
   const availableMonths = Array.from(
-    new Set(responses.flatMap((response) => response.availableMonths)),
+    new Set(normalized.flatMap((response) => response.availableMonths)),
   ).sort();
 
-  return {
+  return normalizeCostBreakdownResponse({
     ...first,
     availableMonths,
     totals: {
@@ -267,22 +365,15 @@ function aggregateCostBreakdown(
       outflows: totals.outflows,
       net: totals.net,
     },
-    groups: groups.map((group) => ({
-      key: group.key,
-      label: group.label,
-      group: group.group,
-      inflows: group.inflows,
-      outflows: group.outflows,
-      net: group.net,
-      items: [],
-    })),
+    groups,
+    tree: groups,
     uncategorized: {
       total: totals.uncategorizedTotal,
       count: totals.uncategorizedCount,
       items: totals.uncategorizedItems,
     },
     requestId: null,
-  };
+  });
 }
 
 export default function RelatoriosPJ({ clientType }: RelatoriosPJProps) {
@@ -424,6 +515,25 @@ export default function RelatoriosPJ({ clientType }: RelatoriosPJProps) {
 
   const insights = insightsQuery.data?.insights ?? null;
   const costBreakdown = costBreakdownQuery.data?.breakdown ?? null;
+  const normalizedCostBreakdown = useMemo(
+    () => (costBreakdown ? normalizeCostBreakdownResponse(costBreakdown) : null),
+    [costBreakdown],
+  );
+  const costBreakdownTree = normalizedCostBreakdown?.tree ?? [];
+  const defaultCostTreeExpansion = useMemo(() => {
+    if (!normalizedCostBreakdown) {
+      return [] as string[];
+    }
+
+    const expansions = new Set<string>();
+    costBreakdownTree.forEach((group) => {
+      expansions.add(group.path.join("/"));
+      group.children
+        .filter((child) => !child.acceptsPostings && child.children.length > 0)
+        .forEach((child) => expansions.add(child.path.join("/")));
+    });
+    return Array.from(expansions);
+  }, [costBreakdownTree, normalizedCostBreakdown]);
 
   const uniqueRequestIds = useMemo(() => {
     const ids = [
@@ -566,36 +676,16 @@ export default function RelatoriosPJ({ clientType }: RelatoriosPJProps) {
             </div>
           )}
 
-          {!costBreakdownQuery.isLoading && costBreakdown && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Grupo</TableHead>
-                  <TableHead className="text-right">Entradas</TableHead>
-                  <TableHead className="text-right">Saídas</TableHead>
-                  <TableHead className="text-right">Saldo</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {costBreakdown.groups.map((group) => (
-                  <TableRow key={group.key}>
-                    <TableCell className="font-medium">{group.label}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(group.inflows)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(group.outflows)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(group.net)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          {!costBreakdownQuery.isLoading && normalizedCostBreakdown && costBreakdownTree.length > 0 && (
+            <CostBreakdownTree
+              groups={costBreakdownTree}
+              totals={normalizedCostBreakdown.totals}
+              formatCurrency={formatCurrency}
+              defaultExpandedPaths={defaultCostTreeExpansion}
+            />
           )}
 
-          {!costBreakdownQuery.isLoading && !costBreakdown && (
+          {!costBreakdownQuery.isLoading && (!normalizedCostBreakdown || costBreakdownTree.length === 0) && (
             <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
               Nenhum dado de custos disponível para o período selecionado.
             </div>
