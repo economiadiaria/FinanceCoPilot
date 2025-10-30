@@ -21,7 +21,7 @@ export function getDb(): Database {
   }
 
   const client = neon(connectionString);
-  dbInstance = drizzle(client, { schema }) as Database;
+  dbInstance = drizzle(client as unknown as any, { schema }) as Database;
   return dbInstance;
 }
 

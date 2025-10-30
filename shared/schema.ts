@@ -194,6 +194,28 @@ export const authResponseSchema = z.object({
   user: userSchema.omit({ passwordHash: true }),
 });
 
+export const pjPlanAuditEvents = {
+  global: {
+    create: "pj.plan.global.create",
+    update: "pj.plan.global.update",
+    delete: "pj.plan.global.delete",
+  },
+  client: {
+    create: "pj.plan.client.create",
+    update: "pj.plan.client.update",
+    delete: "pj.plan.client.delete",
+  },
+} as const;
+
+const pjPlanAuditEventValues = [
+  pjPlanAuditEvents.global.create,
+  pjPlanAuditEvents.global.update,
+  pjPlanAuditEvents.global.delete,
+  pjPlanAuditEvents.client.create,
+  pjPlanAuditEvents.client.update,
+  pjPlanAuditEvents.client.delete,
+] as const;
+
 export const auditEventTypes = [
   "auth.login",
   "auth.logout",
@@ -207,8 +229,7 @@ export const auditEventTypes = [
   "pj.sale.reconcile",
   "pj.ofx.import",
   "pj.transaction.update",
-  "pj.plan.global.update",
-  "pj.plan.client.update",
+  ...pjPlanAuditEventValues,
   "policy.update",
   "report.generate",
   "lgpd.anonymize",
@@ -220,6 +241,13 @@ export const auditEventTypes = [
   "security.access_denied.pj_plan_global",
   "security.access_denied.pj_plan_client",
 ] as const;
+
+export type AuditEventType = (typeof auditEventTypes)[number];
+export type PjPlanAuditEventType = (typeof pjPlanAuditEventValues)[number];
+export type PjPlanAccessDeniedAuditEventType = Extract<
+  AuditEventType,
+  "security.access_denied.pj_plan_global" | "security.access_denied.pj_plan_client"
+>;
 
 export const auditLogEntrySchema = z.object({
   auditId: z.string(),
@@ -407,11 +435,68 @@ export const ledgerEntrySchema = z.object({
 export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 
 // PJ Categories
+export const pjCategoryTypes = ["global", "client"] as const;
+export type PjCategoryType = (typeof pjCategoryTypes)[number];
+
+const pjCategoryNodeBaseShape = {
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  parentId: z.string().nullable(),
+  acceptsPostings: z.boolean(),
+  level: z.number(),
+  path: z.string(),
+  sortOrder: z.number(),
+} as const;
+
+export const pjCategoryNodeSchema: z.ZodTypeAny = z.lazy(() =>
+  z.union([
+    z.object({
+      ...pjCategoryNodeBaseShape,
+      type: z.literal("global"),
+      code: z.string(),
+      isCore: z.boolean(),
+      children: z.array(pjCategoryNodeSchema).default([]),
+    }),
+    z.object({
+      ...pjCategoryNodeBaseShape,
+      type: z.literal("client"),
+      baseCategoryId: z.string().nullable(),
+      children: z.array(pjCategoryNodeSchema).default([]),
+    }),
+  ]),
+);
+
+export type PjCategoryNode = z.infer<typeof pjCategoryNodeSchema>;
+export type PjGlobalCategoryNode = Extract<PjCategoryNode, { type: "global" }>;
+export type PjClientCategoryNode = Extract<PjCategoryNode, { type: "client" }>;
+
+export const pjCategoryTreeResponseSchema = z.object({
+  type: z.enum(pjCategoryTypes),
+  categories: z.array(pjCategoryNodeSchema),
+});
+
+export const pjGlobalCategoryTreeResponseSchema = pjCategoryTreeResponseSchema.extend({
+  type: z.literal("global"),
+});
+
+export const pjClientCategoryTreeResponseSchema = pjCategoryTreeResponseSchema.extend({
+  type: z.literal("client"),
+});
+
+export type PjCategoryTreeResponse = z.infer<typeof pjCategoryTreeResponseSchema>;
+export type PjGlobalCategoryTreeResponse = z.infer<
+  typeof pjGlobalCategoryTreeResponseSchema
+>;
+export type PjClientCategoryTreeResponse = z.infer<
+  typeof pjClientCategoryTreeResponseSchema
+>;
+
 export const pjCategorySchema = z.object({
   id: z.string(),
   code: z.string(),
   name: z.string(),
-  description: z.string().optional(),
+  description: z.string().nullable().optional(),
   parentId: z.string().nullable().optional(),
   isCore: z.boolean().default(false),
   acceptsPostings: z.boolean().default(true),
@@ -429,7 +514,7 @@ export const pjClientCategorySchema = z.object({
   orgId: z.string(),
   clientId: z.string(),
   name: z.string(),
-  description: z.string().optional(),
+  description: z.string().nullable().optional(),
   parentId: z.string().nullable().optional(),
   baseCategoryId: z.string().nullable().optional(),
   acceptsPostings: z.boolean().default(true),
@@ -441,6 +526,45 @@ export const pjClientCategorySchema = z.object({
 });
 
 export type PjClientCategory = z.infer<typeof pjClientCategorySchema>;
+
+export const pjGlobalCategoryCreateSchema = z.object({
+  code: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  parentId: z.string().optional().nullable(),
+  acceptsPostings: z.boolean().optional(),
+  sortOrder: z.number().optional(),
+});
+
+export const pjGlobalCategoryUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  parentId: z.string().nullable().optional(),
+  acceptsPostings: z.boolean().optional(),
+  sortOrder: z.number().optional(),
+});
+
+export const pjClientCategoryCreateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  parentId: z.string().optional().nullable(),
+  acceptsPostings: z.boolean().optional(),
+  baseCategoryId: z.string().optional().nullable(),
+  sortOrder: z.number().optional(),
+});
+
+export const pjClientCategoryUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  parentId: z.string().nullable().optional(),
+  acceptsPostings: z.boolean().optional(),
+  sortOrder: z.number().optional(),
+});
+
+export type PjGlobalCategoryCreate = z.infer<typeof pjGlobalCategoryCreateSchema>;
+export type PjGlobalCategoryUpdate = z.infer<typeof pjGlobalCategoryUpdateSchema>;
+export type PjClientCategoryCreate = z.infer<typeof pjClientCategoryCreateSchema>;
+export type PjClientCategoryUpdate = z.infer<typeof pjClientCategoryUpdateSchema>;
 
 // Bank Transaction (PJ)
 export const bankTransactionSchema = z.object({
