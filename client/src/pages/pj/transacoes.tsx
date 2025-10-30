@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { FileSpreadsheet, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePJService } from "@/contexts/PJServiceContext";
-import { getTransactions, type PJSale, type PJBankTransactionsResponse } from "@/services/pj";
+import { type PJSale, type PJBankTransactionsResponse } from "@/services/pj";
 
 interface TransacoesPJProps {
   clientId: string | null;
@@ -62,7 +62,7 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
     queryKey: ["pj:bank-transactions", { clientId, bankAccountId }],
     enabled: Boolean(clientId && bankAccountId && isPJClient),
     queryFn: () =>
-      getTransactions({
+      pjService.getBankTransactions({
         clientId: clientId!,
         bankAccountId: bankAccountId!,
       }),

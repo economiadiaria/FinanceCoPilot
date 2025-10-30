@@ -150,7 +150,11 @@ export function registerPjCategoryRoutes(app: Express): void {
       let updatedPath = current.path;
 
       if (updates.parentId !== undefined) {
-        assertNoCategoryCycle(categories, categoryId, updates.parentId ?? null);
+        const ancestryView = categories.map(category => ({
+          id: category.id,
+          parentId: category.parentId ?? null,
+        }));
+        assertNoCategoryCycle(ancestryView, categoryId, updates.parentId ?? null);
         const { level, path } = computeGlobalHierarchy(categories, updates.parentId);
         updatedLevel = level;
         updatedPath = path ? `${path}.${current.code}` : current.code;
@@ -374,7 +378,11 @@ export function registerPjCategoryRoutes(app: Express): void {
       let updatedPath = current.path;
 
       if (updates.parentId !== undefined) {
-        assertNoCategoryCycle(categories, categoryId, updates.parentId ?? null);
+        const ancestryView = categories.map(category => ({
+          id: category.id,
+          parentId: category.parentId ?? null,
+        }));
+        assertNoCategoryCycle(ancestryView, categoryId, updates.parentId ?? null);
         const { level, path } = computeClientHierarchy(categories, updates.parentId);
         updatedLevel = level;
         const nodeId = current.id;

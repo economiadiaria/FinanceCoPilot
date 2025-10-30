@@ -51,7 +51,14 @@ type UnauthorizedBehavior = "returnNull" | "throw";
 type SdkQueryExecutor = (params: unknown) => Promise<unknown>;
 
 const pjBankingExecutors: Record<string, SdkQueryExecutor> = {
-  "/api/pj/accounts": async () => getAccounts(),
+  "/api/pj/accounts": async (params) => {
+    const { clientId } = (params ?? {}) as { clientId?: string };
+    if (!clientId) {
+      throw new Error("clientId is required to list PJ bank accounts");
+    }
+
+    return getAccounts({ clientId });
+  },
   "/api/pj/transactions": async (params) =>
     getTransactions((params ?? {}) as PJTransactionsParams),
   "/api/pj/summary": async (params) =>

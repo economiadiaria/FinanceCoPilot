@@ -8,7 +8,6 @@ import { useEffect, useState, useRef } from "react";
 import { Link } from "wouter";
 import { usePJService } from "@/contexts/PJServiceContext";
 import {
-  getSummary,
   type PJSummary,
   type PJTrend,
   type PJTopCostItem,
@@ -54,7 +53,7 @@ export default function DashboardPJ({ clientId, clientType, bankAccountId }: Das
     enabled: !!clientId && !!bankAccountId && isPJClient,
     queryFn: () => {
       const { from, to } = getMonthRange();
-      return getSummary({
+      return pjService.getSummary({
         clientId: clientId!,
         bankAccountId: bankAccountId!,
         from,

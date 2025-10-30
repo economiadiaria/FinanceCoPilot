@@ -9,7 +9,6 @@ import { Separator } from "@/components/ui/separator";
 import { TrendingUp, TrendingDown, Wallet, PieChart, FileBarChart } from "lucide-react";
 import { usePJService } from "@/contexts/PJServiceContext";
 import {
-  getSummary,
   type PJSummary,
   type PJTrend,
   type PJRevenueSplitItem,
@@ -53,7 +52,7 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
     queryKey: ["pj:summary", { clientId, bankAccountId, from, to }],
     enabled: Boolean(clientId && bankAccountId && isPJClient),
     queryFn: () =>
-      getSummary({
+      pjService.getSummary({
         clientId: clientId!,
         bankAccountId: bankAccountId!,
         from,
