@@ -21,6 +21,7 @@ import {
 } from "@shared/schema";
 import {
   assertNoCategoryCycle,
+  hasDuplicateCategoryName,
   buildCategoryTree,
   computeClientHierarchy,
   computeGlobalHierarchy,
@@ -46,6 +47,10 @@ export function registerPjPlanRoutes(app: Express): void {
 
       if (categories.some(category => category.code === payload.code)) {
         return res.status(409).json({ error: "Código de categoria já existe" });
+      }
+
+      if (hasDuplicateCategoryName(categories, payload.name)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
       }
 
       const { level, path } = computeGlobalHierarchy(categories, payload.parentId ?? null);
@@ -102,6 +107,10 @@ export function registerPjPlanRoutes(app: Express): void {
 
       if (!current) {
         return res.status(404).json({ error: "Categoria não encontrada" });
+      }
+
+      if (updates.name && hasDuplicateCategoryName(categories, updates.name, categoryId)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
       }
 
       if (current.isCore) {
@@ -245,6 +254,10 @@ export function registerPjPlanRoutes(app: Express): void {
       const { level, path } = computeClientHierarchy(categories, payload.parentId ?? null);
       const basePath = path ? `${path}.${id}` : id;
 
+      if (hasDuplicateCategoryName(categories, payload.name)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
+      }
+
       const category = {
         id,
         orgId: client.organizationId,
@@ -306,6 +319,10 @@ export function registerPjPlanRoutes(app: Express): void {
 
       if (!current) {
         return res.status(404).json({ error: "Categoria não encontrada" });
+      }
+
+      if (updates.name && hasDuplicateCategoryName(categories, updates.name, categoryId)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
       }
 
       if (current.baseCategoryId) {

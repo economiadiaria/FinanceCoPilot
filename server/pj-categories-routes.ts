@@ -12,6 +12,7 @@ import { recordAuditEvent } from "./security/audit";
 import { storage } from "./storage";
 import {
   assertNoCategoryCycle,
+  hasDuplicateCategoryName,
   buildCategoryTree,
   computeClientHierarchy,
   computeGlobalHierarchy,
@@ -77,6 +78,10 @@ export function registerPjCategoryRoutes(app: Express): void {
         return res.status(409).json({ error: "Código de categoria já existe" });
       }
 
+      if (hasDuplicateCategoryName(categories, payload.name)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
+      }
+
       const { level, path } = computeGlobalHierarchy(categories, payload.parentId ?? null);
       const basePath = path ? `${path}.${payload.code}` : payload.code;
 
@@ -133,6 +138,10 @@ export function registerPjCategoryRoutes(app: Express): void {
 
       if (!current) {
         return res.status(404).json({ error: "Categoria não encontrada" });
+      }
+
+      if (updates.name && hasDuplicateCategoryName(categories, updates.name, categoryId)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
       }
 
       if (current.isCore) {
@@ -292,6 +301,10 @@ export function registerPjCategoryRoutes(app: Express): void {
       const { level, path } = computeClientHierarchy(categories, payload.parentId ?? null);
       const basePath = path ? `${path}.${id}` : id;
 
+      if (hasDuplicateCategoryName(categories, payload.name)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
+      }
+
       const category: import("./storage").PjClientCategoryRecord = {
         id,
         orgId: client.organizationId,
@@ -354,6 +367,10 @@ export function registerPjCategoryRoutes(app: Express): void {
 
       if (!current) {
         return res.status(404).json({ error: "Categoria não encontrada" });
+      }
+
+      if (updates.name && hasDuplicateCategoryName(categories, updates.name, categoryId)) {
+        return res.status(409).json({ error: "Nome de categoria já existe" });
       }
 
       if (current.baseCategoryId) {
