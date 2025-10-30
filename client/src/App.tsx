@@ -38,11 +38,10 @@ import {
 import { PJFiltersProvider, usePJFilters } from "@/contexts/PJFiltersContext";
 import { PJServiceProvider } from "@/contexts/PJServiceContext";
 import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
+import { PJDateRangePicker } from "@/components/pj/pj-date-range-picker";
 
 type PJPageProps = {
-  clientId: string | null;
   clientType: string | null;
-  bankAccountId: string | null;
 };
 
 type PJRouteEntry = {
@@ -171,52 +170,55 @@ function AuthenticatedApp() {
               onNewClient={user?.role === "master" ? () => setNewClientDialogOpen(true) : undefined}
             />
             {isPJClient && (
-              <div className="flex flex-col gap-1">
-                <span className="text-[0.65rem] uppercase text-muted-foreground">Conta PJ</span>
-                <Select
-                  value={selectedAccountId ?? undefined}
-                  onValueChange={setSelectedAccountId}
-                  disabled={isLoadingBankAccounts || !bankAccountOptions.length}
-                >
-                  <SelectTrigger className="w-[260px] text-left" data-testid="select-bank-account">
-                    <SelectValue placeholder="Selecione uma conta PJ">
-                      {selectedBankAccount ? (
-                        <div className="flex flex-col">
-                          <span className="font-medium">{selectedBankAccount.bankName}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {selectedBankAccount.isAggregate
-                              ? selectedBankAccount.accountNumberMask
-                              : `${selectedBankAccount.accountType} • ${selectedBankAccount.accountNumberMask}`}
-                          </span>
-                        </div>
-                      ) : null}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {bankAccountOptions.length ? (
-                      bankAccountOptions.map((account) => (
-                        <SelectItem
-                          key={account.id}
-                          value={account.id}
-                          textValue={`${account.bankName} ${account.accountNumberMask}`}
-                        >
+              <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[0.65rem] uppercase text-muted-foreground">Conta PJ</span>
+                  <Select
+                    value={selectedAccountId ?? undefined}
+                    onValueChange={setSelectedAccountId}
+                    disabled={isLoadingBankAccounts || !bankAccountOptions.length}
+                  >
+                    <SelectTrigger className="w-[260px] text-left" data-testid="select-bank-account">
+                      <SelectValue placeholder="Selecione uma conta PJ">
+                        {selectedBankAccount ? (
                           <div className="flex flex-col">
-                            <span className="font-medium">{account.bankName}</span>
+                            <span className="font-medium">{selectedBankAccount.bankName}</span>
                             <span className="text-xs text-muted-foreground">
-                              {account.isAggregate
-                                ? account.accountNumberMask
-                                : `${account.accountType} • ${account.accountNumberMask}`}
+                              {selectedBankAccount.isAggregate
+                                ? selectedBankAccount.accountNumberMask
+                                : `${selectedBankAccount.accountType} • ${selectedBankAccount.accountNumberMask}`}
                             </span>
                           </div>
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <div className="px-3 py-2 text-sm text-muted-foreground">
-                        Nenhuma conta disponível
-                      </div>
-                    )}
-                  </SelectContent>
-                </Select>
+                        ) : null}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {bankAccountOptions.length ? (
+                        bankAccountOptions.map((account) => (
+                          <SelectItem
+                            key={account.id}
+                            value={account.id}
+                            textValue={`${account.bankName} ${account.accountNumberMask}`}
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium">{account.bankName}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {account.isAggregate
+                                  ? account.accountNumberMask
+                                  : `${account.accountType} • ${account.accountNumberMask}`}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <div className="px-3 py-2 text-sm text-muted-foreground">
+                          Nenhuma conta disponível
+                        </div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <PJDateRangePicker />
               </div>
             )}
             <ThemeToggle />
@@ -250,9 +252,7 @@ function AuthenticatedApp() {
               {pjRouteEntries.map(({ path, component: Component }) => (
                 <Route key={path} path={path}>
                   <Component
-                    clientId={clientId}
                     clientType={currentClient?.type || null}
-                    bankAccountId={selectedAccountId}
                   />
                 </Route>
               ))}

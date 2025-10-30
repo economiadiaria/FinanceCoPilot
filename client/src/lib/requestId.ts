@@ -4,7 +4,7 @@ function normalizeMethod(method: string | undefined): string {
   return method ? method.toUpperCase() : "GET";
 }
 
-function formatRequestId(requestId: RequestIdentifier): string {
+export function formatRequestId(requestId: RequestIdentifier): string {
   return requestId ?? "missing";
 }
 

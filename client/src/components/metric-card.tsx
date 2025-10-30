@@ -14,6 +14,7 @@ interface MetricCardProps {
 export function MetricCard({ title, value, change, icon, prefix = "R$", testId }: MetricCardProps) {
   const hasChange = change !== undefined && change !== 0;
   const isPositive = change && change > 0;
+  const displayValue = prefix ? `${prefix} ${value}` : value;
 
   return (
     <Card className="min-h-32" data-testid={testId}>
@@ -25,7 +26,7 @@ export function MetricCard({ title, value, change, icon, prefix = "R$", testId }
       </CardHeader>
       <CardContent>
         <div className="text-3xl font-bold tabular-nums" data-testid={`${testId}-value`}>
-          {prefix} {value}
+          {displayValue}
         </div>
         {hasChange && (
           <div className={cn(
