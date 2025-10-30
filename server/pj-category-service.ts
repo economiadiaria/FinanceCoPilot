@@ -49,6 +49,22 @@ export function sanitizeClientCategory(
   };
 }
 
+export function normalizeCategoryName(name: string): string {
+  return name.trim().toLocaleLowerCase("pt-BR");
+}
+
+export function hasDuplicateCategoryName<
+  T extends { id: string; name: string },
+>(categories: readonly T[], candidateName: string, ignoreId?: string): boolean {
+  const normalized = normalizeCategoryName(candidateName);
+  return categories.some(category => {
+    if (ignoreId && category.id === ignoreId) {
+      return false;
+    }
+    return normalizeCategoryName(category.name) === normalized;
+  });
+}
+
 export function buildCategoryTree<TItem, TNode extends TreeNodeLike<TNode>>(
   items: readonly TItem[],
   toNode: (item: TItem) => TNode,
