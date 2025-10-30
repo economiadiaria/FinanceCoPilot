@@ -84,6 +84,7 @@ export function registerPjPlanRoutes(app: Express): void {
           action: "create",
           new: sanitizedCategory,
         },
+        requestId: req.requestId,
       });
 
       res.status(201).json({ category: sanitizedCategory });
@@ -167,6 +168,7 @@ export function registerPjPlanRoutes(app: Express): void {
           old: sanitizedBefore,
           new: sanitizedAfter,
         },
+        requestId: req.requestId,
       });
 
       res.json({ category: sanitizedAfter });
@@ -219,6 +221,7 @@ export function registerPjPlanRoutes(app: Express): void {
         action: "delete",
         old: sanitizedCurrent,
       },
+      requestId: req.requestId,
     });
 
     res.status(204).send();
@@ -291,6 +294,7 @@ export function registerPjPlanRoutes(app: Express): void {
           clientId: client.clientId,
           new: sanitizedCategory,
         },
+        requestId: req.requestId,
       });
 
       res.status(201).json({ category: sanitizedCategory });
@@ -386,6 +390,7 @@ export function registerPjPlanRoutes(app: Express): void {
           old: sanitizedBefore,
           new: sanitizedAfter,
         },
+        requestId: req.requestId,
       });
 
       res.json({ category: sanitizedAfter });
@@ -449,6 +454,7 @@ export function registerPjPlanRoutes(app: Express): void {
         clientId: client.clientId,
         old: sanitizedCurrent,
       },
+      requestId: req.requestId,
     });
 
     res.status(204).send();

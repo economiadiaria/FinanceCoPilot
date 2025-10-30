@@ -55,3 +55,18 @@ export function attachRequestId<T>(
 
   return value;
 }
+
+export function extractRequestId(value: unknown): RequestIdentifier {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) {
+    return null;
+  }
+
+  if (typeof value === "object" || typeof value === "function") {
+    const candidate = (value as { requestId?: unknown }).requestId;
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+
+  return null;
+}

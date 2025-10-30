@@ -10,6 +10,7 @@ type AuditParams = {
   targetId?: string;
   metadata?: Record<string, unknown>;
   piiSnapshot?: Record<string, unknown>;
+  requestId?: string | null;
 };
 
 export async function recordAuditEvent({
@@ -19,8 +20,13 @@ export async function recordAuditEvent({
   targetId,
   metadata = {},
   piiSnapshot,
+  requestId,
 }: AuditParams): Promise<void> {
   const maskedMetadata = scrubPII(metadata);
+  const correlationMetadata =
+    requestId && typeof requestId === "string" && requestId.length > 0
+      ? { ...maskedMetadata, requestId }
+      : maskedMetadata;
   const maskedPiiSnapshot = piiSnapshot
     ? Object.entries(piiSnapshot).reduce<Record<string, string>>((acc, [key, value]) => {
         acc[key] = String(maskPIIValue(key, value));
@@ -37,7 +43,7 @@ export async function recordAuditEvent({
     targetType,
     targetId,
     createdAt: new Date().toISOString(),
-    metadata: maskedMetadata,
+    metadata: correlationMetadata,
     piiSnapshot: maskedPiiSnapshot,
   };
 

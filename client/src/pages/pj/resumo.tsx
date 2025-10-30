@@ -12,7 +12,7 @@ import { usePJFilters } from "@/contexts/PJFiltersContext";
 import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
 import { formatRangeLabel, toApiDateRange } from "@/lib/date-range";
 import { useRequestIdToasts } from "@/hooks/useRequestIdToasts";
-import { formatRequestId } from "@/lib/requestId";
+import { extractRequestId, formatRequestId } from "@/lib/requestId";
 import {
   type PJSummary,
   type PJTrend,
@@ -34,11 +34,7 @@ function formatCurrency(value: number) {
 }
 
 function getRequestId(value: unknown): string | null {
-  if (value && typeof value === "object" && "requestId" in value) {
-    const casted = value as { requestId?: string | null };
-    return casted.requestId ?? null;
-  }
-  return null;
+  return extractRequestId(value);
 }
 
 function aggregateSummary(responses: PJSummary[]): PJSummary | null {
@@ -388,6 +384,11 @@ export default function ResumoPJ({ clientType }: ResumoPJProps) {
 
   useRequestIdToasts(uniqueRequestIds, { context: "Resumo PJ" });
 
+  const summaryErrorRequestId = extractRequestId(summaryQuery.error);
+  const trendsErrorRequestId = extractRequestId(trendsQuery.error);
+  const revenueSplitErrorRequestId = extractRequestId(revenueSplitQuery.error);
+  const topCostsErrorRequestId = extractRequestId(topCostsQuery.error);
+
   if (!clientId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
@@ -456,6 +457,11 @@ export default function ResumoPJ({ clientType }: ResumoPJProps) {
           <AlertTitle>Não foi possível carregar o resumo</AlertTitle>
           <AlertDescription>
             {(summaryQuery.error as Error).message || "Tente novamente em instantes."}
+            {summaryErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(summaryErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -519,6 +525,11 @@ export default function ResumoPJ({ clientType }: ResumoPJProps) {
           <AlertTitle>Não foi possível carregar a evolução</AlertTitle>
           <AlertDescription>
             {(trendsQuery.error as Error).message || "Tente novamente mais tarde."}
+            {trendsErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(trendsErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -577,6 +588,11 @@ export default function ResumoPJ({ clientType }: ResumoPJProps) {
           <AlertDescription>
             {(revenueSplitQuery.error as Error).message ||
               "Não foi possível carregar a divisão de receita."}
+            {revenueSplitErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(revenueSplitErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -629,6 +645,11 @@ export default function ResumoPJ({ clientType }: ResumoPJProps) {
           <AlertTitle>Erro ao carregar principais custos</AlertTitle>
           <AlertDescription>
             {(topCostsQuery.error as Error).message || "Tente novamente mais tarde."}
+            {topCostsErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(topCostsErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
