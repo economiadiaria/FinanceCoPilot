@@ -8,12 +8,11 @@ transaction browsing and financial summaries for PJ clients.
 
  * OpenAPI spec version: 1.0.0
  */
+import type { PjGlobalCategoryNodeAllOfType } from './pjGlobalCategoryNodeAllOfType';
 
-export type SortQueryParameter = typeof SortQueryParameter[keyof typeof SortQueryParameter];
-
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const SortQueryParameter = {
-  asc: 'asc',
-  desc: 'desc',
-} as const;
+export type PjGlobalCategoryNodeAllOf = {
+  /** */
+  code?: string;
+  isCore?: boolean;
+  type?: PjGlobalCategoryNodeAllOfType;
+};

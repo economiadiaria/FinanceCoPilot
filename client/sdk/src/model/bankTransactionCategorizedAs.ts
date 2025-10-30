@@ -15,12 +15,18 @@ transaction browsing and financial summaries for PJ clients.
 export type BankTransactionCategorizedAs = {
   /** Indicates whether the categorization was automatic */
   auto?: boolean;
+  /**
+   * Identifier of the PJ client category applied to the transaction
+   * @nullable
+   */
+  categoryId?: string | null;
+  /**
+   * Hierarchical path (dot notation) of the PJ client category when categorized
+   * @nullable
+   */
+  categoryPath?: string | null;
   /** @nullable */
   group?: string | null;
   /** @nullable */
   subcategory?: string | null;
-  /** @nullable */
-  categoryId?: string | null;
-  /** @nullable */
-  categoryPath?: string | null;
 } | null;
