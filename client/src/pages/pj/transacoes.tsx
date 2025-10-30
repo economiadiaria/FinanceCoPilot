@@ -1,20 +1,27 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { FileSpreadsheet, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePJService } from "@/contexts/PJServiceContext";
-import { type PJSale, type PJBankTransactionsResponse } from "@/services/pj";
+import { usePJFilters } from "@/contexts/PJFiltersContext";
+import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
+import { formatRangeLabel, toApiDateRange } from "@/lib/date-range";
+import { useRequestIdToasts } from "@/hooks/useRequestIdToasts";
+import { formatRequestId } from "@/lib/requestId";
+import {
+  type PJSale,
+  type PJBankTransactionsResponse,
+  type PJPeriodParams,
+  type PJTransactionsParams,
+} from "@/services/pj";
 
 interface TransacoesPJProps {
-  clientId: string | null;
   clientType: string | null;
-  bankAccountId: string | null;
 }
 
 function formatCurrency(value: number) {
@@ -29,44 +36,204 @@ function formatDate(value: string) {
   return new Date(value).toLocaleDateString("pt-BR");
 }
 
-const MONTH_OPTIONS = ["2024-03", "2024-04", "2024-05"];
+function getRequestId(value: unknown): string | null {
+  if (value && typeof value === "object" && "requestId" in value) {
+    const casted = value as { requestId?: string | null };
+    return casted.requestId ?? null;
+  }
+  return null;
+}
 
-export default function TransacoesPJ({ clientId, clientType, bankAccountId }: TransacoesPJProps) {
+function aggregateSummaries(summaries: PJSale[][]): PJSale[] {
+  return summaries.flat();
+}
+
+function aggregateTransactions(responses: PJBankTransactionsResponse[]): PJBankTransactionsResponse {
+  const items = responses.flatMap((response) => response.items);
+  items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  return {
+    items,
+    pagination: {
+      page: 1,
+      limit: items.length,
+      totalItems: items.length,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPreviousPage: false,
+    },
+  };
+}
+
+export default function TransacoesPJ({ clientType }: TransacoesPJProps) {
   const pjService = usePJService();
+  const { clientId, selectedAccountId, dateRange, allAccountsOption } = usePJFilters();
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const latest = MONTH_OPTIONS[MONTH_OPTIONS.length - 1];
-    return latest;
+
+  const {
+    options: bankAccountOptions,
+    accounts: availableAccounts,
+    isLoading: isLoadingAccounts,
+  } = usePJBankAccounts({
+    clientId,
+    enabled: isPJClient,
   });
 
-  const monthLabel = useMemo(() => {
-    const [year, month] = selectedMonth.split("-");
-    return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString("pt-BR", {
-      month: "long",
-      year: "numeric",
-    });
-  }, [selectedMonth]);
+  const selectedAccount = useMemo(
+    () => bankAccountOptions.find((account) => account.id === selectedAccountId) ?? null,
+    [bankAccountOptions, selectedAccountId],
+  );
 
-  const salesQuery = useQuery<{ sales: PJSale[] }>({
-    queryKey: ["pj:sales", { clientId, bankAccountId, selectedMonth }],
-    enabled: Boolean(clientId && bankAccountId && isPJClient),
-    queryFn: () =>
-      pjService.getSales({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        month: selectedMonth,
-      }),
+  const accountLabel = useMemo(() => {
+    if (!selectedAccount) {
+      return "Selecione uma conta PJ";
+    }
+
+    if (selectedAccount.isAggregate) {
+      return selectedAccount.bankName;
+    }
+
+    return `${selectedAccount.bankName} • ${selectedAccount.accountNumberMask}`;
+  }, [selectedAccount]);
+
+  const isAllAccounts = selectedAccountId === allAccountsOption.id;
+  const { from, to } = useMemo(() => toApiDateRange(dateRange), [dateRange]);
+  const rangeLabel = useMemo(() => formatRangeLabel(dateRange), [dateRange]);
+
+  const accountIdsKey = useMemo(() => availableAccounts.map((account) => account.id).sort().join("|"), [
+    availableAccounts,
+  ]);
+
+  const canQuery = Boolean(
+    clientId &&
+      from &&
+      to &&
+      isPJClient &&
+      (isAllAccounts ? availableAccounts.length > 0 : selectedAccountId),
+  );
+
+  const salesQuery = useQuery({
+    queryKey: [
+      "pj:sales",
+      {
+        clientId,
+        selectedAccountId,
+        from,
+        to,
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { sales: [] as PJSale[], requestIds: [] as string[] };
+      }
+
+      const fromDate = from;
+      const toDate = to;
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) => {
+            const params: PJPeriodParams = {
+              clientId,
+              bankAccountId: account.id,
+              from: fromDate,
+              to: toDate,
+            };
+            return pjService.getSales(params);
+          }),
+        );
+
+        const sales = aggregateSummaries(responses.map((response) => response.sales));
+        const requestIds = responses
+          .map((response) => getRequestId(response))
+          .filter((id): id is string => Boolean(id));
+
+        return { sales, requestIds };
+      }
+
+      const params: PJPeriodParams = {
+        clientId,
+        bankAccountId: selectedAccountId!,
+        from: fromDate,
+        to: toDate,
+      };
+      const response = await pjService.getSales(params);
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { sales: response.sales, requestIds };
+    },
   });
 
-  const transactionsQuery = useQuery<PJBankTransactionsResponse>({
-    queryKey: ["pj:bank-transactions", { clientId, bankAccountId }],
-    enabled: Boolean(clientId && bankAccountId && isPJClient),
-    queryFn: () =>
-      pjService.getBankTransactions({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-      }),
+  const transactionsQuery = useQuery({
+    queryKey: [
+      "pj:bank-transactions",
+      {
+        clientId,
+        selectedAccountId,
+        from,
+        to,
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { response: { items: [], pagination: { page: 1, limit: 0, totalItems: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false } }, requestIds: [] as string[] };
+      }
+
+      const fromDate = from;
+      const toDate = to;
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) => {
+            const txnParams: PJTransactionsParams = {
+              clientId,
+              bankAccountId: account.id,
+              from: fromDate,
+              to: toDate,
+            };
+            return pjService.getBankTransactions(txnParams);
+          }),
+        );
+
+        const response = aggregateTransactions(responses);
+        const requestIds = responses
+          .map((value) => getRequestId(value))
+          .filter((id): id is string => Boolean(id));
+
+        return { response, requestIds };
+      }
+
+      const txnParams: PJTransactionsParams = {
+        clientId,
+        bankAccountId: selectedAccountId!,
+        from: fromDate,
+        to: toDate,
+      };
+      const response = await pjService.getBankTransactions(txnParams);
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { response, requestIds };
+    },
   });
+
+  const sales = salesQuery.data?.sales ?? [];
+  const bankTransactions = transactionsQuery.data?.response.items ?? [];
+
+  const uniqueRequestIds = useMemo(() => {
+    const ids = [
+      ...(salesQuery.data?.requestIds ?? []),
+      ...(transactionsQuery.data?.requestIds ?? []),
+    ];
+    return Array.from(new Set(ids));
+  }, [salesQuery.data?.requestIds, transactionsQuery.data?.requestIds]);
+
+  useRequestIdToasts(uniqueRequestIds, { context: "Transações PJ" });
 
   if (!clientId) {
     return (
@@ -90,7 +257,7 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
     );
   }
 
-  if (!bankAccountId) {
+  if (!selectedAccountId && !isLoadingAccounts) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
         <h2 className="text-2xl font-semibold text-muted-foreground">Selecione uma conta PJ</h2>
@@ -101,41 +268,45 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
     );
   }
 
-  const sales = salesQuery.data?.sales ?? [];
-  const bankTransactions = transactionsQuery.data?.items ?? [];
-
   const showSalesEmpty = !sales.length && !salesQuery.isLoading && !salesQuery.isError;
-  const showBankEmpty = !bankTransactions.length && !transactionsQuery.isLoading && !transactionsQuery.isError;
+  const showBankEmpty =
+    !bankTransactions.length && !transactionsQuery.isLoading && !transactionsQuery.isError;
 
   return (
     <div className="space-y-6" data-testid="page-pj-transacoes">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Transações e Liquidações</h1>
-          <p className="text-sm text-muted-foreground">
-            Visualize as vendas liquidadas e o extrato bancário conectado ao seu ERP.
-          </p>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="space-y-2">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-semibold tracking-tight">Transações e Liquidações</h1>
+            <p className="text-sm text-muted-foreground">
+              Visualize as vendas liquidadas e o extrato bancário conectado ao seu ERP.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">{accountLabel}</span>
+            <Badge variant="secondary">{rangeLabel}</Badge>
+          </div>
+          {uniqueRequestIds.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {uniqueRequestIds.map((id) => (
+                <Badge key={id} variant="outline">
+                  X-Request-Id: {formatRequestId(id)}
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3">
-          <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-            <SelectTrigger className="w-[200px]" data-testid="select-month">
-              <SelectValue placeholder="Período" />
-            </SelectTrigger>
-            <SelectContent>
-              {MONTH_OPTIONS.map((month) => (
-                <SelectItem key={month} value={month}>
-                  {new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 1, 1).toLocaleDateString(
-                    "pt-BR",
-                    { month: "long", year: "numeric" },
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" size="icon" data-testid="button-refresh" onClick={() => {
-            salesQuery.refetch();
-            transactionsQuery.refetch();
-          }}>
+          <Button
+            variant="outline"
+            size="icon"
+            data-testid="button-refresh"
+            onClick={() => {
+              salesQuery.refetch();
+              transactionsQuery.refetch();
+            }}
+            disabled={!canQuery}
+          >
             <RefreshCcw className="h-4 w-4" />
           </Button>
         </div>
@@ -145,7 +316,8 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
         <Alert variant="destructive" data-testid="alert-sales-error">
           <AlertTitle>Erro ao carregar vendas</AlertTitle>
           <AlertDescription>
-            {(salesQuery.error as Error).message || "Não foi possível carregar as vendas deste período."}
+            {(salesQuery.error as Error).message ||
+              "Não foi possível carregar as vendas deste período."}
           </AlertDescription>
         </Alert>
       )}
@@ -154,9 +326,11 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
         <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <CardTitle>Vendas do período</CardTitle>
-            <p className="text-sm text-muted-foreground">Consolidação de vendas e seus recebimentos por canal.</p>
+            <p className="text-sm text-muted-foreground">
+              Consolidação de vendas e seus recebimentos por canal.
+            </p>
           </div>
-          <Badge variant="outline">{monthLabel}</Badge>
+          <Badge variant="outline">{sales.length} registros</Badge>
         </CardHeader>
         <CardContent>
           {salesQuery.isLoading && (
@@ -191,8 +365,12 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
                     <TableCell>{formatDate(sale.date)}</TableCell>
                     <TableCell className="font-medium">{sale.customer.name}</TableCell>
                     <TableCell>{sale.channel}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(sale.grossAmount)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(sale.netAmount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(sale.grossAmount)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(sale.netAmount)}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -205,7 +383,8 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
         <Alert variant="destructive" data-testid="alert-bank-error">
           <AlertTitle>Erro ao carregar extrato bancário</AlertTitle>
           <AlertDescription>
-            {(transactionsQuery.error as Error).message || "Não foi possível carregar o extrato da conta selecionada."}
+            {(transactionsQuery.error as Error).message ||
+              "Não foi possível carregar o extrato da conta selecionada."}
           </AlertDescription>
         </Alert>
       )}
@@ -272,8 +451,8 @@ export default function TransacoesPJ({ clientId, clientType, bankAccountId }: Tr
           <span>Dados mockados</span>
         </div>
         <p className="mt-2">
-          As vendas e transações bancárias são fornecidas pelo serviço mockado de PJ, permitindo validar os
-          estados de carregamento, erro e ausência de registros sem depender de integrações externas.
+          As vendas e transações bancárias são fornecidas pelo serviço mockado de PJ, permitindo validar os estados de
+          carregamento, erro e ausência de registros sem depender de integrações externas.
         </p>
       </div>
     </div>

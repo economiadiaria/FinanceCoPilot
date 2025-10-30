@@ -2,9 +2,25 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { PJBankAccount } from "@/services/pj";
 
 export type PJDateRange = {
-  from?: string;
-  to?: string;
+  from?: Date;
+  to?: Date;
 };
+
+function startOfYear(date: Date): Date {
+  return new Date(date.getFullYear(), 0, 1);
+}
+
+function endOfYear(date: Date): Date {
+  return new Date(date.getFullYear(), 11, 31);
+}
+
+function createDefaultDateRange(): PJDateRange {
+  const today = new Date();
+  return {
+    from: startOfYear(today),
+    to: endOfYear(today),
+  };
+}
 
 export type PJBankAccountOption = PJBankAccount & {
   isAggregate?: boolean;
@@ -39,11 +55,11 @@ interface PJFiltersProviderProps {
 export function PJFiltersProvider({ children }: PJFiltersProviderProps) {
   const [clientId, setClientId] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<PJDateRange>({});
+  const [dateRange, setDateRange] = useState<PJDateRange>(() => createDefaultDateRange());
 
   useEffect(() => {
     setSelectedAccountId(null);
-    setDateRange({});
+    setDateRange(createDefaultDateRange());
   }, [clientId]);
 
   const value = useMemo<PJFiltersContextValue>(

@@ -1,236 +1,281 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { MetricCard } from "@/components/metric-card";
-import { DollarSign, TrendingDown, Wallet, CreditCard, BarChart3, FileBarChart } from "lucide-react";
-import { useEffect, useState, useRef } from "react";
-import { Link } from "wouter";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { usePJService } from "@/contexts/PJServiceContext";
-import {
-  type PJSummary,
-  type PJTrend,
-  type PJTopCostItem,
-  type PJRevenueSplitItem,
-  type PJSalesKpis,
-} from "@/services/pj";
+import { usePJFilters } from "@/contexts/PJFiltersContext";
+import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
+import { formatRangeLabel, toApiDateRange } from "@/lib/date-range";
+import { useRequestIdToasts } from "@/hooks/useRequestIdToasts";
+import { formatRequestId } from "@/lib/requestId";
+import { TrendingUp, DollarSign, CreditCard } from "lucide-react";
+import type { PJSummary, PJSalesKpis } from "@/services/pj";
+import { Badge } from "@/components/ui/badge";
 
 interface DashboardPJProps {
-  clientId: string | null;
   clientType: string | null;
-  bankAccountId: string | null;
 }
 
-export default function DashboardPJ({ clientId, clientType, bankAccountId }: DashboardPJProps) {
-  const pjService = usePJService();
-  const [month, setMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+function formatCurrency(value: number) {
+  return value.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
   });
-  
-  const [year, setYear] = useState(() => new Date().getFullYear().toString());
+}
 
-  const trendsChartRef = useRef<HTMLCanvasElement>(null);
-  const revenueChartRef = useRef<HTMLCanvasElement>(null);
-  const costsChartRef = useRef<HTMLCanvasElement>(null);
+function getRequestId(value: unknown): string | null {
+  if (value && typeof value === "object" && "requestId" in value) {
+    const casted = value as { requestId?: string | null };
+    return casted.requestId ?? null;
+  }
+  return null;
+}
 
+function aggregateSummary(responses: PJSummary[]): PJSummary | null {
+  if (!responses.length) {
+    return null;
+  }
+
+  const totals = responses.reduce(
+    (acc, summary) => {
+      acc.receitas += summary.receitas;
+      acc.despesas += summary.despesas;
+      acc.saldo += summary.saldo;
+      acc.lucroLiquido += summary.lucroLiquido;
+      return acc;
+    },
+    {
+      receitas: 0,
+      despesas: 0,
+      saldo: 0,
+      lucroLiquido: 0,
+    },
+  );
+
+  return {
+    month: "",
+    receitas: totals.receitas,
+    despesas: totals.despesas,
+    saldo: totals.saldo,
+    contasReceber: 0,
+    lucroBruto: 0,
+    lucroLiquido: totals.lucroLiquido,
+    margemLiquida: totals.receitas > 0 ? Number(((totals.lucroLiquido / totals.receitas) * 100).toFixed(1)) : 0,
+    requestId: null,
+  };
+}
+
+function aggregateSalesKpis(responses: PJSalesKpis[]): PJSalesKpis | null {
+  if (!responses.length) {
+    return null;
+  }
+
+  const totals = responses.reduce(
+    (acc, kpi) => {
+      acc.totalSales += kpi.totalSales;
+      acc.totalRevenue += kpi.totalRevenue;
+      acc.topClientes.push(...kpi.topClientes);
+      return acc;
+    },
+    {
+      totalSales: 0,
+      totalRevenue: 0,
+      topClientes: [] as PJSalesKpis["topClientes"],
+    },
+  );
+
+  const ticketMedio = totals.totalSales > 0 ? totals.totalRevenue / totals.totalSales : 0;
+
+  const mergedTopClients = totals.topClientes.reduce(
+    (map, client) => {
+      const current = map.get(client.customer) ?? { customer: client.customer, amount: 0 };
+      current.amount += client.amount;
+      map.set(client.customer, current);
+      return map;
+    },
+    new Map<string, { customer: string; amount: number }>(),
+  );
+
+  return {
+    totalSales: totals.totalSales,
+    totalRevenue: totals.totalRevenue,
+    ticketMedio,
+    topClientes: Array.from(mergedTopClients.values())
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5),
+    requestId: null,
+  };
+}
+
+export default function DashboardPJ({ clientType }: DashboardPJProps) {
+  const pjService = usePJService();
+  const { clientId, selectedAccountId, dateRange, allAccountsOption } = usePJFilters();
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
-  const getMonthRange = () => {
-    const [yearPart, monthPart] = month.split("-");
-    const yearNum = Number(yearPart);
-    const monthNum = Number(monthPart) - 1;
-    const fromDate = new Date(Date.UTC(yearNum, monthNum, 1));
-    const toDate = new Date(Date.UTC(yearNum, monthNum + 1, 0));
-    return {
-      from: fromDate.toISOString().split("T")[0],
-      to: toDate.toISOString().split("T")[0],
-    };
-  };
+  const {
+    options: bankAccountOptions,
+    accounts: availableAccounts,
+    isLoading: isLoadingAccounts,
+  } = usePJBankAccounts({
+    clientId,
+    enabled: isPJClient,
+  });
 
-  const { data: summary, isLoading: loadingSummary, error: errorSummary } = useQuery<PJSummary>({
-    queryKey: ["/api/pj/dashboard/summary", { clientId, month, bankAccountId }],
-    enabled: !!clientId && !!bankAccountId && isPJClient,
-    queryFn: () => {
-      const { from, to } = getMonthRange();
-      return pjService.getSummary({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
+  const selectedAccount = useMemo(
+    () => bankAccountOptions.find((account) => account.id === selectedAccountId) ?? null,
+    [bankAccountOptions, selectedAccountId],
+  );
+
+  const accountLabel = useMemo(() => {
+    if (!selectedAccount) {
+      return "Selecione uma conta PJ";
+    }
+
+    if (selectedAccount.isAggregate) {
+      return selectedAccount.bankName;
+    }
+
+    return `${selectedAccount.bankName} • ${selectedAccount.accountNumberMask}`;
+  }, [selectedAccount]);
+
+  const isAllAccounts = selectedAccountId === allAccountsOption.id;
+  const { from, to } = useMemo(() => toApiDateRange(dateRange), [dateRange]);
+  const rangeLabel = useMemo(() => formatRangeLabel(dateRange), [dateRange]);
+  const accountIdsKey = useMemo(() => availableAccounts.map((account) => account.id).sort().join("|"), [
+    availableAccounts,
+  ]);
+
+  const canQuery = Boolean(
+    clientId &&
+      from &&
+      to &&
+      isPJClient &&
+      (isAllAccounts ? availableAccounts.length > 0 : selectedAccountId),
+  );
+
+  const summaryQuery = useQuery({
+    queryKey: [
+      "pj:dashboard:summary",
+      {
+        clientId,
+        selectedAccountId,
+        from,
+        to,
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { summary: null as PJSummary | null, requestIds: [] as string[] };
+      }
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) =>
+            pjService.getSummary({
+              clientId,
+              bankAccountId: account.id,
+              from,
+              to,
+            }),
+          ),
+        );
+
+        const summary = aggregateSummary(responses);
+        const requestIds = responses
+          .map((response) => getRequestId(response))
+          .filter((id): id is string => Boolean(id));
+
+        return { summary, requestIds };
+      }
+
+      const response = await pjService.getSummary({
+        clientId,
+        bankAccountId: selectedAccountId!,
         from,
         to,
       });
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { summary: response, requestIds };
     },
   });
 
-  const { data: trendsData, error: errorTrends } = useQuery<{ trends: PJTrend[] }>({
-    queryKey: ["/api/pj/dashboard/trends", { clientId, year, bankAccountId }],
-    enabled: !!clientId && !!bankAccountId && isPJClient,
-    queryFn: () =>
-      pjService.getTrends({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        year,
-      }),
+  const salesKpisQuery = useQuery({
+    queryKey: [
+      "pj:dashboard:sales-kpis",
+      {
+        clientId,
+        selectedAccountId,
+        from,
+        to,
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { kpis: null as PJSalesKpis | null, requestIds: [] as string[] };
+      }
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) =>
+            pjService.getSalesKpis({
+              clientId,
+              bankAccountId: account.id,
+              from,
+              to,
+            }),
+          ),
+        );
+
+        const kpis = aggregateSalesKpis(responses);
+        const requestIds = responses
+          .map((response) => getRequestId(response))
+          .filter((id): id is string => Boolean(id));
+
+        return { kpis, requestIds };
+      }
+
+      const response = await pjService.getSalesKpis({
+        clientId,
+        bankAccountId: selectedAccountId!,
+        from,
+        to,
+      });
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { kpis: response, requestIds };
+    },
   });
 
-  const { data: revenueSplitData, error: errorRevenue } = useQuery<{
-    revenueSplit: PJRevenueSplitItem[];
-  }>({
-    queryKey: ["/api/pj/dashboard/revenue-split", { clientId, month, bankAccountId }],
-    enabled: !!clientId && !!bankAccountId && isPJClient,
-    queryFn: () =>
-      pjService.getRevenueSplit({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        month,
-      }),
-  });
+  const summary = summaryQuery.data?.summary ?? null;
+  const salesKpis = salesKpisQuery.data?.kpis ?? null;
 
-  const { data: topCostsData, error: errorCosts } = useQuery<{ topCosts: PJTopCostItem[] }>({
-    queryKey: ["/api/pj/dashboard/top-costs", { clientId, month, bankAccountId }],
-    enabled: !!clientId && !!bankAccountId && isPJClient,
-    queryFn: () =>
-      pjService.getTopCosts({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        month,
-      }),
-  });
+  const uniqueRequestIds = useMemo(() => {
+    const ids = [
+      ...(summaryQuery.data?.requestIds ?? []),
+      ...(salesKpisQuery.data?.requestIds ?? []),
+    ];
+    return Array.from(new Set(ids));
+  }, [summaryQuery.data?.requestIds, salesKpisQuery.data?.requestIds]);
 
-  const { data: salesKPIs, error: errorKPIs } = useQuery<PJSalesKpis>({
-    queryKey: ["/api/pj/dashboard/sales-kpis", { clientId, month, bankAccountId }],
-    enabled: !!clientId && !!bankAccountId && isPJClient,
-    queryFn: () =>
-      pjService.getSalesKpis({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        month,
-      }),
-  });
-
-  // Chart.js rendering
-  useEffect(() => {
-    if (!trendsData?.trends || !trendsChartRef.current) return;
-
-    const Chart = (window as any).Chart;
-    if (!Chart) return;
-
-    const ctx = trendsChartRef.current.getContext("2d");
-    if (!ctx) return;
-
-    const chart = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: trendsData.trends.map(t => t.month),
-        datasets: [
-          {
-            label: "Receitas",
-            data: trendsData.trends.map(t => t.receitas),
-            borderColor: "rgb(34, 197, 94)",
-            backgroundColor: "rgba(34, 197, 94, 0.1)",
-            tension: 0.4,
-          },
-          {
-            label: "Despesas",
-            data: trendsData.trends.map(t => t.despesas),
-            borderColor: "rgb(239, 68, 68)",
-            backgroundColor: "rgba(239, 68, 68, 0.1)",
-            tension: 0.4,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: "top" },
-        },
-      },
-    });
-
-    return () => chart.destroy();
-  }, [trendsData]);
-
-  useEffect(() => {
-    if (!revenueSplitData?.revenueSplit || !revenueChartRef.current) return;
-
-    const Chart = (window as any).Chart;
-    if (!Chart) return;
-
-    const ctx = revenueChartRef.current.getContext("2d");
-    if (!ctx) return;
-
-    const chart = new Chart(ctx, {
-      type: "doughnut",
-      data: {
-        labels: revenueSplitData.revenueSplit.map(r => r.channel),
-        datasets: [
-          {
-            data: revenueSplitData.revenueSplit.map(r => r.amount),
-            backgroundColor: [
-              "rgb(59, 130, 246)",
-              "rgb(34, 197, 94)",
-              "rgb(251, 146, 60)",
-              "rgb(168, 85, 247)",
-              "rgb(236, 72, 153)",
-            ],
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: "right" },
-        },
-      },
-    });
-
-    return () => chart.destroy();
-  }, [revenueSplitData]);
-
-  useEffect(() => {
-    if (!topCostsData?.topCosts || !costsChartRef.current) return;
-
-    const Chart = (window as any).Chart;
-    if (!Chart) return;
-
-    const ctx = costsChartRef.current.getContext("2d");
-    if (!ctx) return;
-
-    const chart = new Chart(ctx, {
-      type: "bar",
-      data: {
-        labels: topCostsData.topCosts.map(c => c.item),
-        datasets: [
-          {
-            label: "Valor (R$)",
-            data: topCostsData.topCosts.map(c => c.total),
-            backgroundColor: "rgb(239, 68, 68)",
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        indexAxis: "y",
-        plugins: {
-          legend: { display: false },
-        },
-      },
-    });
-
-    return () => chart.destroy();
-  }, [topCostsData]);
+  useRequestIdToasts(uniqueRequestIds, { context: "Dashboard PJ" });
 
   if (!clientId) {
     return (
-      <div className="flex flex-col items-center justify-center h-full space-y-4">
-        <h1 className="text-2xl font-bold text-muted-foreground">
-          Selecione um cliente PJ para começar
-        </h1>
-        <p className="text-muted-foreground">
-          Use o seletor no topo para escolher ou criar um cliente PJ
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+        <h2 className="text-2xl font-semibold text-muted-foreground">Selecione um cliente PJ</h2>
+        <p className="text-sm text-muted-foreground">
+          Os indicadores do dashboard aparecem assim que um cliente PJ for selecionado.
         </p>
       </div>
     );
@@ -238,247 +283,169 @@ export default function DashboardPJ({ clientId, clientType, bankAccountId }: Das
 
   if (!isPJClient) {
     return (
-      <div className="flex flex-col items-center justify-center h-full space-y-4">
-        <BarChart3 className="h-12 w-12 text-muted-foreground" />
-        <h1 className="text-2xl font-bold text-muted-foreground">
-          Esta funcionalidade é exclusiva para clientes PJ
-        </h1>
-        <p className="text-muted-foreground">
-          Selecione um cliente do tipo Pessoa Jurídica para acessar o dashboard empresarial
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+        <h2 className="text-2xl font-semibold text-muted-foreground">Cliente sem produtos PJ</h2>
+        <p className="text-sm text-muted-foreground">
+          Associe uma conta PJ para acompanhar faturamento, vendas e liquidações.
         </p>
       </div>
     );
   }
 
-  if (!bankAccountId) {
+  if (!selectedAccountId && !isLoadingAccounts) {
     return (
-      <div className="flex flex-col items-center justify-center h-full space-y-4">
-        <CreditCard className="h-12 w-12 text-muted-foreground" />
-        <h1 className="text-2xl font-bold text-muted-foreground">Selecione uma conta PJ</h1>
-        <p className="text-muted-foreground">
-          Use o seletor de contas bancárias para visualizar os dados do dashboard.
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+        <h2 className="text-2xl font-semibold text-muted-foreground">Selecione uma conta PJ</h2>
+        <p className="text-sm text-muted-foreground">
+          Escolha qual conta será usada para consolidar os indicadores do dashboard.
         </p>
-      </div>
-    );
-  }
-
-  if (loadingSummary) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-muted-foreground">Carregando dashboard PJ...</div>
-      </div>
-    );
-  }
-
-  if (errorSummary || errorTrends || errorRevenue || errorCosts || errorKPIs) {
-    const error = errorSummary || errorTrends || errorRevenue || errorCosts || errorKPIs;
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-destructive">
-          Erro ao carregar dashboard: {(error as Error).message}
-        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold" data-testid="text-dashboard-title">Dashboard PJ</h1>
-          <p className="text-muted-foreground">Visão geral do negócio</p>
+    <div className="space-y-6" data-testid="page-pj-dashboard">
+      <div className="space-y-2">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Visão Geral PJ</h1>
+          <p className="text-sm text-muted-foreground">
+            Acompanhe performance de faturamento e vendas com filtros centralizados.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Input
-            type="month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            className="w-40"
-            data-testid="input-month"
-          />
-          <select
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            className="flex h-9 w-32 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            data-testid="select-year"
-          >
-            {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(y => (
-              <option key={y} value={y}>{y}</option>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{accountLabel}</span>
+          <Badge variant="secondary">{rangeLabel}</Badge>
+        </div>
+        {uniqueRequestIds.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {uniqueRequestIds.map((id) => (
+              <Badge key={id} variant="outline">
+                X-Request-Id: {formatRequestId(id)}
+              </Badge>
             ))}
-          </select>
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* KPI Metrics - Financeiro */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <MetricCard
-          title="Receitas"
-          value={(summary?.receitas || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          icon={<DollarSign className="h-8 w-8" />}
-          testId="metric-receitas"
-        />
-        <MetricCard
-          title="Despesas"
-          value={(summary?.despesas || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          icon={<TrendingDown className="h-8 w-8" />}
-          testId="metric-despesas"
-        />
-        <MetricCard
-          title="Saldo"
-          value={(summary?.saldo || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          icon={<Wallet className="h-8 w-8" />}
-          testId="metric-saldo"
-        />
-        <MetricCard
-          title="Contas a Receber"
-          value={(summary?.contasReceber || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          icon={<CreditCard className="h-8 w-8" />}
-          testId="metric-contas-receber"
-        />
+      {summaryQuery.isError && (
+        <Alert variant="destructive" data-testid="alert-dashboard-summary-error">
+          <AlertTitle>Erro ao carregar o resumo</AlertTitle>
+          <AlertDescription>
+            {(summaryQuery.error as Error).message || "Não foi possível carregar os indicadores."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {summaryQuery.isLoading &&
+          Array.from({ length: 4 }).map((_, index) => (
+            <Card key={index} className="min-h-32">
+              <CardContent className="flex h-full flex-col justify-center gap-3">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-7 w-32" />
+              </CardContent>
+            </Card>
+          ))}
+
+        {summary && (
+          <>
+            <MetricCard
+              title="Receitas"
+              value={summary.receitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              icon={<TrendingUp className="h-5 w-5" />}
+              testId="metric-dashboard-receitas"
+            />
+            <MetricCard
+              title="Despesas"
+              value={summary.despesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              icon={<CreditCard className="h-5 w-5" />}
+              testId="metric-dashboard-despesas"
+            />
+            <MetricCard
+              title="Saldo"
+              value={summary.saldo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              icon={<DollarSign className="h-5 w-5" />}
+              testId="metric-dashboard-saldo"
+            />
+            <MetricCard
+              title="Margem líquida"
+              value={`${summary.margemLiquida.toFixed(1)}%`}
+              prefix=""
+              icon={<TrendingUp className="h-5 w-5" />}
+              testId="metric-dashboard-margem"
+            />
+          </>
+        )}
       </div>
 
-      {/* KPI Metrics - Lucro e Margem */}
-      <div className="grid gap-6 md:grid-cols-3">
-        <MetricCard
-          title="Lucro Bruto"
-          value={(summary?.lucroBruto || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          icon={<DollarSign className="h-8 w-8" />}
-          testId="metric-lucro-bruto"
-        />
-        <MetricCard
-          title="Lucro Líquido"
-          value={(summary?.lucroLiquido || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          icon={<Wallet className="h-8 w-8" />}
-          testId="metric-lucro-liquido"
-        />
-        <MetricCard
-          title="Margem Líquida"
-          value={`${(summary?.margemLiquida || 0).toFixed(1)}%`}
-          icon={<BarChart3 className="h-8 w-8" />}
-          testId="metric-margem-liquida"
-        />
-      </div>
+      {salesKpisQuery.isError && (
+        <Alert variant="destructive" data-testid="alert-dashboard-sales-error">
+          <AlertTitle>Erro ao carregar vendas</AlertTitle>
+          <AlertDescription>
+            {(salesKpisQuery.error as Error).message || "Não foi possível carregar os KPIs de vendas."}
+          </AlertDescription>
+        </Alert>
+      )}
 
-      {/* Charts Row 1 */}
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Tendências ({year})</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div style={{ height: "300px" }}>
-              <canvas ref={trendsChartRef} />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Distribuição de Receita</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div style={{ height: "300px" }}>
-              <canvas ref={revenueChartRef} />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Charts Row 2 */}
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Top 10 Custos</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div style={{ height: "400px" }}>
-              <canvas ref={costsChartRef} />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>KPIs de Vendas</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Total de Vendas</p>
-                <p className="text-2xl font-bold tabular-nums" data-testid="text-total-sales">
-                  {salesKPIs?.totalSales || 0}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Receita Total</p>
-                <p className="text-2xl font-bold tabular-nums" data-testid="text-total-revenue">
-                  {(salesKPIs?.totalRevenue || 0).toLocaleString("pt-BR", {
-                    style: "currency",
-                    currency: "BRL",
-                  })}
-                </p>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm text-muted-foreground">Ticket Médio</p>
-              <p className="text-2xl font-bold tabular-nums" data-testid="text-ticket-medio">
-                {(salesKPIs?.ticketMedio || 0).toLocaleString("pt-BR", {
-                  style: "currency",
-                  currency: "BRL",
-                })}
-              </p>
-            </div>
-
-            {salesKPIs?.topClientes && salesKPIs.topClientes.length > 0 && (
-              <div className="space-y-2 pt-4">
-                <p className="text-sm font-semibold">Top 5 Clientes</p>
-                <div className="space-y-2">
-                  {salesKPIs.topClientes.map((cliente, i) => (
-                    <div
-                      key={i}
-                      className="flex justify-between items-center p-2 rounded bg-muted/50"
-                      data-testid={`top-cliente-${i}`}
-                    >
-                      <span className="text-sm font-medium">{cliente.customer}</span>
-                      <span className="text-sm tabular-nums">
-                        {cliente.amount.toLocaleString("pt-BR", {
-                          style: "currency",
-                          currency: "BRL",
-                        })}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Quick Actions */}
       <Card>
         <CardHeader>
-          <CardTitle>Ações Rápidas</CardTitle>
+          <CardTitle>Clientes com maior receita</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-3">
-          <Link href="/pj/resumo">
-            <Button variant="outline" data-testid="button-nav-resumo">
-              <BarChart3 className="mr-2 h-4 w-4" />
-              Resumo Financeiro
-            </Button>
-          </Link>
-          <Link href="/pj/transacoes">
-            <Button variant="outline" data-testid="button-nav-transacoes">
-              <Wallet className="mr-2 h-4 w-4" />
-              Transações e Liquidações
-            </Button>
-          </Link>
-          <Link href="/pj/relatorios">
-            <Button variant="outline" data-testid="button-nav-relatorios">
-              <FileBarChart className="mr-2 h-4 w-4" />
-              Relatórios Analíticos
-            </Button>
-          </Link>
+        <CardContent>
+          {!salesKpisQuery.isLoading && salesKpis && (
+            <div className="mb-4 flex flex-wrap gap-4 text-sm text-muted-foreground">
+              <span>
+                Total de vendas: <span className="font-medium text-foreground">{salesKpis.totalSales}</span>
+              </span>
+              <span>
+                Receita consolidada:
+                <span className="ml-1 font-medium text-foreground">
+                  {formatCurrency(salesKpis.totalRevenue)}
+                </span>
+              </span>
+              <span>
+                Ticket médio:
+                <span className="ml-1 font-medium text-foreground">
+                  {formatCurrency(salesKpis.ticketMedio)}
+                </span>
+              </span>
+            </div>
+          )}
+
+          {salesKpisQuery.isLoading && (
+            <div className="space-y-3">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-[80%]" />
+              <Skeleton className="h-4 w-[72%]" />
+            </div>
+          )}
+
+          {!salesKpisQuery.isLoading && salesKpis && salesKpis.topClientes.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Cliente</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {salesKpis.topClientes.map((client) => (
+                  <TableRow key={client.customer}>
+                    <TableCell className="font-medium">{client.customer}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(client.amount)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+
+          {!salesKpisQuery.isLoading && (!salesKpis || salesKpis.topClientes.length === 0) && (
+            <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
+              Nenhuma venda registrada para o período selecionado.
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

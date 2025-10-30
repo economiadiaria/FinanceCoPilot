@@ -6,19 +6,23 @@ import { MetricCard } from "@/components/metric-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
-import { TrendingUp, TrendingDown, Wallet, PieChart, FileBarChart } from "lucide-react";
+import { TrendingUp, TrendingDown, Wallet, PieChart } from "lucide-react";
 import { usePJService } from "@/contexts/PJServiceContext";
+import { usePJFilters } from "@/contexts/PJFiltersContext";
+import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
+import { formatRangeLabel, toApiDateRange } from "@/lib/date-range";
+import { useRequestIdToasts } from "@/hooks/useRequestIdToasts";
+import { formatRequestId } from "@/lib/requestId";
 import {
   type PJSummary,
   type PJTrend,
   type PJRevenueSplitItem,
   type PJTopCostItem,
 } from "@/services/pj";
+import { Badge } from "@/components/ui/badge";
 
 interface ResumoPJProps {
-  clientId: string | null;
   clientType: string | null;
-  bankAccountId: string | null;
 }
 
 function formatCurrency(value: number) {
@@ -29,69 +33,360 @@ function formatCurrency(value: number) {
   });
 }
 
-function formatTrendLabel(period: string) {
-  return period;
+function getRequestId(value: unknown): string | null {
+  if (value && typeof value === "object" && "requestId" in value) {
+    const casted = value as { requestId?: string | null };
+    return casted.requestId ?? null;
+  }
+  return null;
 }
 
-export default function ResumoPJ({ clientId, clientType, bankAccountId }: ResumoPJProps) {
+function aggregateSummary(responses: PJSummary[]): PJSummary | null {
+  if (!responses.length) {
+    return null;
+  }
+
+  const totals = responses.reduce(
+    (acc, summary) => {
+      acc.receitas += summary.receitas;
+      acc.despesas += summary.despesas;
+      acc.saldo += summary.saldo;
+      acc.contasReceber += summary.contasReceber;
+      acc.lucroBruto += summary.lucroBruto;
+      acc.lucroLiquido += summary.lucroLiquido;
+      return acc;
+    },
+    {
+      receitas: 0,
+      despesas: 0,
+      saldo: 0,
+      contasReceber: 0,
+      lucroBruto: 0,
+      lucroLiquido: 0,
+    },
+  );
+
+  const margemLiquida =
+    totals.receitas > 0 ? Number(((totals.lucroLiquido / totals.receitas) * 100).toFixed(1)) : 0;
+
+  return {
+    month: "",
+    receitas: totals.receitas,
+    despesas: totals.despesas,
+    saldo: totals.saldo,
+    contasReceber: totals.contasReceber,
+    lucroBruto: totals.lucroBruto,
+    lucroLiquido: totals.lucroLiquido,
+    margemLiquida,
+    requestId: null,
+  };
+}
+
+function aggregateTrends(responses: { trends: PJTrend[] }[]): PJTrend[] {
+  const map = new Map<string, PJTrend>();
+  responses.forEach(({ trends }) => {
+    trends.forEach((trend) => {
+      const current = map.get(trend.month) ?? { ...trend, receitas: 0, despesas: 0 };
+      current.receitas += trend.receitas;
+      current.despesas += trend.despesas;
+      map.set(trend.month, current);
+    });
+  });
+  return Array.from(map.values());
+}
+
+function aggregateRevenueSplit(responses: { revenueSplit: PJRevenueSplitItem[] }[]): PJRevenueSplitItem[] {
+  const map = new Map<string, PJRevenueSplitItem>();
+  responses.forEach(({ revenueSplit }) => {
+    revenueSplit.forEach((item) => {
+      const current = map.get(item.channel) ?? { ...item, amount: 0 };
+      current.amount += item.amount;
+      map.set(item.channel, current);
+    });
+  });
+  return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+}
+
+function aggregateTopCosts(responses: { topCosts: PJTopCostItem[] }[]): PJTopCostItem[] {
+  const map = new Map<string, PJTopCostItem>();
+  responses.forEach(({ topCosts }) => {
+    topCosts.forEach((cost) => {
+      const key = `${cost.category}-${cost.item}`;
+      const current = map.get(key) ?? { ...cost, total: 0 };
+      current.total += cost.total;
+      map.set(key, current);
+    });
+  });
+  return Array.from(map.values()).sort((a, b) => b.total - a.total);
+}
+
+export default function ResumoPJ({ clientType }: ResumoPJProps) {
   const pjService = usePJService();
+  const { clientId, selectedAccountId, dateRange, allAccountsOption } = usePJFilters();
   const isPJClient = clientType === "PJ" || clientType === "BOTH";
 
-  const { from, to, currentYear } = useMemo(() => {
-    const today = new Date();
-    const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    return {
-      from: firstDay.toISOString().split("T")[0],
-      to: lastDay.toISOString().split("T")[0],
-      currentYear: today.getFullYear().toString(),
-    };
-  }, []);
+  const {
+    options: bankAccountOptions,
+    accounts: availableAccounts,
+    isLoading: isLoadingAccounts,
+  } = usePJBankAccounts({
+    clientId,
+    enabled: isPJClient,
+  });
 
-  const summaryQuery = useQuery<PJSummary>({
-    queryKey: ["pj:summary", { clientId, bankAccountId, from, to }],
-    enabled: Boolean(clientId && bankAccountId && isPJClient),
-    queryFn: () =>
-      pjService.getSummary({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
+  const selectedAccount = useMemo(
+    () => bankAccountOptions.find((account) => account.id === selectedAccountId) ?? null,
+    [bankAccountOptions, selectedAccountId],
+  );
+
+  const accountLabel = useMemo(() => {
+    if (!selectedAccount) {
+      return "Selecione uma conta PJ";
+    }
+
+    if (selectedAccount.isAggregate) {
+      return selectedAccount.bankName;
+    }
+
+    return `${selectedAccount.bankName} • ${selectedAccount.accountNumberMask}`;
+  }, [selectedAccount]);
+
+  const isAllAccounts = selectedAccountId === allAccountsOption.id;
+  const { from, to } = useMemo(() => toApiDateRange(dateRange), [dateRange]);
+  const rangeLabel = useMemo(() => formatRangeLabel(dateRange), [dateRange]);
+  const accountIdsKey = useMemo(() => availableAccounts.map((account) => account.id).sort().join("|"), [
+    availableAccounts,
+  ]);
+
+  const canQuery = Boolean(
+    clientId &&
+      from &&
+      to &&
+      isPJClient &&
+      (isAllAccounts ? availableAccounts.length > 0 : selectedAccountId),
+  );
+
+  const summaryQuery = useQuery({
+    queryKey: [
+      "pj:summary",
+      {
+        clientId,
+        selectedAccountId,
         from,
         to,
-      }),
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { summary: null as PJSummary | null, requestIds: [] as string[] };
+      }
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) =>
+            pjService.getSummary({
+              clientId,
+              bankAccountId: account.id,
+              from,
+              to,
+            }),
+          ),
+        );
+
+        const summary = aggregateSummary(responses);
+        const requestIds = responses
+          .map((response) => getRequestId(response))
+          .filter((id): id is string => Boolean(id));
+
+        return { summary, requestIds };
+      }
+
+      const response = await pjService.getSummary({
+        clientId,
+        bankAccountId: selectedAccountId!,
+        from,
+        to,
+      });
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { summary: response, requestIds };
+    },
   });
 
-  const trendsQuery = useQuery<{ trends: PJTrend[] }>({
-    queryKey: ["pj:trends", { clientId, bankAccountId, currentYear }],
-    enabled: Boolean(clientId && bankAccountId && isPJClient),
-    queryFn: () =>
-      pjService.getTrends({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        year: currentYear,
-      }),
+  const trendsQuery = useQuery({
+    queryKey: [
+      "pj:trends",
+      {
+        clientId,
+        selectedAccountId,
+        from,
+        to,
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { trends: [] as PJTrend[], requestIds: [] as string[] };
+      }
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) =>
+            pjService.getTrends({
+              clientId,
+              bankAccountId: account.id,
+              from,
+              to,
+            }),
+          ),
+        );
+
+        const trends = aggregateTrends(responses);
+        const requestIds = responses
+          .map((response) => getRequestId(response))
+          .filter((id): id is string => Boolean(id));
+
+        return { trends, requestIds };
+      }
+
+      const response = await pjService.getTrends({
+        clientId,
+        bankAccountId: selectedAccountId!,
+        from,
+        to,
+      });
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { trends: response.trends, requestIds };
+    },
   });
 
-  const revenueSplitQuery = useQuery<{ revenueSplit: PJRevenueSplitItem[] }>({
-    queryKey: ["pj:revenue-split", { clientId, bankAccountId }],
-    enabled: Boolean(clientId && bankAccountId && isPJClient),
-    queryFn: () =>
-      pjService.getRevenueSplit({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        month: from.slice(0, 7),
-      }),
+  const revenueSplitQuery = useQuery({
+    queryKey: [
+      "pj:revenue-split",
+      {
+        clientId,
+        selectedAccountId,
+        from,
+        to,
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { revenueSplit: [] as PJRevenueSplitItem[], requestIds: [] as string[] };
+      }
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) =>
+            pjService.getRevenueSplit({
+              clientId,
+              bankAccountId: account.id,
+              from,
+              to,
+            }),
+          ),
+        );
+
+        const revenueSplit = aggregateRevenueSplit(responses);
+        const requestIds = responses
+          .map((response) => getRequestId(response))
+          .filter((id): id is string => Boolean(id));
+
+        return { revenueSplit, requestIds };
+      }
+
+      const response = await pjService.getRevenueSplit({
+        clientId,
+        bankAccountId: selectedAccountId!,
+        from,
+        to,
+      });
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { revenueSplit: response.revenueSplit, requestIds };
+    },
   });
 
-  const topCostsQuery = useQuery<{ topCosts: PJTopCostItem[] }>({
-    queryKey: ["pj:top-costs", { clientId, bankAccountId }],
-    enabled: Boolean(clientId && bankAccountId && isPJClient),
-    queryFn: () =>
-      pjService.getTopCosts({
-        clientId: clientId!,
-        bankAccountId: bankAccountId!,
-        month: from.slice(0, 7),
-      }),
+  const topCostsQuery = useQuery({
+    queryKey: [
+      "pj:top-costs",
+      {
+        clientId,
+        selectedAccountId,
+        from,
+        to,
+        accountIdsKey,
+        isAllAccounts,
+      },
+    ],
+    enabled: canQuery,
+    queryFn: async () => {
+      if (!clientId || !from || !to) {
+        return { topCosts: [] as PJTopCostItem[], requestIds: [] as string[] };
+      }
+
+      if (isAllAccounts) {
+        const responses = await Promise.all(
+          availableAccounts.map((account) =>
+            pjService.getTopCosts({
+              clientId,
+              bankAccountId: account.id,
+              from,
+              to,
+            }),
+          ),
+        );
+
+        const topCosts = aggregateTopCosts(responses);
+        const requestIds = responses
+          .map((response) => getRequestId(response))
+          .filter((id): id is string => Boolean(id));
+
+        return { topCosts, requestIds };
+      }
+
+      const response = await pjService.getTopCosts({
+        clientId,
+        bankAccountId: selectedAccountId!,
+        from,
+        to,
+      });
+
+      const requestIds = [getRequestId(response)].filter((id): id is string => Boolean(id));
+      return { topCosts: response.topCosts, requestIds };
+    },
   });
+
+  const summary = summaryQuery.data?.summary ?? null;
+  const trends = trendsQuery.data?.trends ?? [];
+  const revenueSplit = revenueSplitQuery.data?.revenueSplit ?? [];
+  const topCosts = topCostsQuery.data?.topCosts ?? [];
+
+  const uniqueRequestIds = useMemo(() => {
+    const ids = [
+      ...(summaryQuery.data?.requestIds ?? []),
+      ...(trendsQuery.data?.requestIds ?? []),
+      ...(revenueSplitQuery.data?.requestIds ?? []),
+      ...(topCostsQuery.data?.requestIds ?? []),
+    ];
+    return Array.from(new Set(ids));
+  }, [
+    summaryQuery.data?.requestIds,
+    trendsQuery.data?.requestIds,
+    revenueSplitQuery.data?.requestIds,
+    topCostsQuery.data?.requestIds,
+  ]);
+
+  useRequestIdToasts(uniqueRequestIds, { context: "Resumo PJ" });
 
   if (!clientId) {
     return (
@@ -115,7 +410,7 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
     );
   }
 
-  if (!bankAccountId) {
+  if (!selectedAccountId && !isLoadingAccounts) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
         <h2 className="text-2xl font-semibold text-muted-foreground">Selecione uma conta PJ</h2>
@@ -126,23 +421,34 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
     );
   }
 
-  const summary = summaryQuery.data;
-  const trends = trendsQuery.data?.trends ?? [];
-  const revenueSplit = revenueSplitQuery.data?.revenueSplit ?? [];
-  const topCosts = topCostsQuery.data?.topCosts ?? [];
-
   const showSummaryEmpty = !summary && !summaryQuery.isLoading && !summaryQuery.isError;
   const showTrendsEmpty = !trends.length && !trendsQuery.isLoading && !trendsQuery.isError;
-  const showRevenueEmpty = !revenueSplit.length && !revenueSplitQuery.isLoading && !revenueSplitQuery.isError;
+  const showRevenueEmpty =
+    !revenueSplit.length && !revenueSplitQuery.isLoading && !revenueSplitQuery.isError;
   const showCostsEmpty = !topCosts.length && !topCostsQuery.isLoading && !topCostsQuery.isError;
 
   return (
     <div className="space-y-6" data-testid="page-pj-resumo">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Resumo Financeiro</h1>
-        <p className="text-sm text-muted-foreground">
-          Acompanhe receitas, despesas e canais de venda em um só lugar.
-        </p>
+      <div className="space-y-2">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Resumo Financeiro</h1>
+          <p className="text-sm text-muted-foreground">
+            Acompanhe receitas, despesas e canais de venda em um só lugar.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{accountLabel}</span>
+          <Badge variant="secondary">{rangeLabel}</Badge>
+        </div>
+        {uniqueRequestIds.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {uniqueRequestIds.map((id) => (
+              <Badge key={id} variant="outline">
+                X-Request-Id: {formatRequestId(id)}
+              </Badge>
+            ))}
+          </div>
+        )}
       </div>
 
       {summaryQuery.isError && (
@@ -168,13 +474,13 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
         {summary && (
           <>
             <MetricCard
-              title="Receitas do mês"
+              title="Receitas do período"
               value={summary.receitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               icon={<TrendingUp className="h-5 w-5" />}
               testId="metric-receitas"
             />
             <MetricCard
-              title="Despesas do mês"
+              title="Despesas do período"
               value={summary.despesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               icon={<TrendingDown className="h-5 w-5" />}
               testId="metric-despesas"
@@ -198,139 +504,151 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
         {showSummaryEmpty && (
           <Card className="md:col-span-2 xl:col-span-4">
             <CardContent className="flex h-full items-center justify-center py-10">
-              <p className="text-sm text-muted-foreground">Nenhuma informação consolidada para o período selecionado.</p>
+              <p className="text-sm text-muted-foreground">
+                Nenhum indicador disponível para o período selecionado.
+              </p>
             </CardContent>
           </Card>
         )}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Evolução mensal</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {trendsQuery.isError && (
-              <Alert variant="destructive" className="mb-4" data-testid="alert-trends-error">
-                <AlertTitle>Erro ao carregar evolução</AlertTitle>
-                <AlertDescription>
-                  {(trendsQuery.error as Error).message || "Não conseguimos carregar a evolução mensal."}
-                </AlertDescription>
-              </Alert>
-            )}
+      <Separator />
 
-            {trendsQuery.isLoading && (
-              <div className="space-y-3">
-                <Skeleton className="h-4 w-28" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-[80%]" />
-                <Skeleton className="h-4 w-[65%]" />
-              </div>
-            )}
-
-            {showTrendsEmpty && (
-              <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted-foreground">
-                Nenhum histórico disponível para o ano selecionado.
-              </div>
-            )}
-
-            {!trendsQuery.isLoading && trends.length > 0 && (
-              <div className="space-y-4">
-                {trends.map((trend) => (
-                  <div key={trend.month} className="rounded-lg border p-3">
-                    <div className="flex items-center justify-between text-sm font-medium">
-                      <span>{formatTrendLabel(trend.month)}</span>
-                      <span className="text-muted-foreground">{formatCurrency(trend.receitas)}</span>
-                    </div>
-                    <Separator className="my-3" />
-                    <div className="flex items-center justify-between text-sm text-muted-foreground">
-                      <span>Despesas</span>
-                      <span>{formatCurrency(trend.despesas)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Divisão de receita por canal</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {revenueSplitQuery.isError && (
-              <Alert variant="destructive" className="mb-4" data-testid="alert-revenue-error">
-                <AlertTitle>Erro ao carregar canais</AlertTitle>
-                <AlertDescription>
-                  {(revenueSplitQuery.error as Error).message || "Tente novamente em instantes."}
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {revenueSplitQuery.isLoading && (
-              <div className="space-y-3">
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-[70%]" />
-                <Skeleton className="h-4 w-[60%]" />
-              </div>
-            )}
-
-            {showRevenueEmpty && (
-              <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted-foreground">
-                Nenhuma receita foi registrada neste período.
-              </div>
-            )}
-
-            {!revenueSplitQuery.isLoading && revenueSplit.length > 0 && (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Canal</TableHead>
-                    <TableHead className="text-right">Faturamento</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {revenueSplit.map((item) => (
-                    <TableRow key={item.channel}>
-                      <TableCell className="font-medium">{item.channel}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(item.amount)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      {trendsQuery.isError && (
+        <Alert variant="destructive" data-testid="alert-trends-error">
+          <AlertTitle>Não foi possível carregar a evolução</AlertTitle>
+          <AlertDescription>
+            {(trendsQuery.error as Error).message || "Tente novamente mais tarde."}
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader>
-          <CardTitle>Principais centros de custo</CardTitle>
+          <CardTitle>Tendências mensais</CardTitle>
         </CardHeader>
         <CardContent>
-          {topCostsQuery.isError && (
-            <Alert variant="destructive" className="mb-4" data-testid="alert-costs-error">
-              <AlertTitle>Erro ao carregar custos</AlertTitle>
-              <AlertDescription>
-                {(topCostsQuery.error as Error).message || "Não foi possível trazer os custos."}
-              </AlertDescription>
-            </Alert>
+          {trendsQuery.isLoading && (
+            <div className="space-y-3">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-[92%]" />
+              <Skeleton className="h-4 w-[85%]" />
+            </div>
           )}
 
+          {showTrendsEmpty && (
+            <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
+              Nenhuma tendência disponível para o período selecionado.
+            </div>
+          )}
+
+          {!trendsQuery.isLoading && trends.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Mês</TableHead>
+                  <TableHead className="text-right">Receitas</TableHead>
+                  <TableHead className="text-right">Despesas</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {trends.map((trend) => (
+                  <TableRow key={trend.month}>
+                    <TableCell>{trend.month}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(trend.receitas)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(trend.despesas)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Separator />
+
+      {revenueSplitQuery.isError && (
+        <Alert variant="destructive" data-testid="alert-revenue-error">
+          <AlertTitle>Erro ao carregar canais</AlertTitle>
+          <AlertDescription>
+            {(revenueSplitQuery.error as Error).message ||
+              "Não foi possível carregar a divisão de receita."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Receita por canal</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {revenueSplitQuery.isLoading && (
+            <div className="space-y-3">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-[85%]" />
+            </div>
+          )}
+
+          {showRevenueEmpty && (
+            <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
+              Nenhum canal de receita registrado para o período.
+            </div>
+          )}
+
+          {!revenueSplitQuery.isLoading && revenueSplit.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Canal</TableHead>
+                  <TableHead className="text-right">Receita</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {revenueSplit.map((item) => (
+                  <TableRow key={item.channel}>
+                    <TableCell className="font-medium">{item.channel}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(item.amount)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Separator />
+
+      {topCostsQuery.isError && (
+        <Alert variant="destructive" data-testid="alert-costs-error">
+          <AlertTitle>Erro ao carregar principais custos</AlertTitle>
+          <AlertDescription>
+            {(topCostsQuery.error as Error).message || "Tente novamente mais tarde."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Principais custos</CardTitle>
+        </CardHeader>
+        <CardContent>
           {topCostsQuery.isLoading && (
             <div className="space-y-3">
-              <Skeleton className="h-4 w-36" />
               <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-[75%]" />
-              <Skeleton className="h-4 w-[65%]" />
+              <Skeleton className="h-4 w-[88%]" />
+              <Skeleton className="h-4 w-[76%]" />
             </div>
           )}
 
           {showCostsEmpty && (
-            <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted-foreground">
-              Nenhum custo recorrente cadastrado para o mês atual.
+            <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
+              Nenhum custo encontrado para o período selecionado.
             </div>
           )}
 
@@ -346,9 +664,11 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
               <TableBody>
                 {topCosts.map((cost) => (
                   <TableRow key={`${cost.category}-${cost.item}`}>
-                    <TableCell className="font-medium">{cost.category}</TableCell>
-                    <TableCell>{cost.item}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(cost.total)}</TableCell>
+                    <TableCell>{cost.category}</TableCell>
+                    <TableCell className="font-medium">{cost.item}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(cost.total)}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -356,17 +676,6 @@ export default function ResumoPJ({ clientId, clientType, bankAccountId }: Resumo
           )}
         </CardContent>
       </Card>
-
-      <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-        <div className="flex items-center gap-2 font-medium text-primary">
-          <FileBarChart className="h-4 w-4" />
-          <span>Dados simulados</span>
-        </div>
-        <p className="mt-2">
-          Todos os indicadores são fornecidos pelo serviço mockado da plataforma, permitindo validar a
-          experiência de navegação e os estados de carregamento, erro e ausência de dados.
-        </p>
-      </div>
     </div>
   );
 }
