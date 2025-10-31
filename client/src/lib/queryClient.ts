@@ -14,10 +14,16 @@ export interface ApiResponse extends Response {
   requestId?: string | null;
 }
 
-async function throwIfResNotOk(res: Response) {
+async function throwIfResNotOk(res: ApiResponse) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const error = new Error(`${res.status}: ${text}`);
+    const requestId =
+      (res.requestId as string | undefined) ?? res.headers.get("X-Request-Id");
+    if (requestId) {
+      Object.assign(error, { requestId });
+    }
+    throw error;
   }
 }
 
@@ -40,7 +46,7 @@ export async function apiRequest(
 
   const requestId = res.headers.get("X-Request-Id");
   logRequestId("apiRequest", method, url, requestId);
-  const responseWithId = attachRequestId(res, requestId);
+  const responseWithId = attachRequestId(res, requestId) as ApiResponse;
 
   await throwIfResNotOk(responseWithId);
   return responseWithId;
@@ -148,12 +154,14 @@ export const getQueryFn =
     const requestId = res.headers.get("X-Request-Id");
     logRequestId("getQueryFn", "GET", url, requestId);
 
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+    const responseWithId = attachRequestId(res, requestId) as ApiResponse;
+
+    if (unauthorizedBehavior === "returnNull" && responseWithId.status === 401) {
       return null;
     }
 
-    await throwIfResNotOk(res);
-    const data = await res.json();
+    await throwIfResNotOk(responseWithId);
+    const data = await responseWithId.json();
     return attachRequestId(data, requestId);
   };
 

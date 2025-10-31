@@ -10,7 +10,7 @@ import { usePJFilters } from "@/contexts/PJFiltersContext";
 import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
 import { formatRangeLabel, toApiDateRange } from "@/lib/date-range";
 import { useRequestIdToasts } from "@/hooks/useRequestIdToasts";
-import { formatRequestId } from "@/lib/requestId";
+import { extractRequestId, formatRequestId } from "@/lib/requestId";
 import {
   type PJMonthlyInsightsResponse,
   type PJCostBreakdownResponse,
@@ -37,11 +37,7 @@ function formatCurrency(value: number) {
 }
 
 function getRequestId(value: unknown): string | null {
-  if (value && typeof value === "object" && "requestId" in value) {
-    const casted = value as { requestId?: string | null };
-    return casted.requestId ?? null;
-  }
-  return null;
+  return extractRequestId(value);
 }
 
 function mergeTopSales(items: PJTopSaleHighlight[]): PJTopSaleHighlight[] {
@@ -545,6 +541,9 @@ export default function RelatoriosPJ({ clientType }: RelatoriosPJProps) {
 
   useRequestIdToasts(uniqueRequestIds, { context: "Relatórios PJ" });
 
+  const insightsErrorRequestId = extractRequestId(insightsQuery.error);
+  const costBreakdownErrorRequestId = extractRequestId(costBreakdownQuery.error);
+
   if (!clientId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
@@ -608,6 +607,11 @@ export default function RelatoriosPJ({ clientType }: RelatoriosPJProps) {
           <AlertDescription>
             {(insightsQuery.error as Error).message ||
               "Não foi possível carregar os indicadores do período."}
+            {insightsErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(insightsErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -659,6 +663,11 @@ export default function RelatoriosPJ({ clientType }: RelatoriosPJProps) {
           <AlertTitle>Erro ao carregar estrutura de custos</AlertTitle>
           <AlertDescription>
             {(costBreakdownQuery.error as Error).message || "Tente novamente mais tarde."}
+            {costBreakdownErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(costBreakdownErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}

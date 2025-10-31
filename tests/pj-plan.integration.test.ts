@@ -168,6 +168,7 @@ describe("PJ plan routes", () => {
 
     const createResponse = await agent
       .post("/api/pj/plan/global")
+      .set("X-Request-Id", "req-plan-create-1")
       .send({
         code: "CUSTOM_CAT",
         name: "Categoria Custom",
@@ -175,11 +176,15 @@ describe("PJ plan routes", () => {
       .expect(201);
 
     const categoryId = createResponse.body.category.id as string;
+    assert.equal(createResponse.headers["x-request-id"], "req-plan-create-1");
 
-    await agent
+    const updateResponse = await agent
       .patch(`/api/pj/plan/global/${categoryId}`)
+      .set("X-Request-Id", "req-plan-update-1")
       .send({ name: "Categoria Custom Atualizada" })
       .expect(200);
+
+    assert.equal(updateResponse.headers["x-request-id"], "req-plan-update-1");
 
     const logs = await ctx.storage.getAuditLogs(ORG_ID, 5);
     const latest = logs.find(entry => entry.eventType === "pj.plan.global.update");
@@ -201,6 +206,7 @@ describe("PJ plan routes", () => {
       oldCategory?.name,
       "old category name should be masked",
     );
+    assert.equal(latest?.metadata?.requestId, "req-plan-update-1");
   });
 
   it("bloqueia atualização em categoria de cliente derivada de núcleo", async () => {

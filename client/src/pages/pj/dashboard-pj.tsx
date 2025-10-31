@@ -10,7 +10,7 @@ import { usePJFilters } from "@/contexts/PJFiltersContext";
 import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
 import { formatRangeLabel, toApiDateRange } from "@/lib/date-range";
 import { useRequestIdToasts } from "@/hooks/useRequestIdToasts";
-import { formatRequestId } from "@/lib/requestId";
+import { extractRequestId, formatRequestId } from "@/lib/requestId";
 import { TrendingUp, DollarSign, CreditCard } from "lucide-react";
 import type { PJSummary, PJSalesKpis } from "@/services/pj";
 import { Badge } from "@/components/ui/badge";
@@ -28,11 +28,7 @@ function formatCurrency(value: number) {
 }
 
 function getRequestId(value: unknown): string | null {
-  if (value && typeof value === "object" && "requestId" in value) {
-    const casted = value as { requestId?: string | null };
-    return casted.requestId ?? null;
-  }
-  return null;
+  return extractRequestId(value);
 }
 
 function aggregateSummary(responses: PJSummary[]): PJSummary | null {
@@ -270,6 +266,9 @@ export default function DashboardPJ({ clientType }: DashboardPJProps) {
 
   useRequestIdToasts(uniqueRequestIds, { context: "Dashboard PJ" });
 
+  const summaryErrorRequestId = extractRequestId(summaryQuery.error);
+  const salesErrorRequestId = extractRequestId(salesKpisQuery.error);
+
   if (!clientId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
@@ -332,6 +331,11 @@ export default function DashboardPJ({ clientType }: DashboardPJProps) {
           <AlertTitle>Erro ao carregar o resumo</AlertTitle>
           <AlertDescription>
             {(summaryQuery.error as Error).message || "Não foi possível carregar os indicadores."}
+            {summaryErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(summaryErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -383,6 +387,11 @@ export default function DashboardPJ({ clientType }: DashboardPJProps) {
           <AlertTitle>Erro ao carregar vendas</AlertTitle>
           <AlertDescription>
             {(salesKpisQuery.error as Error).message || "Não foi possível carregar os KPIs de vendas."}
+            {salesErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(salesErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}

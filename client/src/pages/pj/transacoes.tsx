@@ -12,7 +12,7 @@ import { usePJFilters } from "@/contexts/PJFiltersContext";
 import { usePJBankAccounts } from "@/hooks/usePJBankAccounts";
 import { formatRangeLabel, toApiDateRange } from "@/lib/date-range";
 import { useRequestIdToasts } from "@/hooks/useRequestIdToasts";
-import { formatRequestId } from "@/lib/requestId";
+import { extractRequestId, formatRequestId } from "@/lib/requestId";
 import {
   type PJSale,
   type PJBankTransactionsResponse,
@@ -37,11 +37,7 @@ function formatDate(value: string) {
 }
 
 function getRequestId(value: unknown): string | null {
-  if (value && typeof value === "object" && "requestId" in value) {
-    const casted = value as { requestId?: string | null };
-    return casted.requestId ?? null;
-  }
-  return null;
+  return extractRequestId(value);
 }
 
 function aggregateSummaries(summaries: PJSale[][]): PJSale[] {
@@ -235,6 +231,9 @@ export default function TransacoesPJ({ clientType }: TransacoesPJProps) {
 
   useRequestIdToasts(uniqueRequestIds, { context: "Transações PJ" });
 
+  const salesErrorRequestId = extractRequestId(salesQuery.error);
+  const transactionsErrorRequestId = extractRequestId(transactionsQuery.error);
+
   if (!clientId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
@@ -318,6 +317,11 @@ export default function TransacoesPJ({ clientType }: TransacoesPJProps) {
           <AlertDescription>
             {(salesQuery.error as Error).message ||
               "Não foi possível carregar as vendas deste período."}
+            {salesErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(salesErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -385,6 +389,11 @@ export default function TransacoesPJ({ clientType }: TransacoesPJProps) {
           <AlertDescription>
             {(transactionsQuery.error as Error).message ||
               "Não foi possível carregar o extrato da conta selecionada."}
+            {transactionsErrorRequestId && (
+              <span className="mt-2 block text-xs text-muted-foreground">
+                X-Request-Id: {formatRequestId(transactionsErrorRequestId)}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}
