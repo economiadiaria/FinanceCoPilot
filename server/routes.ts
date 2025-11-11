@@ -80,7 +80,22 @@ export async function registerRoutes(
   app: Express,
   dependencies: RouteDependencies = {},
 ): Promise<Server> {
-  const database = dependencies.db ?? getDb();
+  const resolveDatabase = (): Database => dependencies.db ?? getDb();
+
+  app.use((req, res, next) => {
+    if (!req.requestId) {
+      const header = req.headers["x-request-id"];
+      const requestId = Array.isArray(header) ? header[0] : header;
+      if (typeof requestId === "string" && requestId.length > 0) {
+        req.requestId = requestId;
+        if (!res.getHeader("X-Request-Id")) {
+          res.setHeader("X-Request-Id", requestId);
+        }
+      }
+    }
+
+    next();
+  });
 
   app.get("/healthz", (_req, res) => {
     res.status(200).json({
@@ -393,6 +408,7 @@ export async function registerRoutes(
         });
 
         try {
+          const database = resolveDatabase();
           await database.transaction(async transaction => {
             await onboardPjClientCategories({
               orgId: organizationId,
