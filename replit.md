@@ -16,7 +16,7 @@ The user interface is built with Shadcn UI and Tailwind CSS, featuring a respons
 ### Technical Implementations
 - **Backend**: Node.js with Express.js.
 - **Frontend**: React with TypeScript and Vite.
-- **Database**: Replit Database (`@replit/database`) with a MemStorage fallback.
+- **Database**: PostgreSQL provisioned via `DATABASE_URL` (armazenada como secret no Replit, com fallback local apenas em modo de desenvolvimento).
 - **Configuração local**: Quando a conexão apontar para um Postgres tradicional, configure `DATABASE_DRIVER=pg` no ambiente local.
 - **Authentication**: Session-based using `express-session` and `bcrypt` for password hashing, with session ID regeneration for security.
 - **State Management**: TanStack Query (React Query) for data fetching and caching.
@@ -45,7 +45,7 @@ The user interface is built with Shadcn UI and Tailwind CSS, featuring a respons
 The application uses a modular folder structure, separating client (frontend), server (backend), and shared (schemas) code. Data models are strictly typed using TypeScript. API endpoints are protected by authentication middleware, ensuring resource ownership and secure access. The system is designed for a seamless user experience, including automatic redirection for unauthenticated users, clear success/error notifications, and a consistent display of financial data.
 
 ## External Dependencies
-- **Replit Database**: Primary data storage solution.
+- **PostgreSQL**: Primary data storage solution exposto via `DATABASE_URL`.
 - **bcrypt**: For password hashing.
 - **express-session**: For session management and user authentication.
 - **OFX-js**: For parsing OFX bank statements.
@@ -58,6 +58,20 @@ The application uses a modular folder structure, separating client (frontend), s
 - **Google Fonts (Inter)**: Typography.
 - **Chart.js**: Interactive charts for PJ dashboard visualizations (loaded via CDN).
 - **PapaParse**: CSV parsing for sales import.
+
+## Configuração do Postgres no Replit
+
+1. Abra o projeto no Replit e clique em **Tools → Secrets**.
+2. Adicione um novo secret com `Key = DATABASE_URL` e `Value` igual à string de conexão do Postgres (copie de **Tools → Database → Connect** ou do serviço que você estiver usando).
+3. Reinicie o repl para que a variável de ambiente seja aplicada ao Node.js.
+4. No shell, execute `npm run migrate` para aplicar as migrations.
+5. Após as migrations, rode `npm run seed` para popular as categorias e dados iniciais.
+
+## Troubleshooting
+
+- **Erro `DATABASE_URL não configurado`**: verifique em **Tools → Secrets** se o secret está ativo e sem espaços extras; reinicie o repl depois de alterá-lo.
+- **Falha de conexão (`ECONNREFUSED`/`ETIMEDOUT`)**: no shell, teste com `psql "$DATABASE_URL" -c '\\dt'` para confirmar acesso. Se falhar, confira se o banco do Replit está ativo ou atualize as credenciais.
+- **Seeds não aplicados**: execute novamente `npm run seed`. Se precisar recriar dados, primeiro limpe as tabelas relevantes com `psql` e, em seguida, rode `npm run migrate && npm run seed`.
 
 ## Open Finance Integration Details
 
