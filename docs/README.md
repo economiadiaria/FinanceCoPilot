@@ -11,6 +11,7 @@ Quick links to operational and product documentation for FinanceCoPilot.
 - [Smoke Test Checklist](./SMOKE.md)
 - [PJ Ingestion Test Plan](./pj-ingestion-test-plan.md)
 - [PJ MVP Priority Roadmap](./pj-mvp-priority-roadmap.md)
+- [Documentação técnica do ciclo PJ](./pj-cycle-tech.md)
 
 ## Developer Notes
 
