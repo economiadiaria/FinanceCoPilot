@@ -17,6 +17,7 @@ The user interface is built with Shadcn UI and Tailwind CSS, featuring a respons
 - **Backend**: Node.js with Express.js.
 - **Frontend**: React with TypeScript and Vite.
 - **Database**: Replit Database (`@replit/database`) with a MemStorage fallback.
+- **Configuração local**: Quando a conexão apontar para um Postgres tradicional, configure `DATABASE_DRIVER=pg` no ambiente local.
 - **Authentication**: Session-based using `express-session` and `bcrypt` for password hashing, with session ID regeneration for security.
 - **State Management**: TanStack Query (React Query) for data fetching and caching.
 - **Routing**: Wouter for client-side navigation.
