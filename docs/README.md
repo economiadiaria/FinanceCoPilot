@@ -18,3 +18,6 @@ Quick links to operational and product documentation for FinanceCoPilot.
 - Run the full automated suite with `npm test` (powered by `tsx`).
 - To execute a single integration test with the Node.js test runner on Node 20+, prefer `node --test --import tsx tests/<file>.test.ts` (the legacy `--loader` flag now errors out).
 - Copie o arquivo `.env.example` para `.env` e preencha a variável `DATABASE_URL` com a string de conexão do Postgres (por exemplo, a URL fornecida pelo Replit).
+- Execute migrations with `npm run migrate` (ou diretamente via `npx drizzle-kit migrate --config drizzle.config.ts`).
+- Apply pending migrations in production environments with `npm run migrate:deploy` (ou `npx drizzle-kit migrate deploy --config drizzle.config.ts`).
+- Seed the PJ base categories with `npm run seed`. Recommended order: `npm run migrate && npm run seed`.
