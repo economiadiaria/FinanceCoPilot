@@ -23,10 +23,221 @@ import type {
   AuditLogEntry,
 } from "@shared/schema";
 import Database from "@replit/database";
+import { and, asc, eq, inArray, like, not, sql } from "drizzle-orm";
+
+import { initDb, type Database as SqlDatabase } from "./db/client";
+import {
+  appStorage,
+  bankAccountSummarySnapshots,
+  bankAccounts,
+  pjCategories as pjCategoriesTable,
+  pjClientCategories as pjClientCategoriesTable,
+} from "./db/schema";
 
 const PROCESSED_WEBHOOK_RETENTION_MS = 15 * 60 * 1000;
 
 export type PjClientCategoryRecord = PjClientCategory;
+
+type KeyValueError = {
+  statusCode: number;
+  message: string;
+};
+
+type KeyValueResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: KeyValueError };
+
+interface KeyValueClient {
+  get<T = any>(key: string): Promise<KeyValueResult<T | null>>;
+  set<T = any>(key: string, value: T): Promise<KeyValueResult<true>>;
+  delete(key: string): Promise<KeyValueResult<true>>;
+  list(prefix: string): Promise<KeyValueResult<string[]>>;
+}
+
+function normalizeError(error: unknown, fallback: string): KeyValueError {
+  if (error && typeof error === "object") {
+    const err = error as { statusCode?: number; status?: number; message?: string };
+    const status = typeof err.statusCode === "number" ? err.statusCode : err.status;
+    return {
+      statusCode: typeof status === "number" ? status : 500,
+      message: typeof err.message === "string" && err.message.length > 0 ? err.message : fallback,
+    };
+  }
+
+  return {
+    statusCode: 500,
+    message: fallback,
+  };
+}
+
+function createReplitDbAdapter(client: Database): KeyValueClient {
+  return {
+    async get<T>(key: string): Promise<KeyValueResult<T | null>> {
+      try {
+        const result = await client.get(key);
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: {
+              statusCode: result.error?.statusCode ?? 500,
+              message: result.error?.message ?? `Failed to get key ${key}`,
+            },
+          };
+        }
+        const value = result.value;
+        if (value === undefined || value === null) {
+          return {
+            ok: false,
+            error: { statusCode: 404, message: `Key ${key} not found` },
+          };
+        }
+        return { ok: true, value };
+      } catch (error) {
+        return { ok: false, error: normalizeError(error, `Failed to get key ${key}`) };
+      }
+    },
+
+    async set<T>(key: string, value: T): Promise<KeyValueResult<true>> {
+      try {
+        const result = await client.set(key, value as any);
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: {
+              statusCode: result.error?.statusCode ?? 500,
+              message: result.error?.message ?? `Failed to set key ${key}`,
+            },
+          };
+        }
+        return { ok: true, value: true };
+      } catch (error) {
+        return { ok: false, error: normalizeError(error, `Failed to set key ${key}`) };
+      }
+    },
+
+    async delete(key: string): Promise<KeyValueResult<true>> {
+      try {
+        const result = await client.delete(key);
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: {
+              statusCode: result.error?.statusCode ?? 500,
+              message: result.error?.message ?? `Failed to delete key ${key}`,
+            },
+          };
+        }
+        return { ok: true, value: true };
+      } catch (error) {
+        const normalized = normalizeError(error, `Failed to delete key ${key}`);
+        return { ok: false, error: normalized };
+      }
+    },
+
+    async list(prefix: string): Promise<KeyValueResult<string[]>> {
+      try {
+        const result = await client.list(prefix);
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: {
+              statusCode: result.error?.statusCode ?? 500,
+              message: result.error?.message ?? `Failed to list prefix ${prefix}`,
+            },
+          };
+        }
+        return { ok: true, value: result.value ?? [] };
+      } catch (error) {
+        return { ok: false, error: normalizeError(error, `Failed to list prefix ${prefix}`) };
+      }
+    },
+  };
+}
+
+class PostgresKvAdapter implements KeyValueClient {
+  private initPromise: Promise<void> | null = null;
+
+  constructor(private readonly db: SqlDatabase) {}
+
+  private ensureInitialized(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = (async () => {
+        await this.db.execute(sql`
+          CREATE TABLE IF NOT EXISTS app_storage (
+            key text PRIMARY KEY,
+            value jsonb,
+            updated_at timestamptz NOT NULL DEFAULT now()
+          );
+        `);
+      })();
+    }
+
+    return this.initPromise;
+  }
+
+  async get<T>(key: string): Promise<KeyValueResult<T | null>> {
+    await this.ensureInitialized();
+    try {
+      const row = await this.db.query.appStorage.findFirst({
+        where: eq(appStorage.key, key),
+      });
+      if (!row) {
+        return { ok: false, error: { statusCode: 404, message: `Key ${key} not found` } };
+      }
+      return { ok: true, value: (row.value as T | null) ?? null };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error, `Failed to get key ${key}`) };
+    }
+  }
+
+  async set<T>(key: string, value: T): Promise<KeyValueResult<true>> {
+    await this.ensureInitialized();
+    const now = new Date().toISOString();
+    try {
+      await this.db
+        .insert(appStorage)
+        .values({ key, value: value as unknown, updatedAt: now })
+        .onConflictDoUpdate({
+          target: appStorage.key,
+          set: { value: value as unknown, updatedAt: now },
+        });
+      return { ok: true, value: true };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error, `Failed to set key ${key}`) };
+    }
+  }
+
+  async delete(key: string): Promise<KeyValueResult<true>> {
+    await this.ensureInitialized();
+    try {
+      const result = await this.db
+        .delete(appStorage)
+        .where(eq(appStorage.key, key))
+        .returning({ key: appStorage.key });
+      if (result.length === 0) {
+        return { ok: false, error: { statusCode: 404, message: `Key ${key} not found` } };
+      }
+      return { ok: true, value: true };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error, `Failed to delete key ${key}`) };
+    }
+  }
+
+  async list(prefix: string): Promise<KeyValueResult<string[]>> {
+    await this.ensureInitialized();
+    try {
+      const rows = await this.db
+        .select({ key: appStorage.key })
+        .from(appStorage)
+        .where(prefix ? like(appStorage.key, `${prefix}%`) : undefined)
+        .orderBy(appStorage.key);
+      return { ok: true, value: rows.map(row => row.key) };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error, `Failed to list prefix ${prefix}`) };
+    }
+  }
+}
+
 
 export interface IStorage {
   // Health
@@ -975,11 +1186,11 @@ export class MemStorage implements IStorage {
 }
 
 export class ReplitDbStorage implements IStorage {
-  private db: Database;
+  protected readonly db: KeyValueClient;
   private migrationsReady: Promise<void>;
 
-  constructor() {
-    this.db = new Database();
+  constructor(dbClient?: KeyValueClient) {
+    this.db = dbClient ?? createReplitDbAdapter(new Database());
     this.migrationsReady = Promise.all([
       this.normalizeLegacyOFXImports(),
       this.normalizeLegacyPjCategories(),
@@ -2483,10 +2694,423 @@ export class ReplitDbStorage implements IStorage {
   }
 }
 
-// Use ReplitDbStorage by default when configuration is present
-const defaultStorage: IStorage = process.env.REPLIT_DB_URL
-  ? new ReplitDbStorage()
-  : new MemStorage();
+type BankAccountRow = typeof bankAccounts.$inferSelect;
+type BankSummaryRow = typeof bankAccountSummarySnapshots.$inferSelect;
+type PjCategoryRow = typeof pjCategoriesTable.$inferSelect;
+type PjClientCategoryRow = typeof pjClientCategoriesTable.$inferSelect;
+
+export class PostgresStorage extends ReplitDbStorage {
+  private readonly sqlDb: SqlDatabase;
+
+  constructor(db: SqlDatabase = initDb()) {
+    super(new PostgresKvAdapter(db));
+    this.sqlDb = db;
+  }
+
+  private mapBankAccount(row: BankAccountRow): BankAccount {
+    return {
+      id: row.id,
+      orgId: row.orgId,
+      clientId: row.clientId,
+      provider: row.provider as BankAccount["provider"],
+      bankOrg: row.bankOrg ?? null,
+      bankFid: row.bankFid ?? null,
+      bankName: row.bankName,
+      bankCode: row.bankCode ?? null,
+      branch: row.branch ?? null,
+      accountNumberMask: row.accountNumberMask,
+      accountType: row.accountType,
+      currency: row.currency,
+      accountFingerprint: row.accountFingerprint,
+      isActive: row.isActive,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private mapBankSummary(row: BankSummaryRow): BankSummarySnapshot {
+    return {
+      organizationId: row.orgId,
+      clientId: row.clientId,
+      bankAccountId: row.bankAccountId,
+      window: row.window,
+      totals: (row.totals as BankSummarySnapshot["totals"]) ?? {},
+      kpis: (row.kpis as BankSummarySnapshot["kpis"]) ?? {},
+      refreshedAt: row.refreshedAt,
+    };
+  }
+
+  private mapPjCategory(row: PjCategoryRow): PjCategory {
+    return {
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      description: row.description ?? null,
+      parentId: row.parentId ?? null,
+      isCore: row.isCore,
+      acceptsPostings: row.acceptsPostings,
+      level: row.level,
+      path: row.path,
+      sortOrder: row.sortOrder ?? 0,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private mapPjClientCategory(row: PjClientCategoryRow): PjClientCategoryRecord {
+    return {
+      id: row.id,
+      orgId: row.orgId,
+      clientId: row.clientId,
+      name: row.name,
+      description: row.description ?? null,
+      parentId: row.parentId ?? null,
+      baseCategoryId: row.baseCategoryId ?? null,
+      acceptsPostings: row.acceptsPostings,
+      level: row.level,
+      path: row.path,
+      sortOrder: row.sortOrder ?? 0,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  override async checkHealth(): Promise<void> {
+    await this.sqlDb.execute(sql`select 1`);
+    await super.checkHealth();
+  }
+
+  override async getPjCategories(): Promise<PjCategory[]> {
+    const rows = await this.sqlDb.query.pjCategories.findMany({
+      orderBy: [
+        asc(pjCategoriesTable.level),
+        asc(pjCategoriesTable.sortOrder),
+        asc(pjCategoriesTable.code),
+      ],
+    });
+    return rows.map(row => this.mapPjCategory(row));
+  }
+
+  override async setPjCategories(categories: PjCategory[]): Promise<void> {
+    const normalized = categories.map(category => ({
+      id: category.id,
+      code: category.code,
+      name: category.name,
+      description: category.description ?? null,
+      parentId: category.parentId ?? null,
+      isCore: category.isCore ?? false,
+      acceptsPostings: category.acceptsPostings ?? true,
+      level: category.level,
+      path: category.path,
+      sortOrder: category.sortOrder ?? 0,
+      createdAt: category.createdAt,
+      updatedAt: category.updatedAt,
+    }));
+
+    await this.sqlDb.transaction(async tx => {
+      if (normalized.length === 0) {
+        await tx.delete(pjCategoriesTable);
+        return;
+      }
+
+      const ids = normalized.map(category => category.id);
+      await tx.delete(pjCategoriesTable).where(not(inArray(pjCategoriesTable.id, ids)));
+
+      for (const category of normalized) {
+        await tx
+          .insert(pjCategoriesTable)
+          .values(category)
+          .onConflictDoUpdate({
+            target: pjCategoriesTable.id,
+            set: {
+              code: category.code,
+              name: category.name,
+              description: category.description,
+              parentId: category.parentId,
+              isCore: category.isCore,
+              acceptsPostings: category.acceptsPostings,
+              level: category.level,
+              path: category.path,
+              sortOrder: category.sortOrder,
+              updatedAt: category.updatedAt,
+            },
+          });
+      }
+    });
+  }
+
+  override async bulkInsertPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategory[],
+  ): Promise<void> {
+    if (categories.length === 0) {
+      return;
+    }
+
+    await this.sqlDb.transaction(async tx => {
+      for (const category of categories) {
+        const payload = {
+          id: category.id,
+          orgId,
+          clientId,
+          baseCategoryId: category.baseCategoryId ?? null,
+          name: category.name,
+          description: category.description ?? null,
+          parentId: category.parentId ?? null,
+          level: category.level,
+          path: category.path,
+          sortOrder: category.sortOrder ?? 0,
+          acceptsPostings: category.acceptsPostings ?? true,
+          isActive: true,
+          isSystem: false,
+          createdAt: category.createdAt,
+          updatedAt: category.updatedAt,
+        };
+
+        await tx
+          .insert(pjClientCategoriesTable)
+          .values(payload)
+          .onConflictDoUpdate({
+            target: pjClientCategoriesTable.id,
+            set: {
+              baseCategoryId: payload.baseCategoryId,
+              name: payload.name,
+              description: payload.description,
+              parentId: payload.parentId,
+              level: payload.level,
+              path: payload.path,
+              sortOrder: payload.sortOrder,
+              acceptsPostings: payload.acceptsPostings,
+              updatedAt: payload.updatedAt,
+            },
+          });
+      }
+    });
+  }
+
+  override async getPjClientCategories(orgId: string, clientId: string): Promise<PjClientCategoryRecord[]> {
+    const rows = await this.sqlDb.query.pjClientCategories.findMany({
+      where: and(eq(pjClientCategoriesTable.orgId, orgId), eq(pjClientCategoriesTable.clientId, clientId)),
+      orderBy: [
+        asc(pjClientCategoriesTable.level),
+        asc(pjClientCategoriesTable.sortOrder),
+        asc(pjClientCategoriesTable.id),
+      ],
+    });
+    return rows.map(row => this.mapPjClientCategory(row));
+  }
+
+  override async setPjClientCategories(
+    orgId: string,
+    clientId: string,
+    categories: PjClientCategoryRecord[],
+  ): Promise<void> {
+    const values = categories.map(category => ({
+      id: category.id,
+      orgId,
+      clientId,
+      baseCategoryId: category.baseCategoryId ?? null,
+      name: category.name,
+      description: category.description ?? null,
+      parentId: category.parentId ?? null,
+      level: category.level,
+      path: category.path,
+      sortOrder: category.sortOrder ?? 0,
+      acceptsPostings: category.acceptsPostings ?? true,
+      isActive: true,
+      isSystem: false,
+      createdAt: category.createdAt,
+      updatedAt: category.updatedAt,
+    }));
+
+    await this.sqlDb.transaction(async tx => {
+      await tx
+        .delete(pjClientCategoriesTable)
+        .where(and(eq(pjClientCategoriesTable.orgId, orgId), eq(pjClientCategoriesTable.clientId, clientId)));
+
+      if (values.length === 0) {
+        return;
+      }
+
+      await tx.insert(pjClientCategoriesTable).values(values);
+    });
+  }
+
+  override async getBankAccounts(orgId: string, clientId?: string): Promise<BankAccount[]> {
+    const rows = await this.sqlDb.query.bankAccounts.findMany({
+      where: clientId
+        ? and(eq(bankAccounts.orgId, orgId), eq(bankAccounts.clientId, clientId))
+        : eq(bankAccounts.orgId, orgId),
+      orderBy: [asc(bankAccounts.createdAt)],
+    });
+    return rows.map(row => this.mapBankAccount(row));
+  }
+
+  override async upsertBankAccount(account: BankAccount): Promise<BankAccount> {
+    const payload = {
+      id: account.id,
+      orgId: account.orgId,
+      clientId: account.clientId,
+      provider: account.provider,
+      bankOrg: account.bankOrg ?? null,
+      bankFid: account.bankFid ?? null,
+      bankName: account.bankName,
+      bankCode: account.bankCode ?? null,
+      branch: account.branch ?? null,
+      accountNumberMask: account.accountNumberMask,
+      accountType: account.accountType,
+      currency: account.currency,
+      accountFingerprint: account.accountFingerprint,
+      isActive: account.isActive,
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+    };
+
+    const [row] = await this.sqlDb
+      .insert(bankAccounts)
+      .values(payload)
+      .onConflictDoUpdate({
+        target: bankAccounts.id,
+        set: {
+          orgId: payload.orgId,
+          clientId: payload.clientId,
+          provider: payload.provider,
+          bankOrg: payload.bankOrg,
+          bankFid: payload.bankFid,
+          bankName: payload.bankName,
+          bankCode: payload.bankCode,
+          branch: payload.branch,
+          accountNumberMask: payload.accountNumberMask,
+          accountType: payload.accountType,
+          currency: payload.currency,
+          accountFingerprint: payload.accountFingerprint,
+          isActive: payload.isActive,
+          updatedAt: payload.updatedAt,
+        },
+      })
+      .returning();
+
+    return this.mapBankAccount(row);
+  }
+
+  override async getBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId?: string,
+  ): Promise<BankSummarySnapshot[]> {
+    const rows = await this.sqlDb.query.bankAccountSummarySnapshots.findMany({
+      where: bankAccountId
+        ? and(
+            eq(bankAccountSummarySnapshots.orgId, orgId),
+            eq(bankAccountSummarySnapshots.clientId, clientId),
+            eq(bankAccountSummarySnapshots.bankAccountId, bankAccountId),
+          )
+        : and(
+            eq(bankAccountSummarySnapshots.orgId, orgId),
+            eq(bankAccountSummarySnapshots.clientId, clientId),
+          ),
+      orderBy: [
+        asc(bankAccountSummarySnapshots.bankAccountId),
+        asc(bankAccountSummarySnapshots.window),
+      ],
+    });
+    return rows.map(row => this.mapBankSummary(row));
+  }
+
+  override async setBankSummarySnapshots(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    snapshots: BankSummarySnapshot[],
+  ): Promise<void> {
+    await this.sqlDb.transaction(async tx => {
+      await tx
+        .delete(bankAccountSummarySnapshots)
+        .where(
+          and(
+            eq(bankAccountSummarySnapshots.orgId, orgId),
+            eq(bankAccountSummarySnapshots.clientId, clientId),
+            eq(bankAccountSummarySnapshots.bankAccountId, bankAccountId),
+          ),
+        );
+
+      if (snapshots.length === 0) {
+        return;
+      }
+
+      const values = snapshots.map(snapshot => ({
+        orgId,
+        clientId,
+        bankAccountId,
+        window: snapshot.window,
+        totals: snapshot.totals ?? {},
+        kpis: snapshot.kpis ?? {},
+        refreshedAt: snapshot.refreshedAt,
+      }));
+
+      await tx.insert(bankAccountSummarySnapshots).values(values);
+    });
+  }
+
+  override async upsertBankSummarySnapshot(snapshot: BankSummarySnapshot): Promise<void> {
+    await this.sqlDb
+      .insert(bankAccountSummarySnapshots)
+      .values({
+        orgId: snapshot.organizationId,
+        clientId: snapshot.clientId,
+        bankAccountId: snapshot.bankAccountId,
+        window: snapshot.window,
+        totals: snapshot.totals ?? {},
+        kpis: snapshot.kpis ?? {},
+        refreshedAt: snapshot.refreshedAt,
+      })
+      .onConflictDoUpdate({
+        target: [
+          bankAccountSummarySnapshots.orgId,
+          bankAccountSummarySnapshots.clientId,
+          bankAccountSummarySnapshots.bankAccountId,
+          bankAccountSummarySnapshots.window,
+        ],
+        set: {
+          totals: snapshot.totals ?? {},
+          kpis: snapshot.kpis ?? {},
+          refreshedAt: snapshot.refreshedAt,
+        },
+      });
+  }
+
+  override async deleteBankSummarySnapshot(
+    orgId: string,
+    clientId: string,
+    bankAccountId: string,
+    window?: string,
+  ): Promise<void> {
+    await this.sqlDb
+      .delete(bankAccountSummarySnapshots)
+      .where(
+        window
+          ? and(
+              eq(bankAccountSummarySnapshots.orgId, orgId),
+              eq(bankAccountSummarySnapshots.clientId, clientId),
+              eq(bankAccountSummarySnapshots.bankAccountId, bankAccountId),
+              eq(bankAccountSummarySnapshots.window, window),
+            )
+          : and(
+              eq(bankAccountSummarySnapshots.orgId, orgId),
+              eq(bankAccountSummarySnapshots.clientId, clientId),
+              eq(bankAccountSummarySnapshots.bankAccountId, bankAccountId),
+            ),
+      );
+  }
+}
+
+// Prefer Postgres storage when a DATABASE_URL is configured, fall back to Replit DB, then memory
+const defaultStorage: IStorage = process.env.DATABASE_URL
+  ? new PostgresStorage()
+  : process.env.REPLIT_DB_URL
+      ? new ReplitDbStorage()
+      : new MemStorage();
 
 export let storage: IStorage = defaultStorage;
 
