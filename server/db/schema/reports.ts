@@ -1,34 +1,33 @@
 import {
-  boolean,
+  decimal,
   foreignKey,
   index,
+  jsonb,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { organizations } from "./organizations";
 import { clients } from "./clients";
 
-export const bankAccounts = pgTable(
-  "bank_accounts",
+export const reports = pgTable(
+  "reports",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     clientId: uuid("client_id").notNull(),
-    provider: text("provider").notNull(),
-    bankOrg: text("bank_org"),
-    bankFid: text("bank_fid"),
-    bankName: text("bank_name").notNull(),
-    bankCode: text("bank_code"),
-    branch: text("branch"),
-    accountNumberMask: text("account_number_mask").notNull(),
-    accountType: text("account_type").notNull(),
-    currency: text("currency").notNull(),
-    accountFingerprint: text("account_fingerprint").notNull(),
-    isActive: boolean("is_active").notNull().default(true),
+    month: text("month").notNull(), // YYYY-MM format
+    revenue: decimal("revenue", { precision: 15, scale: 2 }).notNull(),
+    costs: decimal("costs", { precision: 15, scale: 2 }).notNull(),
+    profit: decimal("profit", { precision: 15, scale: 2 }).notNull(),
+    margin: decimal("margin", { precision: 8, scale: 4 }).notNull(),
+    ticketMedio: decimal("ticket_medio", { precision: 15, scale: 2 }),
+    topCosts: jsonb("top_costs").$type<Array<{ category: string; amount: number }>>(),
+    notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .notNull()
       .defaultNow(),
@@ -37,22 +36,19 @@ export const bankAccounts = pgTable(
       .defaultNow(),
   },
   table => [
-    uniqueIndex("bank_accounts_org_fingerprint_key").on(
-      table.orgId,
-      table.accountFingerprint,
-    ),
-    index("bank_accounts_org_client_active_idx").on(
+    uniqueIndex("reports_org_client_month_key").on(
       table.orgId,
       table.clientId,
-      table.isActive,
+      table.month,
     ),
+    index("reports_org_client_idx").on(table.orgId, table.clientId),
     foreignKey({
-      name: "bank_accounts_org_id_organizations_fk",
+      name: "reports_org_fk",
       columns: [table.orgId],
       foreignColumns: [organizations.id],
     }).onDelete("cascade"),
     foreignKey({
-      name: "bank_accounts_client_id_clients_fk",
+      name: "reports_client_fk",
       columns: [table.clientId],
       foreignColumns: [clients.id],
     }).onDelete("cascade"),

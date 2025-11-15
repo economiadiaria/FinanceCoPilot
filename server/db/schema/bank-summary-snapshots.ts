@@ -11,15 +11,8 @@ import {
 import { sql } from "drizzle-orm";
 
 import { bankAccounts } from "./bank-accounts";
-
-const organizations = pgTable("organizations", {
-  id: uuid("id").notNull(),
-});
-
-const clients = pgTable("clients", {
-  id: uuid("id").notNull(),
-  orgId: uuid("org_id").notNull(),
-});
+import { organizations } from "./organizations";
+import { clients } from "./clients";
 
 export const bankAccountSummarySnapshots = pgTable(
   "bank_account_summary_snapshots",

@@ -11,15 +11,8 @@ import {
 } from "drizzle-orm/pg-core";
 
 import { pjCategories } from "./pj-categories";
-
-const organizations = pgTable("organizations", {
-  id: uuid("id").notNull(),
-});
-
-const clients = pgTable("clients", {
-  id: uuid("id").notNull(),
-  orgId: uuid("org_id").notNull(),
-});
+import { organizations } from "./organizations";
+import { clients } from "./clients";
 
 export const pjClientCategories = pgTable(
   "pj_client_categories",

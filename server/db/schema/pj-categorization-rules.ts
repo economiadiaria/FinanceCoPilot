@@ -2,33 +2,29 @@ import {
   boolean,
   foreignKey,
   index,
+  integer,
   pgTable,
   text,
   timestamp,
-  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
 import { organizations } from "./organizations";
 import { clients } from "./clients";
+import { pjClientCategories } from "./pj-client-categories";
 
-export const bankAccounts = pgTable(
-  "bank_accounts",
+export const pjCategorizationRules = pgTable(
+  "pj_categorization_rules",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     clientId: uuid("client_id").notNull(),
-    provider: text("provider").notNull(),
-    bankOrg: text("bank_org"),
-    bankFid: text("bank_fid"),
-    bankName: text("bank_name").notNull(),
-    bankCode: text("bank_code"),
-    branch: text("branch"),
-    accountNumberMask: text("account_number_mask").notNull(),
-    accountType: text("account_type").notNull(),
-    currency: text("currency").notNull(),
-    accountFingerprint: text("account_fingerprint").notNull(),
+    categoryId: uuid("category_id").notNull(),
+    pattern: text("pattern").notNull(),
+    matchType: text("match_type").notNull(), // 'exact', 'contains', 'startsWith'
+    priority: integer("priority").notNull().default(0),
     isActive: boolean("is_active").notNull().default(true),
+    isLearned: boolean("is_learned").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .notNull()
       .defaultNow(),
@@ -37,24 +33,26 @@ export const bankAccounts = pgTable(
       .defaultNow(),
   },
   table => [
-    uniqueIndex("bank_accounts_org_fingerprint_key").on(
-      table.orgId,
-      table.accountFingerprint,
-    ),
-    index("bank_accounts_org_client_active_idx").on(
+    index("pj_categorization_rules_org_client_idx").on(
       table.orgId,
       table.clientId,
-      table.isActive,
     ),
+    index("pj_categorization_rules_category_idx").on(table.categoryId),
+    index("pj_categorization_rules_active_idx").on(table.isActive),
     foreignKey({
-      name: "bank_accounts_org_id_organizations_fk",
+      name: "pj_categorization_rules_org_fk",
       columns: [table.orgId],
       foreignColumns: [organizations.id],
     }).onDelete("cascade"),
     foreignKey({
-      name: "bank_accounts_client_id_clients_fk",
+      name: "pj_categorization_rules_client_fk",
       columns: [table.clientId],
       foreignColumns: [clients.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "pj_categorization_rules_category_fk",
+      columns: [table.categoryId],
+      foreignColumns: [pjClientCategories.id],
     }).onDelete("cascade"),
   ],
 );
